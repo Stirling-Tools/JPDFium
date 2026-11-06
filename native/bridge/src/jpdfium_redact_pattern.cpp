@@ -497,6 +497,41 @@ void orientMatchQuads(FPDF_TEXTPAGE tp, std::vector<TextMatch>& matches) {
         bool started = false;
         bool oneBaseline = true;
         double em = 0, lo = 0, hi = 0;
+        // Cheap pre-pass: the per-char matrix alone tells whether the match lies
+        // on one upright baseline. Upright text is the overwhelming majority and
+        // needs no quad, so avoid charEm/GetFontSize/origin/advanceAlong for it.
+        {
+            double fux = 0, fuy = 0, fvx = 0, fvy = 0;
+            for (int ci : m.charIndices) {
+                if (FPDFText_IsGenerated(tp, ci) == 1) continue;
+                FS_MATRIX mat;
+                if (!FPDFText_GetMatrix(tp, ci, &mat)) {
+                    oneBaseline = false;
+                    break;
+                }
+                double nu = std::hypot(static_cast<double>(mat.a), static_cast<double>(mat.b));
+                double nv = std::hypot(static_cast<double>(mat.c), static_cast<double>(mat.d));
+                if (nu <= 0 || nv <= 0) {
+                    oneBaseline = false;
+                    break;
+                }
+                double ux = mat.a / nu, uy = mat.b / nu, vx = mat.c / nv, vy = mat.d / nv;
+                if (!started) {
+                    fux = ux;
+                    fuy = uy;
+                    fvx = vx;
+                    fvy = vy;
+                    started = true;
+                } else if (std::fabs(ux - fux) > 0.01 || std::fabs(uy - fuy) > 0.01 ||
+                           std::fabs(vx - fvx) > 0.01 || std::fabs(vy - fvy) > 0.01) {
+                    oneBaseline = false;
+                    break;
+                }
+            }
+            if (!started || !oneBaseline) continue;
+            if (fux > 0 && fvy > 0 && std::fabs(fuy) <= 0.01 && std::fabs(fvx) <= 0.01) continue;
+        }
+        started = false;
         for (int ci : m.charIndices) {
             if (FPDFText_IsGenerated(tp, ci) == 1) continue;
             BaselineFrame cf;
@@ -1052,6 +1087,17 @@ void alignMatchesToGraphemes(FPDF_TEXTPAGE textPage, const std::vector<uint32_t>
                              std::vector<TextMatch>& matches) {
 #ifdef JPDFIUM_HAS_UNIBREAK
     if (unicodeSeq.empty() || matches.empty()) return;
+    // A pure-ASCII page cannot contain a multi-codepoint grapheme cluster that
+    // this function would expand to: the only one in UAX #29 is CR+LF, and the
+    // expansion loops below stop at any codepoint <= 0x20.
+    bool allAscii = true;
+    for (uint32_t u : unicodeSeq) {
+        if (u >= 0x80) {
+            allAscii = false;
+            break;
+        }
+    }
+    if (allAscii) return;
     std::vector<char> brks(unicodeSeq.size(), 0);
     set_graphemebreaks_utf32(reinterpret_cast<const utf32_t*>(unicodeSeq.data()), unicodeSeq.size(),
                              "", brks.data());
@@ -1091,10 +1137,14 @@ void alignMatchesToGraphemes(FPDF_TEXTPAGE textPage, const std::vector<uint32_t>
             }
             last++;
         }
-        // Rebuild the (possibly extended) char index list.
-        m.charIndices.clear();
-        for (int ci = first; ci <= last; ci++) m.charIndices.push_back(ci);
-        recomputeMatchBbox(chars, m);
+        if (first != origFirst || last != origLast) {
+            // Rebuild the (possibly extended) char index list. An unchanged
+            // span already has the bbox collectPcre2Matches computed, so skip
+            // the page-wide box rescan.
+            m.charIndices.clear();
+            for (int ci = first; ci <= last; ci++) m.charIndices.push_back(ci);
+            recomputeMatchBbox(chars, m);
+        }
     }
 #else
     (void)textPage;
@@ -1192,24 +1242,59 @@ void alignMatchesToShapedClusters(FPDF_TEXTPAGE tp, std::vector<TextMatch>& matc
         return hf;
     };
 
-    // Which objects do the matches touch?
-    std::unordered_set<FPDF_PAGEOBJECT> touched;
-    for (const auto& m : matches)
+    // Only the text objects the matches touch need shaping. Walk outward from
+    // the matched characters to their contiguous same-object window instead of
+    // probing every character on the page.
+    std::unordered_map<FPDF_PAGEOBJECT, std::vector<std::pair<int, int>>> windows;
+    for (const auto& m : matches) {
+        std::unordered_map<FPDF_PAGEOBJECT, std::vector<int>> byObj;
         for (int ci : m.charIndices) {
             FPDF_PAGEOBJECT o = FPDFText_GetTextObject(tp, ci);
-            if (o) touched.insert(o);
+            if (o) byObj[o].push_back(ci);
         }
-
-    for (int ci = 0; ci < totalChars; ci++) {
-        FPDF_PAGEOBJECT o = FPDFText_GetTextObject(tp, ci);
-        if (!o || !touched.count(o)) continue;
-        auto& run = runs[o];
-        if (run.obj == nullptr) {
-            run.obj = o;
-            ordered.push_back(o);
+        for (auto& [o, idxs] : byObj) {
+            std::sort(idxs.begin(), idxs.end());
+            int coveredEnd = -1;
+            for (int ci : idxs) {
+                if (ci <= coveredEnd) continue;
+                int start = ci;
+                int end = ci;
+                while (start > 0 && FPDFText_GetTextObject(tp, start - 1) == o) --start;
+                while (end + 1 < totalChars && FPDFText_GetTextObject(tp, end + 1) == o) ++end;
+                windows[o].emplace_back(start, end);
+                coveredEnd = end;
+            }
         }
-        run.chars.push_back(ci);
     }
+
+    for (auto& [o, wins] : windows) {
+        std::sort(wins.begin(), wins.end());
+        ShapeRun& run = runs[o];
+        run.obj = o;
+        ordered.push_back(o);
+        int curStart = -1, curEnd = -1;
+        auto flushWindow = [&] {
+            if (curStart < 0) return;
+            for (int ci = curStart; ci <= curEnd; ++ci) run.chars.push_back(ci);
+        };
+        for (const auto& w : wins) {
+            if (curStart < 0) {
+                curStart = w.first;
+                curEnd = w.second;
+            } else if (w.first <= curEnd + 1) {
+                if (w.second > curEnd) curEnd = w.second;
+            } else {
+                flushWindow();
+                curStart = w.first;
+                curEnd = w.second;
+            }
+        }
+        flushWindow();
+    }
+    // Shape in page order, matching the previous whole-page scan.
+    std::sort(ordered.begin(), ordered.end(), [&](FPDF_PAGEOBJECT a, FPDF_PAGEOBJECT b) {
+        return runs[a].chars.front() < runs[b].chars.front();
+    });
 
     for (FPDF_PAGEOBJECT o : ordered) {
         ShapeRun& run = runs[o];

@@ -266,15 +266,18 @@ final class FastKeywordIndex {
             out.addAll(allKeywords);
             return;
         }
+        // One pass tells us whether whitespace needs collapsing and whether the
+        // NFKC fallback is needed, instead of two separate scans.
+        int flags = analyze(text, len);
         // Native matches the raw page text, so scan the collapsed raw text as
         // well: NFKC can compose "cafe\u0301" into "caf\u00E9" and would otherwise
         // lose the native match for "cafe".
-        if (needsCollapse(text, len)) {
+        if ((flags & FLAG_COLLAPSE) != 0) {
             scanCharSequence(collapseWhitespace(new String(text, 0, len)), wholeWord, out);
         } else {
             scanCharArray(text, len, wholeWord, out);
         }
-        if (containsNonAscii(text, len)) {
+        if ((flags & FLAG_NON_ASCII) != 0) {
             scanNormalized(new String(text, 0, len), wholeWord, out);
         }
     }
@@ -287,10 +290,51 @@ final class FastKeywordIndex {
             out.addAll(allKeywords);
             return;
         }
-        scanCharSequence(needsCollapse(text) ? collapseWhitespace(text) : text, wholeWord, out);
-        if (containsNonAscii(text)) {
+        int flags = analyze(text);
+        scanCharSequence((flags & FLAG_COLLAPSE) != 0 ? collapseWhitespace(text) : text, wholeWord, out);
+        if ((flags & FLAG_NON_ASCII) != 0) {
             scanNormalized(text, wholeWord, out);
         }
+    }
+
+    private static final int FLAG_COLLAPSE = 1;
+    private static final int FLAG_NON_ASCII = 2;
+
+    // Fused needsCollapse + containsNonAscii scan.
+    private static int analyze(char[] text, int len) {
+        int flags = 0;
+        for (int i = 0; i < len; i++) {
+            char c = text[i];
+            if (c >= 128) {
+                flags |= FLAG_NON_ASCII;
+            }
+            if (isKeywordSpace(c) && (c != ' ' || (i + 1 < len && isKeywordSpace(text[i + 1])))) {
+                flags |= FLAG_COLLAPSE;
+            }
+            if (flags == (FLAG_COLLAPSE | FLAG_NON_ASCII)) {
+                break;
+            }
+        }
+        return flags;
+    }
+
+    private static int analyze(CharSequence text) {
+        int len = text.length();
+        int flags = 0;
+        for (int i = 0; i < len; i++) {
+            char c = text.charAt(i);
+            if (c >= 128) {
+                flags |= FLAG_NON_ASCII;
+            }
+            if (isKeywordSpace(c)
+                    && (c != ' ' || (i + 1 < len && isKeywordSpace(text.charAt(i + 1))))) {
+                flags |= FLAG_COLLAPSE;
+            }
+            if (flags == (FLAG_COLLAPSE | FLAG_NON_ASCII)) {
+                break;
+            }
+        }
+        return flags;
     }
 
     private void scanNormalized(CharSequence text, boolean wholeWord, Set<String> out) {
@@ -310,8 +354,14 @@ final class FastKeywordIndex {
                 continue;
             }
 
-            int codePoint = Character.codePointAt(text, i, len);
-            int folded = foldCodePoint(codePoint, caseSensitive);
+            char c0 = text[i];
+            int codePoint = c0 < 0x80 ? c0 : Character.codePointAt(text, i, len);
+            int folded;
+            if (codePoint < 0x80) {
+                folded = (!caseSensitive && c0 >= 'A' && c0 <= 'Z') ? (c0 + 32) : codePoint;
+            } else {
+                folded = foldCodePoint(codePoint, caseSensitive);
+            }
 
             if (folded <= 0xFFFF) {
                 char fc0 = (char) folded;
@@ -337,10 +387,15 @@ final class FastKeywordIndex {
                 TrieNode curr = node;
                 for (int j = i + 1; j < len; j++) {
                     char cj = text[j];
-                    if (!caseSensitive && Character.isSurrogate(cj)) {
-                        break;
+                    int foldedJ;
+                    if (cj < 0x80) {
+                        foldedJ = (!caseSensitive && cj >= 'A' && cj <= 'Z') ? (cj + 32) : cj;
+                    } else {
+                        if (!caseSensitive && Character.isSurrogate(cj)) {
+                            break;
+                        }
+                        foldedJ = caseSensitive ? cj : foldCodePoint(cj, false);
                     }
-                    int foldedJ = caseSensitive ? cj : foldCodePoint(cj, false);
                     curr = curr.findChild((char) foldedJ);
                     if (curr == null) {
                         break;

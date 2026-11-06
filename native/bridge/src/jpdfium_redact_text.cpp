@@ -231,7 +231,15 @@ void buildNormalizedText(FPDF_TEXTPAGE textPage, int count, std::vector<int>& no
     normIdxMap.reserve(static_cast<size_t>(count));
     for (int i = 0; i < count; ++i) {
         unsigned int uni = FPDFText_GetUnicode(textPage, i);
+        if (unicodeSeq) (*unicodeSeq)[static_cast<size_t>(i)] = uni;
         if (uni == 0) continue;
+        // NFKC is the identity over U+0000..U+007F: skip the cache lookup and
+        // the UTF-32 round-trip for the overwhelmingly common ASCII case.
+        if (uni < 0x80) {
+            norm += static_cast<char32_t>(uni);
+            normIdxMap.push_back(i);
+            continue;
+        }
         if (uni > 0x10FFFF || (uni >= 0xD800 && uni <= 0xDFFF)) {
             uni = 0xFFFD;
         }
@@ -266,6 +274,7 @@ void buildNormalizedText(FPDF_TEXTPAGE textPage, int count, std::vector<int>& no
     normIdxMap.reserve(static_cast<size_t>(count));
     for (int i = 0; i < count; ++i) {
         unsigned int uni = FPDFText_GetUnicode(textPage, i);
+        if (unicodeSeq) (*unicodeSeq)[static_cast<size_t>(i)] = uni;
         if (uni == 0) continue;
         if (uni > 0x10FFFF || (uni >= 0xD800 && uni <= 0xDFFF)) {
             uni = 0xFFFD;
@@ -296,6 +305,7 @@ std::u32string survivingFingerprint(const std::u32string& normalizedText,
                                     const std::vector<char>& redactSet) {
     std::u32string fp;
     fp.reserve(normIdxMap.size());
+    char32_t maxCode = 0;
     for (size_t k = 0; k < normIdxMap.size(); k++) {
         int ci = normIdxMap[k];
         if (!redactSet.empty() && redactSet[ci]) continue;
@@ -304,13 +314,27 @@ std::u32string survivingFingerprint(const std::u32string& normalizedText,
         // the private-use area (U+E000-U+F8FF): PUA codepoints have no
         // portable meaning - most fonts cannot re-emit them, so fragments
         // legitimately drop them and the fingerprint must not count them.
-        if (wc > 0x20 && wc < 0xFFFE && !(wc >= 0xE000 && wc <= 0xF8FF)) fp += wc;
+        if (wc > 0x20 && wc < 0xFFFE && !(wc >= 0xE000 && wc <= 0xF8FF)) {
+            fp += wc;
+            if (wc > maxCode) maxCode = wc;
+        }
     }
     // Order-insensitive comparison: page rotation, mirroring and overlapping
     // objects change the EXTRACTION ORDER of surviving text between the pre
     // and post passes without changing the content. Comparing sorted
     // sequences keeps the dropped-glyph detection while tolerating reordering.
-    std::sort(fp.begin(), fp.end());
+    // When every surviving codepoint is Latin-1, a 256-bin counting sort is
+    // O(N) and produces the same sequence as std::sort.
+    if (maxCode < 0x100) {
+        uint32_t counts[256] = {};
+        for (char32_t c : fp) ++counts[static_cast<uint8_t>(c)];
+        size_t out = 0;
+        for (int c = 0; c < 256; ++c) {
+            for (uint32_t n = counts[c]; n > 0; --n) fp[out++] = static_cast<char32_t>(c);
+        }
+    } else {
+        std::sort(fp.begin(), fp.end());
+    }
     return fp;
 }
 

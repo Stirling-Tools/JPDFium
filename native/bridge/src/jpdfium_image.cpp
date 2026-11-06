@@ -10,9 +10,44 @@
 #include <cstdlib>
 #include <cstring>
 
+#if defined(__ARM_NEON) || defined(__aarch64__)
+#include <arm_neon.h>
+#elif defined(__x86_64__) || defined(_M_X64)
+#include <immintrin.h>
+#endif
+
 #include "jpdfium.h"
 #include "jpdfium_internal.h"
 #include "runtime/domain.h"
+
+// Swaps the R and B bytes of every four-byte RGBA/BGRA pixel group.
+static void swapRgbaBgra(uint8_t* __restrict dst, const uint8_t* __restrict src, int count) {
+    int i = 0;
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    for (; i + 16 <= count; i += 16) {
+        uint8x16x4_t px = vld4q_u8(src + static_cast<std::ptrdiff_t>(i) * 4);
+        uint8x16_t r = px.val[0];
+        px.val[0] = px.val[2];
+        px.val[2] = r;
+        vst4q_u8(dst + static_cast<std::ptrdiff_t>(i) * 4, px);
+    }
+#elif defined(__SSSE3__)
+    const __m128i mask = _mm_setr_epi8(2, 1, 0, 3, 6, 5, 4, 7, 10, 9, 8, 11, 14, 13, 12, 15);
+    for (; i + 4 <= count; i += 4) {
+        const __m128i p = _mm_loadu_si128(
+            reinterpret_cast<const __m128i*>(src + static_cast<std::ptrdiff_t>(i) * 4));
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(dst + static_cast<std::ptrdiff_t>(i) * 4),
+                         _mm_shuffle_epi8(p, mask));
+    }
+#endif
+    // Unaligned-safe: caller buffers only guarantee byte alignment.
+    for (; i < count; ++i) {
+        uint32_t px;
+        memcpy(&px, src + static_cast<std::ptrdiff_t>(i) * 4, sizeof(px));
+        px = (px & 0xFF00FF00u) | ((px & 0x00FF0000u) >> 16) | ((px & 0x000000FFu) << 16);
+        memcpy(dst + static_cast<std::ptrdiff_t>(i) * 4, &px, sizeof(px));
+    }
+}
 
 static uint8_t* decode_png(const uint8_t* png_data, size_t png_len, int* out_width,
                            int* out_height) {
@@ -122,12 +157,7 @@ static int32_t create_page_with_image(int64_t docHandle, const uint8_t* image_da
         uint8_t* dst = static_cast<uint8_t*>(bmp_buf) + static_cast<std::ptrdiff_t>(row) * stride;
         const uint8_t* src = pixels + static_cast<std::ptrdiff_t>(row) * row_bytes;
         if (image_format == 3 && channels == 4) {
-            for (int x = 0; x < img_width; ++x) {
-                uint32_t px;
-                memcpy(&px, src + static_cast<std::ptrdiff_t>(x) * 4, sizeof(px));
-                px = (px & 0xFF00FF00u) | ((px & 0x00FF0000u) >> 16) | ((px & 0x000000FFu) << 16);
-                memcpy(dst + static_cast<std::ptrdiff_t>(x) * 4, &px, sizeof(px));
-            }
+            swapRgbaBgra(dst, src, img_width);
         } else {
             memcpy(dst, src, static_cast<std::size_t>(row_bytes));
         }

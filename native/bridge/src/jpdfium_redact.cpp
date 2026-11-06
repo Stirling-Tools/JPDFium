@@ -468,7 +468,9 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
         // compatibility characters decomposed) with an index map back to the
         // original character indices.
         std::vector<int> idxMap;
-        std::u32string wtext = buildNormalizedText(tp.get(), count, idxMap);
+        std::u32string wtext;
+        std::vector<uint32_t> unicodeSeq;
+        buildNormalizedText(tp.get(), count, idxMap, wtext, &unicodeSeq);
 
         // Compile the pattern (PCRE2 UTF/UCP, JIT, hardened limits).
         // Sanitize-stage bookkeeping: metadata/outlines/form values containing
@@ -498,13 +500,8 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
             return JPDFIUM_OK;
         }
 
-        // Grapheme alignment needs the raw char sequence. Build it only when
-        // matches exist; zero-match pages skip this second per-char pass.
-        std::vector<uint32_t> unicodeSeq;
-        unicodeSeq.reserve(static_cast<size_t>(count));
-        for (int i = 0; i < count; ++i) {
-            unicodeSeq.push_back(FPDFText_GetUnicode(tp.get(), i));
-        }
+        // Grapheme alignment works on the raw char sequence captured above in
+        // the same per-char pass that built the normalized text.
         alignMatchesToGraphemes(tp.get(), unicodeSeq, matches);
 #ifdef JPDFIUM_HAS_HARFBUZZ
         // Snap every span to shaped-cluster boundaries (ligature safety):

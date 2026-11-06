@@ -192,8 +192,9 @@ constexpr uint8_t kRgbLaneMask[16] = {255, 255, 255, 0, 255, 255, 255, 0,
 constexpr uint8_t kRgbSwapIndices[16] = {2, 1, 0, 3, 6, 5, 4, 7, 10, 9, 8, 11, 14, 13, 12, 15};
 
 // A fully opaque run only needs the byte-order swap, which is one table lookup per
-// 128-bit vector. A block that is not opaque falls back to the scalar body, so the
-// output is bit-identical to a scalar pass over the same buffer.
+// 128-bit vector. A fully transparent run is all zeroes. A block that is neither
+// falls back to the scalar body, so the output is bit-identical to a scalar pass
+// over the same buffer.
 inline void swapRgbWhereOpaque(uint8_t* __restrict buf, int total) {
     const uint8x16_t indices = vld1q_u8(kRgbSwapIndices);
     const uint8x16_t alpha_lane = vld1q_u8(kAlphaLaneMask);
@@ -218,6 +219,13 @@ inline void swapRgbWhereOpaque(uint8_t* __restrict buf, int total) {
             vst1q_u8(p + 48, vqtbl1q_u8(v3, indices));
             continue;
         }
+        const uint8x16_t alphas =
+            vorrq_u8(vorrq_u8(vandq_u8(v0, alpha_lane), vandq_u8(v1, alpha_lane)),
+                     vorrq_u8(vandq_u8(v2, alpha_lane), vandq_u8(v3, alpha_lane)));
+        if (vmaxvq_u8(alphas) == 0) {
+            memset(p, 0, 64);
+            continue;
+        }
         for (int k = 0; k < 16; ++k) unpremulSwapPixel(p + k * 4, true);
     }
     for (; i + 4 <= total; i += 4) {
@@ -231,26 +239,17 @@ inline void swapRgbWhereOpaque(uint8_t* __restrict buf, int total) {
     }
     for (; i < total; ++i) unpremulSwapPixel(buf + static_cast<std::size_t>(i) * 4, true);
 }
-
-// The vector path pays off when the pixels are opaque: no per-pixel branch, sixteen
-// pixels swapped per iteration. The probe reads at most 16 KiB contiguously, and
-// swapRgbWhereOpaque re-checks every block, so a probe that is only representative of
-// the buffer stays correct.
-inline bool firstPixelsOpaque(const uint8_t* __restrict buf, int total) {
-    const int n = total < 4096 ? total : 4096;
-    for (int i = 0; i < n; ++i) {
-        if (buf[static_cast<std::size_t>(i) * 4 + 3] != 0xFF) return false;
-    }
-    return true;
-}
 #endif
 
+// The vector path re-checks every block, so it is correct for pages that mix
+// opaque, transparent and partial-alpha regions (e.g. a transparent render
+// whose top margin is fully transparent).
 inline void unpremulAndSwapBgraInPlace(uint8_t* __restrict buf, int w, int h, int stride,
                                        bool reverse_byte_order) {
     if (stride == w * 4) {
         const int total = w * h;
 #if defined(__aarch64__)
-        if (reverse_byte_order && firstPixelsOpaque(buf, total)) {
+        if (reverse_byte_order) {
             swapRgbWhereOpaque(buf, total);
             return;
         }
