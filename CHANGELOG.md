@@ -17,6 +17,12 @@ publishing workflows, not library releases, so they are not listed here.
 
 ## [Unreleased]
 
+### Changed
+
+- `PdfRedactor.redact` with fewer than eight literal words no longer reads every
+  page's text in Java before the native redaction reads it again; the native
+  redaction already skips pages without a match.
+
 ### Fixed
 
 - Word and pattern redaction now removes text drawn with glyphs the embedded
