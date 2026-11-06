@@ -406,14 +406,10 @@ int32_t jpdfium_text_get_chars_packed(int64_t page, uint8_t** data, int64_t* len
                 lastFontId = fontId;
             }
 
-            records.push_back(PackedCharRecord{i,
-                                               static_cast<int32_t>(uni),
-                                               static_cast<float>(l),
-                                               static_cast<float>(b),
-                                               static_cast<float>(r - l),
-                                               static_cast<float>(t - b),
-                                               static_cast<float>(FPDFText_GetFontSize(tp.get(), i)),
-                                               fontId});
+            records.push_back(PackedCharRecord{
+                i, static_cast<int32_t>(uni), static_cast<float>(l), static_cast<float>(b),
+                static_cast<float>(r - l), static_cast<float>(t - b),
+                static_cast<float>(FPDFText_GetFontSize(tp.get(), i)), fontId});
         }
 
         size_t bodyBytes = records.size() * sizeof(PackedCharRecord);

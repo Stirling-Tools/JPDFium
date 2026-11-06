@@ -102,7 +102,6 @@ FILE* open_staging_sibling(const char* path, std::string& stagingOut) {
     return nullptr;
 }
 
-
 // Rename staging over the destination. Falls back to a non-atomic replace when
 // the platform refuses (a cross-device rename cannot happen for a sibling file,
 // but some filesystems reject rename onto an open target).
@@ -794,8 +793,8 @@ int32_t jpdfium_doc_save_bytes(int64_t doc, uint8_t** data, int64_t* len) {
         // The sanitize stage works on vectors and may replace the buffer, so only
         // the sanitize and in-memory gray-compaction path funnels through one
         // vector (same copies as before).
-        if (w->core->contentRedacted
-            && (w->core->sanitizeOnSave || !w->core->erasedGrayImages.empty())) {
+        if (w->core->contentRedacted &&
+            (w->core->sanitizeOnSave || !w->core->erasedGrayImages.empty())) {
             std::vector<uint8_t> vec(mw.buf, mw.buf + mw.size);
             std::free(mw.buf);
             mw.buf = nullptr;
