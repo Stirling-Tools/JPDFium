@@ -713,4 +713,37 @@ class PdfMergeSplitFilesTest {
                 "file merge allocated " + allocated + " bytes for " + outSize
                         + " bytes of output - document bytes leaked onto the heap");
     }
+
+    @Test
+    void documentMergeToFileUsesTheFileBackedPath(@TempDir Path tmp) throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real PDFium native library");
+        assumeTrue(QpdfLib.isMergeFilesSupported(), "needs file-backed qpdf merge symbol");
+
+        Path a = tmp.resolve("a.pdf");
+        Path b = tmp.resolve("b.pdf");
+        Files.write(a, SyntheticPdfFactory.createDiverse(2));
+        Files.write(b, SyntheticPdfFactory.createDiverse(3));
+
+        Path merged = tmp.resolve("merged.pdf");
+        PdfDocument.merge(List.of(a, b), merged);
+        byte[] bytes = Files.readAllBytes(merged);
+        assertEquals(5, PdfVerifier.pageCount(bytes, "document merge to file"));
+        for (int i = 0; i < 5; i++) {
+            PdfVerifier.assertNonEmptyText(bytes, i, "document merge page " + i);
+        }
+
+        // Replacing an existing destination must publish a complete file.
+        PdfDocument.merge(List.of(b, a), merged);
+        assertEquals(5, PdfVerifier.pageCount(Files.readAllBytes(merged), "replaced merge"));
+
+        // A single input still takes the staging copy path.
+        Path single = tmp.resolve("single.pdf");
+        PdfDocument.merge(List.of(a), single);
+        assertEquals(2, PdfVerifier.pageCount(Files.readAllBytes(single), "single input merge"));
+
+        assertThrows(IllegalArgumentException.class,
+                () -> PdfDocument.merge(List.of(), merged));
+        assertThrows(IllegalArgumentException.class,
+                () -> PdfDocument.merge(List.of(a), null));
+    }
 }

@@ -818,14 +818,24 @@ public final class PdfDocument implements AutoCloseable {
      * Merge multiple PDF files into a single output file using the fast, lossless QPDF engine
      * with automatic fallback to safe PDFium page import if QPDF is unavailable.
      *
+     * <p>Delegates to {@link PdfMerge#mergeFilesToFile(List, Path)} so the inputs and the
+     * result stay on disk instead of being reopened in PDFium and re-saved. Bookmark trees
+     * are not merged on this path; use {@link PdfMerge#mergeFiles(List)} followed by a save,
+     * or apply the combined tree with {@code stirling.software.jpdfium.doc.PdfBookmarkEditor},
+     * when they must be preserved.
+     *
      * @param inputPaths  list of input PDF file paths
      * @param outputPath destination PDF file path
      * @throws IOException on I/O error
      */
     public static void merge(List<Path> inputPaths, Path outputPath) throws IOException {
-        try (PdfDocument merged = PdfMerge.mergeFiles(inputPaths)) {
-            merged.save(outputPath);
+        if (inputPaths == null || inputPaths.isEmpty()) {
+            throw new IllegalArgumentException("inputPaths must not be null or empty");
         }
+        if (outputPath == null) {
+            throw new IllegalArgumentException("outputPath must not be null");
+        }
+        PdfMerge.mergeFilesToFile(inputPaths, outputPath);
     }
 
     /**

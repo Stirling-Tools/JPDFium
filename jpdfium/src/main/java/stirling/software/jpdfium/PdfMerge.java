@@ -111,7 +111,7 @@ public final class PdfMerge {
                     for (PdfDocument sourceDoc : documents) {
                         Path src = sourceDoc.sourcePath();
                         if (src != null
-                                && !sourceDoc.isContentModified()
+                                && sourceDoc.isUntouchedSinceOpen()
                                 && sourceDoc.sourceFileUnchanged()
                                 && Files.isReadable(src)) {
                             filePaths.add(src);
