@@ -960,6 +960,7 @@ jobs:
     environment: maven
     outputs:
       version: ${{ steps.v.outputs.version }}
+      staging-url: ${{ steps.stage.outputs.staging-url }}
     permissions:
       contents: write
     steps:
@@ -1029,17 +1030,22 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Publishing version: $VERSION"
 
-      - name: Stage on the Stirling Maven repo
+      - name: Build the signed release repo
         env:
           GPG_SIGNING_KEY: ${{ secrets.GPG_SIGNING_KEY }}
           GPG_SIGNING_PASSWORD: ${{ secrets.GPG_SIGNING_PASSWORD }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
-          R2_BUCKET: s3://${{ vars.R2_BUCKET || 'stirling-maven' }}
-        run: |
-          ./gradlew publishAllToR2Staging -Pjpdfium.version=${{ steps.v.outputs.version }} --no-daemon --stacktrace
-          bash .github/scripts/upload-to-r2.sh build/r2-repo "staging/${{ github.run_id }}/"
+        run: ./gradlew publishAllToR2Staging -Pjpdfium.version=${{ steps.v.outputs.version }} --no-daemon --stacktrace
+
+      - name: Stage on the Stirling Maven repo
+        id: stage
+        uses: Stirling-Tools/maven-r2-publish/release@0a5de1828b80dc12ff16023a2aadf6dd9a6faff4 # main
+        with:
+          step: stage
+          repo-dir: build/r2-repo
+          endpoint: ${{ secrets.R2_ENDPOINT }}
+          access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          bucket: ${{ vars.R2_BUCKET || 'stirling-maven' }}
 
       - name: Publish to Maven Local (dry run)
         if: inputs.dryRun == true
@@ -1075,7 +1081,7 @@ jobs:
         run: |
           echo "### Staged com.stirling:*:${{ steps.v.outputs.version }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "https://maven.stirlingpdf.com/staging/${{ github.run_id }}/ - released to the root once every platform verifies." >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.stage.outputs.staging-url }} - released to the root once every platform verifies." >> $GITHUB_STEP_SUMMARY
 
 
   # ── Pre-release verification: every artifact in the staged deployment ──
@@ -1120,7 +1126,7 @@ jobs:
         shell: bash
         env:
           MODE: r2
-          R2_REPO_URL: https://maven.stirlingpdf.com/staging/${{ github.run_id }}
+          R2_REPO_URL: ${{ needs.publish.outputs.staging-url }}
           VERSION: ${{ steps.v.outputs.version }}
           PLATFORM: ${{ matrix.platform }}
         run: bash .github/scripts/verify-central.sh
@@ -1135,29 +1141,15 @@ jobs:
     concurrency:
       group: stirling-maven
       cancel-in-progress: false
-    env:
-      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-      AWS_DEFAULT_REGION: auto
-      AWS_REQUEST_CHECKSUM_CALCULATION: when_required
-      AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
-      R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
-      R2_BUCKET: s3://${{ vars.R2_BUCKET || 'stirling-maven' }}
     steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
-
-      - name: Fetch the verified staging set
-        run: aws s3 sync "$R2_BUCKET/staging/${{ github.run_id }}/" staged/ --endpoint-url "$R2_ENDPOINT" --no-progress
-
-      - name: Release
-        run: bash .github/scripts/upload-to-r2.sh staged
-
-      - name: Summary
-        env:
-          VERSION: ${{ needs.publish.outputs.version }}
-        run: |
-          curl -fsSI "https://maven.stirlingpdf.com/com/stirling/jpdfium/$VERSION/jpdfium-$VERSION.pom" >/dev/null
-          echo "### Released com.stirling:*:$VERSION to https://maven.stirlingpdf.com" >> $GITHUB_STEP_SUMMARY
+      - name: Release the verified staging set
+        uses: Stirling-Tools/maven-r2-publish/release@0a5de1828b80dc12ff16023a2aadf6dd9a6faff4 # main
+        with:
+          step: promote
+          endpoint: ${{ secrets.R2_ENDPOINT }}
+          access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          bucket: ${{ vars.R2_BUCKET || 'stirling-maven' }}
 
   publish-central:
     name: Publish to Maven Central
@@ -1258,11 +1250,11 @@ jobs:
     runs-on: ubuntu-latest
     environment: maven
     steps:
-      - name: Delete staging/${{ github.run_id }}
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: auto
-          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
-          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
-        run: aws s3 rm "s3://${{ vars.R2_BUCKET || 'stirling-maven' }}/staging/${{ github.run_id }}/" --recursive --endpoint-url "${{ secrets.R2_ENDPOINT }}" --only-show-errors
+      - name: Delete this run's staging copy
+        uses: Stirling-Tools/maven-r2-publish/release@0a5de1828b80dc12ff16023a2aadf6dd9a6faff4 # main
+        with:
+          step: cleanup
+          endpoint: ${{ secrets.R2_ENDPOINT }}
+          access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          bucket: ${{ vars.R2_BUCKET || 'stirling-maven' }}

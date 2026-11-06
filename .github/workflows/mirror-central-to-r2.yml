@@ -11,10 +11,6 @@ on:
         description: 'With all, copy only this many of the newest versions'
         required: false
         default: '5'
-      source:
-        description: 'Maven repo to copy from'
-        required: true
-        default: 'https://repo1.maven.org/maven2'
       destination:
         description: 'Bucket prefix to copy to, e.g. staging/mirror-test/. Empty is the live repo root.'
         required: false
@@ -34,146 +30,39 @@ permissions:
   contents: read
 
 jobs:
-  plan:
-    name: Plan the copy
-    runs-on: ubuntu-latest
-    outputs:
-      versions: ${{ steps.plan.outputs.versions }}
-      destination: ${{ steps.plan.outputs.destination }}
-      url: ${{ steps.plan.outputs.url }}
-    steps:
-      - name: Resolve versions and destination
-        id: plan
-        shell: bash
-        env:
-          VERSIONS: ${{ inputs.versions }}
-          LATEST: ${{ inputs.latest }}
-          SOURCE: ${{ inputs.source }}
-          DESTINATION: ${{ inputs.destination }}
-        run: |
-          set -euo pipefail
-          SOURCE="${SOURCE%/}"
-          DEST="${DESTINATION#/}"
-          case "$DEST" in
-            *..*|*//*) echo "ERROR: destination '$DESTINATION' is not a plain prefix"; exit 1 ;;
-          esac
-          [ -z "$DEST" ] || DEST="${DEST%/}/"
-          [[ "$LATEST" =~ ^[1-9][0-9]*$ ]] || { echo "ERROR: latest must be a positive number"; exit 1; }
-          URL="https://maven.stirlingpdf.com/${DEST}"
-
-          if [ "$VERSIONS" = all ]; then
-            mapfile -t wanted < <(curl -fsSL --retry 5 --retry-all-errors "$SOURCE/com/stirling/jpdfium/maven-metadata.xml" \
-              | grep -o '<version>[^<]*</version>' | sed 's#</\{0,1\}version>##g' \
-              | sort -V | tail -n "$LATEST")
-          else
-            mapfile -t wanted < <(echo "$VERSIONS" | tr -s ', ' '\n' | sed '/^$/d')
-          fi
-          [ "${#wanted[@]}" -gt 0 ] || { echo "ERROR: no versions to copy"; exit 1; }
-
-          copy=()
-          {
-            echo "### Copy from $SOURCE to $URL"
-            echo ""
-            echo "| Version | Action |"
-            echo "|---|---|"
-          } >> "$GITHUB_STEP_SUMMARY"
-          for v in "${wanted[@]}"; do
-            [[ "$v" =~ ^[0-9A-Za-z.+-]+$ ]] || { echo "ERROR: bad version '$v'"; exit 1; }
-            if curl -fsI "${URL}com/stirling/jpdfium/$v/jpdfium-$v.pom" >/dev/null 2>&1; then
-              action="already there, skipped"
-            elif ! curl -fsI "$SOURCE/com/stirling/jpdfium/$v/jpdfium-$v.pom" >/dev/null 2>&1; then
-              echo "ERROR: $v is not in $SOURCE"; exit 1
-            else
-              action="copy"
-              copy+=("$v")
-            fi
-            echo "$v: $action"
-            echo "| $v | $action |" >> "$GITHUB_STEP_SUMMARY"
-          done
-
-          {
-            echo "versions=$(printf '%s\n' "${copy[@]}" | jq -R . | jq -sc 'map(select(. != ""))')"
-            echo "destination=$DEST"
-            echo "url=$URL"
-          } >> "$GITHUB_OUTPUT"
-
   copy:
-    name: Copy to ${{ needs.plan.outputs.url }}
-    needs: plan
-    if: ${{ !inputs.dryRun && needs.plan.outputs.versions != '[]' }}
+    name: Copy from Maven Central
     runs-on: ubuntu-latest
     environment: maven
     concurrency:
       group: stirling-maven
       cancel-in-progress: false
-    env:
-      SOURCE: ${{ inputs.source }}
-      VERSIONS: ${{ needs.plan.outputs.versions }}
-      DEST: ${{ needs.plan.outputs.destination }}
-      URL: ${{ needs.plan.outputs.url }}
+    outputs:
+      versions: ${{ steps.mirror.outputs.versions }}
+      url: ${{ steps.mirror.outputs.url }}
     steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
-
-      - name: Download every JPDFium module at each version
-        shell: bash
-        run: |
-          set -euo pipefail
-          SRC="${SOURCE%/}/com/stirling"
-          get() { curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 --max-time 300 "$@"; }
-          modules=$(get "$SRC/" | grep -o 'href="jpdfium[^"/]*/' | cut -d'"' -f2 | tr -d /)
-          for v in $(echo "$VERSIONS" | jq -r '.[]'); do
-            for m in $modules; do
-              listing=$(curl -fsSL --retry 5 --retry-delay 5 "$SRC/$m/$v/" 2>/dev/null) || continue
-              for f in $(echo "$listing" | grep -o 'href="[^"]*"' | cut -d'"' -f2 | grep -v '^\.\./'); do
-                get --create-dirs -o "central-repo/com/stirling/$m/$v/$f" "$SRC/$m/$v/$f"
-              done
-            done
-            [ -f "central-repo/com/stirling/jpdfium/$v/jpdfium-$v.pom" ] || { echo "ERROR: nothing downloaded for $v"; exit 1; }
-            echo "$v: $(find central-repo -path "*/$v/*" -type f | wc -l) files"
-          done
-
-      - name: Check every file against the source sha1
-        shell: bash
-        run: |
-          bad=0
-          while IFS= read -r sum; do
-            file="${sum%.sha1}"
-            [ -f "$file" ] || continue
-            [ "$(sha1sum "$file" | cut -d' ' -f1)" = "$(tr -d ' \n' < "$sum")" ] || { echo "MISMATCH $file"; bad=1; }
-          done < <(find central-repo -name '*.sha1')
-          exit "$bad"
-
-      - name: Upload
-        shell: bash
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
-          R2_BUCKET: s3://${{ vars.R2_BUCKET || 'stirling-maven' }}
-        run: bash .github/scripts/upload-to-r2.sh central-repo "$DEST"
-
-      - name: Check every uploaded file is served unchanged
-        shell: bash
-        run: |
-          cd central-repo
-          bad=0; ok=0; n=0
-          while IFS= read -r f; do
-            f="${f#./}"
-            served=$(curl -fsSL --retry 5 --retry-all-errors "$URL$f" | sha1sum | cut -d' ' -f1) || served=missing
-            if [ "$served" = "$(sha1sum "$f" | cut -d' ' -f1)" ]; then ok=$((ok + 1)); else echo "MISMATCH $URL$f"; bad=1; fi
-            n=$((n + 1))
-          done < <(find . -type f ! -name 'maven-metadata.xml*')
-          echo "$ok of $n files served unchanged from $URL" | tee -a "$GITHUB_STEP_SUMMARY"
-          exit "$bad"
+      - id: mirror
+        uses: Stirling-Tools/maven-r2-publish/mirror@0a5de1828b80dc12ff16023a2aadf6dd9a6faff4 # main
+        with:
+          group: com.stirling
+          artifact: jpdfium
+          versions: ${{ inputs.versions }}
+          latest: ${{ inputs.latest }}
+          destination: ${{ inputs.destination }}
+          dry-run: ${{ inputs.dryRun }}
+          endpoint: ${{ secrets.R2_ENDPOINT }}
+          access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          bucket: ${{ vars.R2_BUCKET || 'stirling-maven' }}
 
   smoke:
     name: Smoke ${{ matrix.version }} (${{ matrix.platform }})
-    needs: [plan, copy]
-    if: ${{ inputs.smoke && !inputs.dryRun && needs.plan.outputs.versions != '[]' }}
+    needs: copy
+    if: ${{ inputs.smoke && !inputs.dryRun && needs.copy.outputs.versions != '[]' }}
     strategy:
       fail-fast: false
       matrix:
-        version: ${{ fromJSON(needs.plan.outputs.versions) }}
+        version: ${{ fromJSON(needs.copy.outputs.versions) }}
         platform: [linux-x64, linux-arm64, darwin-x64, darwin-arm64, windows-x64, windows-arm64]
         include:
           - { platform: linux-x64,     runner: ubuntu-24.04     }
@@ -195,7 +84,7 @@ jobs:
         shell: bash
         env:
           MODE: r2
-          R2_REPO_URL: ${{ needs.plan.outputs.url }}
+          R2_REPO_URL: ${{ needs.copy.outputs.url }}
           VERSION: ${{ matrix.version }}
           PLATFORM: ${{ matrix.platform }}
         run: bash .github/scripts/verify-central.sh

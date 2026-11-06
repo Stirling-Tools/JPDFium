@@ -330,7 +330,7 @@ tasks.register("publishAllToCentralPortal") {
 }
 
 // Release layout for https://maven.stirlingpdf.com; release.yml uploads it with
-// .github/scripts/upload-to-r2.sh.
+// Stirling-Tools/maven-r2-publish.
 val r2StagingDir = layout.buildDirectory.dir("r2-repo")
 
 subprojects {
