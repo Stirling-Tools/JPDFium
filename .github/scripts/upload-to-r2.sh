@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # upload-to-r2.sh <maven-repo-dir> [<bucket-prefix>]
 # Uploads a Maven repo dir to the bucket behind https://maven.stirlingpdf.com.
-# Fails if any version is already released at the root. Without a prefix it also
+# Fails if any version is already at the destination. Without a prefix it also
 # rewrites each maven-metadata.xml from the live copy, last; callers must hold the
 # stirling-maven concurrency group or two releases drop each other's version.
 set -euo pipefail
@@ -30,9 +30,9 @@ if [ "${#VERSION_DIRS[@]}" -eq 0 ]; then
 fi
 
 for dir in "${VERSION_DIRS[@]}"; do
-  count=$(key_count "$dir/")
+  count=$(key_count "$PREFIX$dir/")
   if [ "$count" != "0" ] && [ "$count" != "None" ]; then
-    echo "ERROR: $dir is already released; published versions are immutable." >&2
+    echo "ERROR: $PREFIX$dir already exists; published versions are immutable." >&2
     exit 1
   fi
 done
