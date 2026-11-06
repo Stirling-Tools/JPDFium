@@ -33,7 +33,7 @@ jobs:
           curl -fsSL --max-time 120 --retry 5 --retry-all-errors --retry-delay 3 "$JEXTRACT_URL" -o /tmp/jextract.tar.gz
           tar -xzf /tmp/jextract.tar.gz -C "$HOME/jextract-install" --strip-components=1
           echo "JEXTRACT_HOME=$HOME/jextract-install" >> "$GITHUB_ENV"
-      - uses: gradle/actions/setup-gradle@1cff18a4cfab5cd8d4c49a8ccf11c1ad18bb30b9 # v6.3.0
+      - uses: gradle/actions/setup-gradle@c8a326d85724fce2ae59a38810306f4a058f26a4 # v6.3.0
       - run: sudo apt-get update && sudo apt-get install -y build-essential cmake
       - run: bash native/build-stub.sh
       - name: Build Javadoc
@@ -55,7 +55,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
-      - uses: DavidAnson/markdownlint-cli2-action@b4f136db4a9d2ffff88d04cf1328773cb4a1c7ab # v24.2.0
+      - uses: DavidAnson/markdownlint-cli2-action@820a51918fa80d1df595298769e5750b92006750 # v24.2.0
         with:
           globs: 'README.md,CONTRIBUTING.md,docs/**/*.md'
 
