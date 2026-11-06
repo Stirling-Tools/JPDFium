@@ -230,7 +230,8 @@ int32_t jpdfium_text_get_chars_packed(int64_t page, uint8_t** data, int64_t* len
         if (!tp) return JPDFIUM_ERR_NATIVE;
 
         int count = FPDFText_CountChars(tp.get());
-        if (8 + static_cast<int64_t>(count > 0 ? count : 0) * kPackedRecordBytes > kPackedMaxBytes) {
+        if (8 + static_cast<int64_t>(count > 0 ? count : 0) * kPackedRecordBytes >
+            kPackedMaxBytes) {
             return JPDFIUM_ERR_TOO_LARGE;
         }
         std::vector<uint8_t> records;
