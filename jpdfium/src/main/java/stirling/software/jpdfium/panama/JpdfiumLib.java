@@ -32,7 +32,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
-import java.nio.file.attribute.PosixFilePermissions;
 import java.util.concurrent.locks.Lock;
 
 import static java.lang.foreign.ValueLayout.ADDRESS;
@@ -521,6 +520,15 @@ public final class JpdfiumLib {
             "jpdfium_doc_save_to_file",
             FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS, JAVA_LONG, ADDRESS));
 
+    /**
+     * Optional direct-to-staging save: the caller already owns the path as a
+     * private staging file, so the bridge skips its own sibling file and the
+     * second rename. Falls back to the staged entry point when unavailable.
+     */
+    private static final MethodHandle SAVE_TO_FILE_UNSTAGED_HANDLE = Symbols.downcallOptional(
+            "jpdfium_doc_save_to_file_unstaged",
+            FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS, JAVA_LONG, ADDRESS));
+
     /** Bounded chunk used when spooling a staged save file to a channel. */
     static final int SAVE_TRANSFER_BYTES = 256 * 1024;
 
@@ -531,13 +539,29 @@ public final class JpdfiumLib {
      * plus a post-hoc size/cap check.
      */
     public static void docSaveNative(long doc, String absPath, long maxBytes) {
+        docSaveNative(doc, absPath, maxBytes, SAVE_TO_FILE_HANDLE);
+    }
+
+    /**
+     * Save into a path the caller already owns as a private staging file.
+     * Uses the bridge's unstaged entry point when exported, so no second
+     * sibling staging file and no second rename are performed.
+     */
+    private static void docSaveNativeToStaging(long doc, String absPath, long maxBytes) {
+        MethodHandle handle = SAVE_TO_FILE_UNSTAGED_HANDLE != null
+                ? SAVE_TO_FILE_UNSTAGED_HANDLE : SAVE_TO_FILE_HANDLE;
+        docSaveNative(doc, absPath, maxBytes, handle);
+    }
+
+    private static void docSaveNative(long doc, String absPath, long maxBytes,
+            MethodHandle saveHandle) {
         try (Arena a = Arena.ofConfined()) {
             MemorySegment cPath = a.allocateFrom(absPath);
-            if (SAVE_TO_FILE_HANDLE != null) {
+            if (saveHandle != null) {
                 MemorySegment outLen = a.allocate(JAVA_LONG);
                 PdfiumRuntime.execute(() -> {
                     try {
-                        check((int) SAVE_TO_FILE_HANDLE.invokeExact(doc, cPath, maxBytes, outLen),
+                        check((int) saveHandle.invokeExact(doc, cPath, maxBytes, outLen),
                                 "docSave: " + absPath);
                     } catch (RuntimeException re) {
                         throw re;
@@ -579,7 +603,8 @@ public final class JpdfiumLib {
         try (OutputTransaction tx = OutputTransaction.begin(destination, opts.durable())) {
             Lock saveLock = QpdfLib.acquireSaveReadLock();
             try {
-                docSaveNative(doc, tx.staging().toAbsolutePath().toString(), opts.maxOutputBytes());
+                docSaveNativeToStaging(doc, tx.staging().toAbsolutePath().toString(),
+                        opts.maxOutputBytes());
             } finally {
                 QpdfLib.releaseSaveLock(saveLock);
             }
@@ -655,8 +680,7 @@ public final class JpdfiumLib {
         try {
             try {
                 tmp = Files.createTempFile("jpdfium-save-", ".pdf",
-                        PosixFilePermissions.asFileAttribute(
-                                PosixFilePermissions.fromString("rw-------")));
+                        OutputTransaction.CREATE_OWNER_ATTR);
             } catch (UnsupportedOperationException e) {
                 tmp = Files.createTempFile("jpdfium-save-", ".pdf");
             }
@@ -666,7 +690,8 @@ public final class JpdfiumLib {
         try {
             Lock saveLock = QpdfLib.acquireSaveReadLock();
             try {
-                docSaveNative(doc, tmp.toAbsolutePath().toString(), opts.maxOutputBytes());
+                docSaveNativeToStaging(doc, tmp.toAbsolutePath().toString(),
+                        opts.maxOutputBytes());
             } finally {
                 QpdfLib.releaseSaveLock(saveLock);
             }

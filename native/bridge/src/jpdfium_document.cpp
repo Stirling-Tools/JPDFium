@@ -63,6 +63,29 @@ FILE* safe_fopen_write(const char* path) {
 #endif
 }
 
+// Replacement open for a caller-owned staging file. The Java save paths create
+// the staging file (and its 0600 mode) before handing it to the bridge, so an
+// exclusive create would fail and a second native sibling would only duplicate
+// the atomic publish Java already performs.
+FILE* safe_fopen_replace(const char* path) {
+#if defined(_WIN32)
+    int fd = -1;
+    if (::_sopen_s(&fd, path, _O_WRONLY | _O_CREAT | _O_TRUNC | _O_NOINHERIT | _O_BINARY,
+                   _SH_DENYRW, _S_IREAD | _S_IWRITE) != 0) {
+        return nullptr;
+    }
+    FILE* f = ::_fdopen(fd, "wb");
+    if (!f) ::_close(fd);
+    return f;
+#else
+    int fd = ::open(path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
+    if (fd < 0) return nullptr;
+    FILE* f = ::fdopen(fd, "wb");
+    if (!f) ::close(fd);
+    return f;
+#endif
+}
+
 // Sibling staging file for an atomic publish.
 //
 // Writing straight to the destination destroys it the moment the save fails:
@@ -213,9 +236,18 @@ struct FileWriteContext : FPDF_FILEWRITE {
 // Streams PDFium's serialization into a fresh sibling staging file. On success
 // |stagingOut| holds a complete PDF and |bytesWritten| is its size; the caller
 // publishes it. On failure the staging file is removed and the save fails.
+// Open the output sink for a save. In staging mode a fresh sibling is created
+// and published over `path`; in direct mode the caller already owns `path` as a
+// private staging file and no second sibling (or second rename) is needed.
+FILE* open_output_sink(const char* path, bool staged, std::string& stagingOut) {
+    if (staged) return open_staging_sibling(path, stagingOut);
+    stagingOut = path;
+    return safe_fopen_replace(path);
+}
+
 int32_t streamDocumentToStaging(FPDF_DOCUMENT doc, const char* path, int64_t max_bytes,
-                                std::string& stagingOut, int64_t& bytesWritten) {
-    FILE* f = open_staging_sibling(path, stagingOut);
+                                std::string& stagingOut, int64_t& bytesWritten, bool staged) {
+    FILE* f = open_output_sink(path, staged, stagingOut);
     if (!f) return JPDFIUM_ERR_IO;
 
     FileWriteContext ctx;
@@ -575,8 +607,8 @@ bool isSaveAlias(const std::string& sourcePath, const char* destPath) {
 // buffer batches them. Shared by both save branches.
 static constexpr std::size_t kSaveIoBufferBytes = static_cast<std::size_t>(256) * 1024;
 
-int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_bytes,
-                                 int64_t* out_bytes) {
+static int32_t save_to_file_impl(int64_t doc, const char* path, int64_t max_bytes,
+                                 int64_t* out_bytes, bool staged) {
     try {
         DocWrapper* w = decodeDoc(doc);
         if (!w || !w->core || !w->core->doc) return JPDFIUM_ERR_INVALID;
@@ -643,7 +675,7 @@ int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_byte
             // fclose.
             std::vector<char> ioBuffer(kSaveIoBufferBytes);
             std::string staging;
-            FILE* f = open_staging_sibling(path, staging);
+            FILE* f = open_output_sink(path, staged, staging);
             if (!f) return JPDFIUM_ERR_IO;
             std::setvbuf(f, ioBuffer.data(), _IOFBF, ioBuffer.size());
             size_t written = bw.buf.empty() ? 0 : fwrite(bw.buf.data(), 1, bw.buf.size(), f);
@@ -652,7 +684,7 @@ int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_byte
                 std::remove(staging.c_str());
                 return JPDFIUM_ERR_IO;
             }
-            if (!publish_staged(staging, path)) {
+            if (staged && !publish_staged(staging, path)) {
                 std::remove(staging.c_str());
                 return JPDFIUM_ERR_IO;
             }
@@ -669,7 +701,7 @@ int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_byte
             std::string staging;
             int64_t written = 0;
             int32_t writeRc =
-                streamDocumentToStaging(w->core->doc, path, max_bytes, staging, written);
+                streamDocumentToStaging(w->core->doc, path, max_bytes, staging, written, staged);
             if (writeRc != JPDFIUM_OK) return writeRc;
 
             std::string compacted;
@@ -702,12 +734,12 @@ int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_byte
                     std::remove(staging.c_str());
                     return JPDFIUM_ERR_IO;
                 }
-                std::remove(staging.c_str());
+                if (staged) std::remove(staging.c_str());
                 if (out_bytes) *out_bytes = compactedBytes;
                 return JPDFIUM_OK;
             }
             if (!compacted.empty()) std::remove(compacted.c_str());
-            if (!publish_staged(staging, path)) {
+            if (staged && !publish_staged(staging, path)) {
                 std::remove(staging.c_str());
                 return JPDFIUM_ERR_IO;
             }
@@ -717,9 +749,10 @@ int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_byte
 
         std::string staging;
         int64_t written = 0;
-        int32_t writeRc = streamDocumentToStaging(w->core->doc, path, max_bytes, staging, written);
+        int32_t writeRc =
+            streamDocumentToStaging(w->core->doc, path, max_bytes, staging, written, staged);
         if (writeRc != JPDFIUM_OK) return writeRc;
-        if (!publish_staged(staging, path)) {
+        if (staged && !publish_staged(staging, path)) {
             std::remove(staging.c_str());
             return JPDFIUM_ERR_IO;
         }
@@ -729,6 +762,20 @@ int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_byte
         // Never let a C++ exception cross the FFM boundary.
         return JPDFIUM_ERR_NATIVE;
     }
+}
+
+int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_bytes,
+                                 int64_t* out_bytes) {
+    return save_to_file_impl(doc, path, max_bytes, out_bytes, true);
+}
+
+// Direct variant for callers that already own `path` as a private staging file
+// (the Java OutputTransaction save paths). It keeps alias protection, budget
+// enforcement and failure cleanup, but writes to the given file instead of
+// creating a second sibling and renaming twice.
+int32_t jpdfium_doc_save_to_file_unstaged(int64_t doc, const char* path, int64_t max_bytes,
+                                          int64_t* out_bytes) {
+    return save_to_file_impl(doc, path, max_bytes, out_bytes, false);
 }
 
 int32_t jpdfium_doc_save(int64_t doc, const char* path) {

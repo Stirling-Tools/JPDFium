@@ -12,6 +12,7 @@ import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.FileAttribute;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
@@ -29,6 +30,15 @@ import java.util.Set;
  * the destination when possible so the final move is a rename.
  */
 public final class OutputTransaction implements AutoCloseable {
+
+    /**
+     * Owner-only creation mode for a staging file while it is partial. Cached
+     * because {@code fromString} parses and revalidates the literal on every
+     * call, and every save creates at least one staging file.
+     */
+    static final FileAttribute<Set<PosixFilePermission>> CREATE_OWNER_ATTR =
+            PosixFilePermissions.asFileAttribute(
+                    Set.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE));
 
     private final Path destination;
     private final Path staging;
@@ -83,16 +93,14 @@ public final class OutputTransaction implements AutoCloseable {
             Files.createDirectories(parent);
             try {
                 staging = Files.createTempFile(parent, ".jpdfium-save-",
-                        ".pdf", PosixFilePermissions.asFileAttribute(
-                                PosixFilePermissions.fromString("rw-------")));
+                        ".pdf", CREATE_OWNER_ATTR);
             } catch (UnsupportedOperationException e) {
                 staging = Files.createTempFile(parent, ".jpdfium-save-", ".pdf");
             }
         } else {
             try {
                 staging = Files.createTempFile("jpdfium-save-", ".pdf",
-                        PosixFilePermissions.asFileAttribute(
-                                PosixFilePermissions.fromString("rw-------")));
+                        CREATE_OWNER_ATTR);
             } catch (UnsupportedOperationException e) {
                 staging = Files.createTempFile("jpdfium-save-", ".pdf");
             }

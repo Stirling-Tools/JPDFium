@@ -424,6 +424,19 @@ JPDF_API int32_t jpdf_guard_jpdfium_doc_save_to_file(int64_t doc, const char* pa
     }
 }
 
+JPDF_API int32_t jpdf_guard_jpdfium_doc_save_to_file_unstaged(int64_t doc, const char* path,
+                                                              int64_t max_bytes,
+                                                              int64_t* out_bytes) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return jpdfium_doc_save_to_file_unstaged(doc, path, max_bytes, out_bytes);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
 JPDF_API int32_t jpdf_guard_jpdfium_doc_set_sanitize_on_save(int64_t doc, int32_t enable) noexcept {
     jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
     if (!guard.admitted()) return {};

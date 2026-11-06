@@ -149,6 +149,10 @@ JPDFIUM_EXPORT int32_t jpdfium_doc_save_bytes(int64_t doc, uint8_t** data, int64
 // removes the partial file and never reports success.
 JPDFIUM_EXPORT int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_bytes,
                                                 int64_t* out_bytes);
+// Direct variant for a caller-owned private staging file: same alias, budget and
+// cleanup contract, without a second sibling file or a second rename.
+JPDFIUM_EXPORT int32_t jpdfium_doc_save_to_file_unstaged(int64_t doc, const char* path,
+                                                         int64_t max_bytes, int64_t* out_bytes);
 JPDFIUM_EXPORT int32_t jpdfium_doc_set_sanitize_on_save(int64_t doc,
                                                         int32_t enable) JPDFIUM_NOEXCEPT;
 JPDFIUM_EXPORT void jpdfium_doc_close(int64_t doc) JPDFIUM_NOEXCEPT;

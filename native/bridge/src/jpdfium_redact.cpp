@@ -283,11 +283,35 @@ static void appendRedactorAreas(const RedactArea& mark, std::vector<RedactArea>&
 // PDFium generates (separators it inserts between runs) have no content to
 // remove, and an outline-less glyph is judged by the cell a cover for it spans.
 static bool textLeftIn(FPDF_TEXTPAGE audit, const std::vector<RedactArea>& areas) {
+    if (areas.empty()) return false;
+    // Union of every area (rect plus quad bounds): a char outside it cannot be
+    // half-inside any rect or centred in any quad, so the per-area scan is only
+    // entered for the neighbourhood the redaction actually covered.
+    float unionL = areas.front().rect.left;
+    float unionB = areas.front().rect.bottom;
+    float unionR = areas.front().rect.right;
+    float unionT = areas.front().rect.top;
+    for (const RedactArea& area : areas) {
+        unionL = std::min(unionL, area.rect.left);
+        unionB = std::min(unionB, area.rect.bottom);
+        unionR = std::max(unionR, area.rect.right);
+        unionT = std::max(unionT, area.rect.top);
+        for (const FS_QUADPOINTSF& q : area.quads) {
+            unionL = std::min({unionL, q.x1, q.x2, q.x3, q.x4});
+            unionB = std::min({unionB, q.y1, q.y2, q.y3, q.y4});
+            unionR = std::max({unionR, q.x1, q.x2, q.x3, q.x4});
+            unionT = std::max({unionT, q.y1, q.y2, q.y3, q.y4});
+        }
+    }
     int n = FPDFText_CountChars(audit);
     for (int ci = 0; ci < n; ++ci) {
         if (FPDFText_IsGenerated(audit, ci) == 1) continue;
         double l, r, b, t;
         if (!outlineAwareCharBox(audit, ci, &l, &r, &b, &t)) continue;
+        if (!rectsOverlap(static_cast<float>(l), static_cast<float>(b), static_cast<float>(r),
+                          static_cast<float>(t), unionL, unionB, unionR, unionT)) {
+            continue;
+        }
         for (const RedactArea& area : areas) {
             if (area.quads.empty()) {
                 if (charInRect(l, b, r, t, area.rect.left, area.rect.bottom, area.rect.right,
@@ -702,7 +726,10 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
         t_redactScratch.clear();
         std::vector<int>& idxMap = t_redactScratch.idxMap;
         std::u32string& wtext = t_redactScratch.wtext;
-        buildNormalizedText(tp.get(), count, idxMap, wtext);
+        std::vector<uint32_t>& unicodeSeq = t_redactScratch.unicodeSeq;
+        // One FPDFText_GetUnicode pass fills both the normalized text and the
+        // raw code-point sequence the grapheme alignment needs.
+        buildNormalizedText(tp.get(), count, idxMap, wtext, &unicodeSeq);
 
         std::vector<TextMatch>& matches = t_redactScratch.matches;
         for (int32_t wi = 0; wi < wordCount; ++wi) {
@@ -728,11 +755,6 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
             return JPDFIUM_OK;
         }
 
-        std::vector<uint32_t>& unicodeSeq = t_redactScratch.unicodeSeq;
-        unicodeSeq.reserve(static_cast<size_t>(count));
-        for (int i = 0; i < count; ++i) {
-            unicodeSeq.push_back(FPDFText_GetUnicode(tp.get(), i));
-        }
         alignMatchesToGraphemes(tp.get(), unicodeSeq, matches);
 #ifdef JPDFIUM_HAS_HARFBUZZ
         alignMatchesToShapedClusters(tp.get(), matches);
@@ -1064,13 +1086,8 @@ int32_t jpdfium_redact_mark_words(int64_t page, const char** words, int32_t word
         t_redactScratch.clear();
         std::vector<int>& idxMap = t_redactScratch.idxMap;
         std::u32string& wtext = t_redactScratch.wtext;
-        buildNormalizedText(tp.get(), count, idxMap, wtext);
-
         std::vector<uint32_t>& unicodeSeq = t_redactScratch.unicodeSeq;
-        unicodeSeq.reserve(static_cast<size_t>(count));
-        for (int i = 0; i < count; ++i) {
-            unicodeSeq.push_back(FPDFText_GetUnicode(tp.get(), i));
-        }
+        buildNormalizedText(tp.get(), count, idxMap, wtext, &unicodeSeq);
 
         std::vector<TextMatch>& matches = t_redactScratch.matches;
         for (int32_t wi = 0; wi < wordCount; ++wi) {

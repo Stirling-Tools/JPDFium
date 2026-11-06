@@ -241,16 +241,20 @@ public final class PdfRedactor {
         List<RedactResult.PageResult> pageResults = new ArrayList<>();
 
         try (Arena regexArena = Arena.ofConfined()) {
-            MemorySegment premarshaledRegexes = null;
-            int regexWordCount = 0;
-            if (options.useRegex() && !options.words().isEmpty()) {
+            MemorySegment premarshaledWords = null;
+            int premarshaledWordCount = 0;
+            Set<String> premarshaledWordSet = null;
+            if (!options.words().isEmpty()) {
                 // Distinct count: the page sets are HashSets, so duplicates in
                 // the configured list must not inflate the count used to prove
-                // a page holds no extra PII/entity entries.
+                // a page holds no extra PII/entity entries. Works for literal
+                // words too: the native entry point takes the same pointer
+                // array and only interprets it per its useRegex flag.
                 String[] allWords =
                         new LinkedHashSet<>(options.words()).toArray(String[]::new);
-                regexWordCount = allWords.length;
-                premarshaledRegexes = JpdfiumLib.marshalWordPointers(regexArena, allWords);
+                premarshaledWordCount = allWords.length;
+                premarshaledWordSet = Set.of(allWords);
+                premarshaledWords = JpdfiumLib.marshalWordPointers(regexArena, allWords);
             }
 
             for (int i = 0; i < totalPages; i++) {
@@ -276,10 +280,12 @@ public final class PdfRedactor {
                         }
 
                         try {
-                            if (options.useRegex() && premarshaledRegexes != null && words.size() == regexWordCount) {
+                            if (premarshaledWords != null
+                                    && words.size() == premarshaledWordCount
+                                    && words.containsAll(premarshaledWordSet)) {
                                 matchesOnPage = page.redactWordsEx(
-                                        premarshaledRegexes, regexWordCount, options.boxColor(),
-                                        options.padding(), options.wholeWord(), true,
+                                        premarshaledWords, premarshaledWordCount, options.boxColor(),
+                                        options.padding(), options.wholeWord(), options.useRegex(),
                                         options.removeContent(), options.caseSensitive());
                             } else {
                                 String[] wordArray = words.toArray(String[]::new);
