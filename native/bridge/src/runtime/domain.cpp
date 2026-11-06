@@ -306,18 +306,12 @@ Admission::Admission(Purpose purpose) noexcept {
         acquired_at_ = std::chrono::steady_clock::now();
     } else {
         const auto requested = std::chrono::steady_clock::now();
-        auto backoff = std::chrono::microseconds(50);
-        while (!domain.mutex_.try_lock()) {
-            // Backoff keeps a queue of tiny calls from spinning while a render holds the domain.
-            try {
-                std::this_thread::sleep_for(backoff);
-            } catch (...) {
-                status_ = fail(JPDF_E_INTERNAL, "could not wait for the PDFium domain");
-                return;
-            }
-            backoff = std::min(backoff * 2, std::chrono::microseconds(2000));
+        try {
+            lock_ = std::unique_lock<std::mutex>(domain.mutex_);
+        } catch (const std::system_error&) {
+            status_ = fail(JPDF_E_INTERNAL, "could not lock the PDFium domain");
+            return;
         }
-        lock_ = std::unique_lock<std::mutex>(domain.mutex_, std::adopt_lock);
         // The wait ends exactly where the hold begins, so reuse the acquisition timestamp
         // instead of taking a redundant second clock read.
         acquired_at_ = std::chrono::steady_clock::now();
