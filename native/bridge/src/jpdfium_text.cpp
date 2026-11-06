@@ -3,6 +3,7 @@
 #include <fpdf_text.h>
 #include <fpdfview.h>
 
+#include <bit>
 #include <cstdlib>
 #include <cstring>
 #include <sstream>
@@ -197,6 +198,9 @@ int32_t jpdfium_text_get_chars(int64_t page, char** json) {
 }
 
 namespace {
+
+static_assert(std::endian::native == std::endian::little,
+              "jpdfium_text_get_chars_packed writes host byte order and documents little-endian");
 
 void appendI32(std::vector<uint8_t>& out, int32_t v) {
     uint8_t b[4];
