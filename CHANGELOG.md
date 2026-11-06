@@ -38,6 +38,13 @@ publishing workflows, not library releases, so they are not listed here.
   now gets the destination's permissions as other saves do. They previously
   flushed the staging file and then renamed it without flushing the rename.
 
+### Changed
+
+- `PdfSplit.extractPageRange` and `PdfSplit.extractPages` honour
+  `StorageOptions.reuseSourceFile`: an untouched file-backed document is read
+  from its file instead of being saved through PDFium before every extract.
+  `SplitCounters.extractSerializations` counts the snapshots they still take.
+
 ### Fixed
 
 - Word and pattern redaction now removes text drawn with glyphs the embedded
