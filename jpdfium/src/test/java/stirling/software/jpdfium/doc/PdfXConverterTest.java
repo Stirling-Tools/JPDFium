@@ -7,11 +7,17 @@ import org.apache.pdfbox.cos.COSStream;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
+import org.apache.pdfbox.pdmodel.font.PDType1Font;
+import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
 import org.apache.pdfbox.pdmodel.PDResources;
 import org.apache.pdfbox.pdmodel.common.PDMetadata;
 import org.apache.pdfbox.pdmodel.common.PDStream;
 import org.apache.pdfbox.pdmodel.graphics.color.PDOutputIntent;
+import org.apache.pdfbox.pdmodel.graphics.form.PDFormXObject;
 import org.apache.pdfbox.pdmodel.graphics.state.PDExtendedGraphicsState;
+import org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationFreeText;
+import org.apache.pdfbox.pdmodel.interactive.annotation.PDAppearanceDictionary;
+import org.apache.pdfbox.pdmodel.interactive.annotation.PDAppearanceStream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 
@@ -30,11 +36,15 @@ import javax.xml.parsers.DocumentBuilderFactory;
 
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
+import stirling.software.jpdfium.model.PdfVersion;
+import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.exception.JPDFiumException;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -277,24 +287,66 @@ class PdfXConverterTest {
                 .standard(PdfXStandard.PDF_X_3)
                 .outputIntentProfile(icc)
                 .conditionIdentifier("FOGRA39")
+                .title("PDF/X-3 Document")
                 .build();
         byte[] out = PdfXConverter.applyMetadata(input, options);
         String text = new String(out, StandardCharsets.ISO_8859_1);
         assertTrue(text.contains("PDF/X-3:2002"), "PDF/X-3 GTS version missing");
-        assertTrue(text.contains("GTS_PDFXConformance"), "PDF/X-3 conformance missing");
         PdfXConverter.checkMetadata(out, options);
     }
 
     @Test
-    void unsupportedStandardsFailBeforeTouchingTheDocument() throws Exception {
-        JPDFiumException ex1A = assertThrows(JPDFiumException.class,
-                () -> PdfXConverter.applyMetadata(new byte[] {1, 2, 3},
-                        PdfXOptions.builder().standard(PdfXStandard.PDF_X_1A).build()));
-        assertTrue(ex1A.getMessage().contains("not supported"), ex1A.getMessage());
-        JPDFiumException ex6 = assertThrows(JPDFiumException.class,
-                () -> PdfXConverter.applyMetadata(new byte[] {1, 2, 3},
-                        PdfXOptions.builder().standard(PdfXStandard.PDF_X_6).build()));
-        assertTrue(ex6.getMessage().contains("not supported"), ex6.getMessage());
+    void versionConverterWritesRequestedVersion() throws Exception {
+        byte[] input = Files.readAllBytes(resource("/pdfs/general/minimal.pdf"));
+        try (var doc = PdfDocument.open(input)) {
+            for (PdfVersion v :
+                    PdfVersion.values()) {
+                byte[] out = PdfVersionConverter.saveWithVersionToBytes(doc.rawHandle(), v);
+                assertTrue(new String(out, 0, 8, StandardCharsets.ISO_8859_1)
+                                .startsWith("%PDF-" + v),
+                        "version converter wrote the wrong header for " + v);
+            }
+            Path file = Files.createTempFile("jpdfium-version-", ".pdf");
+            try {
+                PdfVersionConverter.saveWithVersion(
+                        doc.rawHandle(), PdfVersion.V2_0, file);
+                byte[] head = Files.readAllBytes(file);
+                assertTrue(new String(head, 0, 8, StandardCharsets.ISO_8859_1)
+                                .startsWith("%PDF-2.0"),
+                        "file version converter wrote a non-2.0 header");
+            } finally {
+                Files.deleteIfExists(file);
+            }
+        }
+    }
+
+    @Test
+    void everyStandardWritesItsGtsNamesAndBaseVersion() throws Exception {
+        assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
+        byte[] input = Files.readAllBytes(resource("/pdfs/general/minimal.pdf"));
+        for (PdfXStandard standard : PdfXStandard.values()) {
+            PdfXOptions options = PdfXOptions.builder()
+                    .standard(standard)
+                    .useCompactCmyk()
+                    .title("Every Standard Test")
+                    .build();
+            byte[] out = PdfXConverter.applyMetadata(input, options);
+            String text = new String(out, StandardCharsets.ISO_8859_1);
+            assertTrue(text.startsWith("%PDF-" + standard.pdfVersion().substring(4)),
+                    standard + " base version missing: " + text.substring(0, 16));
+            assertTrue(text.contains("GTS_PDFXVersion"), standard + " GTS_PDFXVersion attribute missing");
+            assertTrue(text.contains(standard.gtsVersion()), standard + " GTS version missing");
+            if (standard.gtsConformance() != null) {
+                assertTrue(text.contains("GTS_PDFXConformance"),
+                        standard + " GTS_PDFXConformance attribute missing");
+                assertTrue(text.contains(standard.gtsConformance()),
+                        standard + " GTS conformance missing");
+            } else {
+                assertFalse(text.contains("GTS_PDFXConformance"),
+                        standard + " must not write GTS_PDFXConformance");
+            }
+            PdfXConverter.checkMetadata(out, options);
+        }
     }
 
     @Test
@@ -341,19 +393,26 @@ class PdfXConverterTest {
         Path input = resource("/pdfs/general/basic-text.pdf");
         Path output = Files.createTempFile("jpdfium-pdfx-stream-", ".pdf");
         try {
-            PdfXOptions options = PdfXOptions.builder()
-                    .standard(PdfXStandard.PDF_X_4)
-                    .useCompactCmyk()
-                    .build();
-            PdfXConverter.applyMetadata(input, output, options);
-            byte[] bytes = Files.readAllBytes(output);
-            PdfXConverter.checkMetadata(bytes, options);
-            try (PDDocument pdfbox = Loader.loadPDF(output.toFile())) {
-                assertNotNull(pdfbox.getDocumentCatalog().getMetadata(),
-                        "streamed output has no XMP metadata");
-                assertTrue(pdfbox.getDocumentCatalog().getOutputIntents() != null
-                                && !pdfbox.getDocumentCatalog().getOutputIntents().isEmpty(),
-                        "streamed output has no output intent");
+            for (PdfXStandard standard : PdfXStandard.values()) {
+                PdfXOptions options = PdfXOptions.builder()
+                        .standard(standard)
+                        .useCompactCmyk()
+                        .build();
+                PdfXConverter.applyMetadata(input, output, options);
+                byte[] bytes = Files.readAllBytes(output);
+                PdfXConverter.checkMetadata(bytes, options);
+                try (PDDocument pdfbox = Loader.loadPDF(output.toFile())) {
+                    assertNotNull(pdfbox.getDocumentCatalog().getMetadata(),
+                            "streamed output has no XMP metadata");
+                    assertTrue(pdfbox.getDocumentCatalog().getOutputIntents() != null
+                                    && !pdfbox.getDocumentCatalog().getOutputIntents().isEmpty(),
+                            "streamed output has no output intent");
+                    assertEquals(null, pdfbox.getDocumentCatalog().getVersion(),
+                            standard + " left a catalog /Version override");
+                    assertTrue(pdfbox.getVersion() == Float.parseFloat(
+                                    standard.pdfVersion().substring(4)),
+                            standard + " header version is wrong");
+                }
             }
         } finally {
             Files.deleteIfExists(output);
@@ -453,6 +512,115 @@ class PdfXConverterTest {
         }
     }
 
+    @Test
+    void optionsWriteTitleTrappedAndDates() throws Exception {
+        assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
+        byte[] icc = findCmykProfile().orElse(null);
+        assumeTrue(icc != null, "no CMYK ICC profile available on this machine");
+        byte[] input = nonEmbeddedTextPdf();
+        PdfXOptions options = PdfXOptions.builder()
+                .standard(PdfXStandard.PDF_X_4)
+                .outputIntentProfile(icc)
+                .conditionIdentifier("FOGRA39")
+                .info("Coated FOGRA39")
+                .title("PDF/X title")
+                .requireEmbeddedFonts(false)
+                .build();
+        byte[] out = PdfXConverter.applyMetadata(input, options);
+        try (PDDocument pdfbox = Loader.loadPDF(out)) {
+            assertEquals("PDF/X title", pdfbox.getDocumentInformation().getTitle());
+            assertEquals("False", pdfbox.getDocumentInformation().getTrapped());
+            assertTrue(pdfbox.getDocumentInformation().getCOSObject().getItem(COSName.getPDFName("Trapped")) instanceof COSName,
+                    "/Trapped in Info dictionary must be a PDF Name object");
+            assertNotNull(pdfbox.getDocumentInformation().getCreationDate());
+            assertNotNull(pdfbox.getDocumentInformation().getModificationDate());
+        }
+    }
+
+    @Test
+    void pdfx1aAndPdfx3WriteGtsPdfxVersionToInfoDictionary() throws Exception {
+        assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
+        byte[] icc = findCmykProfile().orElse(null);
+        assumeTrue(icc != null, "no CMYK ICC profile available on this machine");
+        byte[] input = nonEmbeddedTextPdf();
+        for (PdfXStandard std : List.of(PdfXStandard.PDF_X_1A, PdfXStandard.PDF_X_3)) {
+            PdfXOptions options = PdfXOptions.builder()
+                    .standard(std)
+                    .outputIntentProfile(icc)
+                    .conditionIdentifier("FOGRA39")
+                    .info("Coated FOGRA39")
+                    .title("PDF/X title")
+                    .requireEmbeddedFonts(false)
+                    .build();
+            byte[] out = PdfXConverter.applyMetadata(input, options);
+            try (PDDocument pdfbox = Loader.loadPDF(out)) {
+                assertEquals(std.gtsVersion(),
+                        pdfbox.getDocumentInformation().getCustomMetadataValue("GTS_PDFXVersion"),
+                        "Expected GTS_PDFXVersion in Info dictionary for " + std);
+                if (std == PdfXStandard.PDF_X_1A) {
+                    assertEquals(std.gtsConformance(),
+                            pdfbox.getDocumentInformation().getCustomMetadataValue("GTS_PDFXConformance"),
+                            "Expected GTS_PDFXConformance in Info dictionary for " + std);
+                }
+            }
+        }
+    }
+
+    @Test
+    void requireEmbeddedFontsRejectsAllOverloadsAndLeavesDestinationUntouched() throws Exception {
+        assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
+        byte[] icc = findCmykProfile().orElse(null);
+        assumeTrue(icc != null, "no CMYK ICC profile available on this machine");
+        byte[] input = nonEmbeddedTextPdf();
+        PdfXOptions options = PdfXOptions.builder()
+                .standard(PdfXStandard.PDF_X_4)
+                .outputIntentProfile(icc)
+                .conditionIdentifier("FOGRA39")
+                .info("Coated FOGRA39")
+                .requireEmbeddedFonts(true)
+                .build();
+        JPDFiumException rej1 = assertThrows(JPDFiumException.class,
+                () -> PdfXConverter.applyMetadata(input, options));
+        assertTrue(rej1.getMessage().contains("embedded fonts"), rej1.getMessage());
+        try (PdfDocument doc = PdfDocument.open(input)) {
+            JPDFiumException rej2 = assertThrows(JPDFiumException.class,
+                    () -> PdfXConverter.applyMetadata(doc, options));
+            assertTrue(rej2.getMessage().contains("embedded fonts"), rej2.getMessage());
+        }
+        Path source = Files.createTempFile("jpdfium-font-source-", ".pdf");
+        Path output = Files.createTempFile("jpdfium-font-output-", ".pdf");
+        byte[] sentinel = "untouched".getBytes(StandardCharsets.US_ASCII);
+        try {
+            Files.write(source, input);
+            Files.write(output, sentinel);
+            JPDFiumException rej3 = assertThrows(JPDFiumException.class,
+                    () -> PdfXConverter.applyMetadata(source, output, options));
+            assertTrue(rej3.getMessage().contains("embedded fonts"), rej3.getMessage());
+            assertArrayEquals(sentinel, Files.readAllBytes(output),
+                    "a rejected conversion must not replace the destination");
+        } finally {
+            Files.deleteIfExists(source);
+            Files.deleteIfExists(output);
+        }
+    }
+
+    private static byte[] nonEmbeddedTextPdf() throws Exception {
+        try (PDDocument pdfbox = new PDDocument()) {
+            PDPage page = new PDPage();
+            pdfbox.addPage(page);
+            try (PDPageContentStream content = new PDPageContentStream(pdfbox, page)) {
+                content.beginText();
+                content.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 12);
+                content.newLineAtOffset(72, 720);
+                content.showText("Helvetica");
+                content.endText();
+            }
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            pdfbox.save(bytes);
+            return bytes.toByteArray();
+        }
+    }
+
     private static byte[] pageWithConstantAlpha() throws Exception {
         try (PDDocument pdfbox = new PDDocument()) {
             PDPage page = new PDPage();
@@ -520,5 +688,267 @@ class PdfXConverterTest {
             }
         }
         return Optional.of(PdfIccProfiles.compactCmyk());
+    }
+
+    @Test
+    void titleIsRequiredForPdfx1aAndPdfx3() throws Exception {
+        assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
+        byte[] input = Files.readAllBytes(resource("/pdfs/general/minimal.pdf"));
+        for (PdfXStandard std : List.of(PdfXStandard.PDF_X_1A, PdfXStandard.PDF_X_3)) {
+            PdfXOptions options = PdfXOptions.builder()
+                    .standard(std)
+                    .useCompactCmyk()
+                    .title(null)
+                    .build();
+            JPDFiumException ex = assertThrows(JPDFiumException.class,
+                    () -> PdfXConverter.applyMetadata(input, options));
+            assertTrue(ex.getMessage().contains("Title is required"), ex.getMessage());
+        }
+    }
+
+    @Test
+    void trappedTrueIsPreserved() throws Exception {
+        assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
+        byte[] input = Files.readAllBytes(resource("/pdfs/general/minimal.pdf"));
+        byte[] withTrappedTrue;
+        try (PDDocument doc = Loader.loadPDF(input)) {
+            doc.getDocumentInformation().setTrapped("True");
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            doc.save(baos);
+            withTrappedTrue = baos.toByteArray();
+        }
+        PdfXOptions options = PdfXOptions.builder()
+                .standard(PdfXStandard.PDF_X_4)
+                .useCompactCmyk()
+                .title("Preserve Trapped")
+                .build();
+        byte[] out = PdfXConverter.applyMetadata(withTrappedTrue, options);
+        try (PDDocument doc = Loader.loadPDF(out)) {
+            assertEquals("True", doc.getDocumentInformation().getTrapped());
+        }
+    }
+
+    @Test
+    void catalogVersionStrippedOnByteAndDocumentPaths() throws Exception {
+        assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
+        byte[] input = Files.readAllBytes(resource("/pdfs/general/minimal.pdf"));
+        byte[] withCatalogVersion;
+        try (PDDocument doc = Loader.loadPDF(input)) {
+            doc.getDocumentCatalog().setVersion("1.7");
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            doc.save(baos);
+            withCatalogVersion = baos.toByteArray();
+        }
+        PdfXOptions options = PdfXOptions.builder()
+                .standard(PdfXStandard.PDF_X_4)
+                .useCompactCmyk()
+                .title("Strip Version")
+                .build();
+        // Test byte[] path
+        byte[] outBytes = PdfXConverter.applyMetadata(withCatalogVersion, options);
+        try (PDDocument doc = Loader.loadPDF(outBytes)) {
+            assertNull(doc.getDocumentCatalog().getVersion(),
+                    "byte path left catalog /Version override");
+        }
+        // Test PdfDocument path
+        try (PdfDocument srcDoc = PdfDocument.open(withCatalogVersion);
+                PdfDocument resDoc = PdfXConverter.applyMetadata(srcDoc, options)) {
+            byte[] outDocBytes = resDoc.saveBytes();
+            try (PDDocument doc = Loader.loadPDF(outDocBytes)) {
+                assertNull(doc.getDocumentCatalog().getVersion(),
+                        "PdfDocument path left catalog /Version override");
+            }
+        }
+    }
+
+    @Test
+    void trimBoxAndArtBoxRules() throws Exception {
+        assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
+        byte[] input = Files.readAllBytes(resource("/pdfs/general/minimal.pdf"));
+        PdfXOptions options = PdfXOptions.builder()
+                .standard(PdfXStandard.PDF_X_4)
+                .useCompactCmyk()
+                .title("Box test")
+                .build();
+        byte[] out = PdfXConverter.applyMetadata(input, options);
+        try (PdfDocument doc = PdfDocument.open(out);
+                PdfPage page = doc.page(0)) {
+            assertTrue(page.getTrimBox().isPresent(), "TrimBox should be set when absent");
+            assertFalse(page.getArtBox().isPresent(), "ArtBox should not be set");
+        }
+
+        byte[] withArtBox;
+        try (PDDocument pdfbox = Loader.loadPDF(input)) {
+            PDPage p = pdfbox.getPage(0);
+            p.setArtBox(new org.apache.pdfbox.pdmodel.common.PDRectangle(10, 10, 100, 100));
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            pdfbox.save(baos);
+            withArtBox = baos.toByteArray();
+        }
+        byte[] outArt = PdfXConverter.applyMetadata(withArtBox, options);
+        try (PdfDocument doc = PdfDocument.open(outArt);
+                PdfPage page = doc.page(0)) {
+            assertTrue(page.getArtBox().isPresent(), "ArtBox must be preserved");
+            assertTrue(page.getTrimBox().isEmpty(), "TrimBox must NOT be set when ArtBox is present");
+        }
+    }
+
+    @Test
+    void strictCropRemovesBoundaryCrossingWords() throws Exception {
+        byte[] input;
+        try (PDDocument pdfbox = new PDDocument()) {
+            PDPage page = new PDPage(new org.apache.pdfbox.pdmodel.common.PDRectangle(612, 792));
+            pdfbox.addPage(page);
+            try (PDPageContentStream cs = new PDPageContentStream(pdfbox, page)) {
+                cs.beginText();
+                cs.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 12);
+                cs.newLineAtOffset(150, 150);
+                cs.showText("INSIDE");
+                cs.endText();
+
+                cs.beginText();
+                cs.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 12);
+                cs.newLineAtOffset(280, 150);
+                cs.showText("CROSSINGBOUNDARY");
+                cs.endText();
+
+                cs.beginText();
+                cs.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 12);
+                cs.newLineAtOffset(150, 450);
+                cs.showText("OUTSIDE");
+                cs.endText();
+            }
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            pdfbox.save(baos);
+            input = baos.toByteArray();
+        }
+        try (PdfDocument doc = PdfDocument.open(input)) {
+            stirling.software.jpdfium.transform.PdfPageGeometry.cropAndRemoveContentStrict(
+                    doc, 0, new stirling.software.jpdfium.model.Rect(100, 100, 200, 200));
+            var text = stirling.software.jpdfium.text.PdfTextExtractor.extractPage(doc, 0).plainText();
+            assertTrue(text.contains("INSIDE"), "fully inside text should be kept");
+            assertFalse(text.contains("OUTSIDE"), "outside text should be removed");
+            assertFalse(text.contains("CROSSING"), "boundary-crossing word should be removed");
+            assertFalse(text.contains("BOUNDARY"), "boundary-crossing word should be removed");
+        }
+    }
+
+    @Test
+    void strictCropAuditFailureArmsNativeIncompleteStateAndBlocksFullSave() throws Exception {
+        byte[] input;
+        try (PDDocument pdfbox = new PDDocument()) {
+            PDPage page = new PDPage(new org.apache.pdfbox.pdmodel.common.PDRectangle(612, 792));
+            pdfbox.addPage(page);
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            pdfbox.save(baos);
+            input = baos.toByteArray();
+        }
+        try (PdfDocument doc = PdfDocument.open(input)) {
+            try (PdfPage page = doc.page(0)) {
+                page.markRedactionIncomplete();
+            }
+            assertThrows(stirling.software.jpdfium.exception.RedactIncompleteException.class,
+                    doc::saveBytes,
+                    "saveBytes() must fail closed with RedactIncompleteException when incomplete state is armed");
+        }
+    }
+
+    @Test
+    void rotatedPageWithInheritedMediaBoxKeepsUnrotatedCoordinates() throws Exception {
+        byte[] pdf;
+        try (PDDocument pdfbox = new PDDocument()) {
+            PDPage page = new PDPage(new org.apache.pdfbox.pdmodel.common.PDRectangle(612, 792));
+            page.setRotation(90);
+            pdfbox.addPage(page);
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            pdfbox.save(baos);
+            pdf = baos.toByteArray();
+        }
+        try (PdfDocument doc = PdfDocument.open(pdf)) {
+            try (PdfPage page = doc.page(0)) {
+                assertEquals(1, page.rotation());
+                Rect mb = page.getMediaBox();
+                assertEquals(612, Math.round(mb.width()));
+                assertEquals(792, Math.round(mb.height()));
+                assertEquals(0, Math.round(mb.x()));
+                assertEquals(0, Math.round(mb.y()));
+            }
+        }
+    }
+
+    @Test
+    void fontAuditorDetectsNonEmbeddedFontInAnnotation() throws Exception {
+        assumeTrue(PdfFontAuditor.isSupported(), "font auditor requires full PDFium natives");
+        byte[] pdfWithAnnot;
+        try (PDDocument pdfbox = new PDDocument()) {
+            PDPage page = new PDPage();
+            pdfbox.addPage(page);
+
+            PDAnnotationFreeText annot = new PDAnnotationFreeText();
+            annot.setRectangle(new org.apache.pdfbox.pdmodel.common.PDRectangle(50, 50, 200, 50));
+            annot.setContents("AnnotText");
+
+            PDAppearanceDictionary appearance = new PDAppearanceDictionary();
+            PDAppearanceStream appStream = new PDAppearanceStream(pdfbox);
+            appStream.setBBox(new org.apache.pdfbox.pdmodel.common.PDRectangle(0, 0, 200, 50));
+            PDResources res = new PDResources();
+            res.put(COSName.getPDFName("F1"), new PDType1Font(Standard14Fonts.FontName.HELVETICA));
+            appStream.setResources(res);
+            try (var os = appStream.getContentStream().createOutputStream()) {
+                String ops = "q BT /F1 12 Tf 10 10 Td (AnnotText) Tj ET Q";
+                os.write(ops.getBytes(StandardCharsets.US_ASCII));
+            }
+            appearance.setNormalAppearance(appStream);
+            annot.setAppearance(appearance);
+            page.getAnnotations().add(annot);
+
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            pdfbox.save(baos);
+            pdfWithAnnot = baos.toByteArray();
+        }
+
+        try (PdfDocument doc = PdfDocument.open(pdfWithAnnot)) {
+            var audit = PdfFontAuditor.audit(doc);
+            assertTrue(audit.fonts().stream().anyMatch(f -> f.baseName().contains("Helvetica")),
+                    "Font auditor should detect Helvetica in Annotation");
+            assertTrue(PdfFontAuditor.hasNonEmbeddedFonts(doc),
+                    "hasNonEmbeddedFonts should be true for non-embedded font in Annotation");
+        }
+    }
+
+    @Test
+    void fontAuditorDetectsNonEmbeddedFontInFormXObject() throws Exception {
+        assumeTrue(PdfFontAuditor.isSupported(), "font auditor requires full PDFium natives");
+        byte[] pdfWithForm;
+        try (PDDocument pdfbox = new PDDocument()) {
+            PDPage page = new PDPage();
+            pdfbox.addPage(page);
+
+            PDFormXObject form = new PDFormXObject(pdfbox);
+            form.setBBox(new org.apache.pdfbox.pdmodel.common.PDRectangle(0, 0, 100, 100));
+            PDResources res = new PDResources();
+            res.put(COSName.getPDFName("F1"), new PDType1Font(Standard14Fonts.FontName.HELVETICA));
+            form.setResources(res);
+            try (var os = form.getContentStream().createOutputStream()) {
+                String ops = "q BT /F1 12 Tf 10 10 Td (FormText) Tj ET Q";
+                os.write(ops.getBytes(StandardCharsets.US_ASCII));
+            }
+            if (page.getResources() == null) page.setResources(new PDResources());
+            page.getResources().add(form, "Fm1");
+
+            try (PDPageContentStream pageStream = new PDPageContentStream(pdfbox, page)) {
+                pageStream.drawForm(form);
+            }
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            pdfbox.save(baos);
+            pdfWithForm = baos.toByteArray();
+        }
+        try (PdfDocument doc = PdfDocument.open(pdfWithForm)) {
+            var audit = PdfFontAuditor.audit(doc);
+            assertTrue(audit.fonts().stream().anyMatch(f -> f.baseName().contains("Helvetica")),
+                    "Font auditor should detect Helvetica in Form XObject");
+            assertTrue(PdfFontAuditor.hasNonEmbeddedFonts(doc),
+                    "hasNonEmbeddedFonts should be true for non-embedded font in Form XObject");
+        }
     }
 }

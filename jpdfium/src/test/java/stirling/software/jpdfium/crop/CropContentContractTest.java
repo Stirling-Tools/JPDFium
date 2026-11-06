@@ -48,6 +48,26 @@ class CropContentContractTest {
     }
 
     @Test
+    void cropAndRemoveContentStrictRefusesIncrementalSave() throws Exception {
+        byte[] input = CropTestPdfGenerator.textGridPdf();
+        try (PdfDocument doc = PdfDocument.open(input)) {
+            // KEEP_A is placed at (100, 700). A crop with width=75 straddles KEEP_A,
+            // triggering word boundary removal and native redaction marking.
+            Rect rect = new Rect(50, 650, 75, 100);
+            PdfPageGeometry.cropAndRemoveContentStrict(doc, 0, rect);
+            assertThrows(stirling.software.jpdfium.exception.RedactedSaveException.class,
+                    doc::saveBytesIncremental,
+                    "saveBytesIncremental() must be refused after successful cropAndRemoveContentStrict");
+            byte[] fullSave = doc.saveBytes();
+            assertTrue(fullSave.length > 0, "full saveBytes() must succeed after successful cropAndRemoveContentStrict");
+            try (PdfDocument saved = PdfDocument.open(fullSave)) {
+                String text = stirling.software.jpdfium.text.PdfTextExtractor.extractPage(saved, 0).plainText();
+                assertFalse(text.contains("KEEP_A"), "KEEP_A straddles crop boundary and must be removed");
+            }
+        }
+    }
+
+    @Test
     void visibleRegionMatchesAClipOnlyCrop() throws Exception {
         byte[] input = CropTestPdfGenerator.twoToneImagePdf();
         byte[] reference = softCrop(input, KEEP_TOP);
