@@ -1414,14 +1414,16 @@ public final class JpdfiumLib {
                     FunctionDescriptor.of(JAVA_INT, JAVA_LONG));
 
     public static void pageMarkRedacted(long page) {
-        if (jpdfium_page_mark_redacted != null) {
-            try {
-                int rc = (int) jpdfium_page_mark_redacted.invokeExact(page);
-                check(rc, "pageMarkRedacted");
-            } catch (Throwable t) {
-                NativeRuntime.rethrowFatal(t);
-                throw new JPDFiumException("jpdfium_page_mark_redacted failed", t);
-            }
+        if (jpdfium_page_mark_redacted == null) {
+            throw new UnsupportedOperationException(
+                    "jpdfium_page_mark_redacted is not supported by this native build");
+        }
+        try {
+            int rc = (int) jpdfium_page_mark_redacted.invokeExact(page);
+            check(rc, "pageMarkRedacted");
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw new JPDFiumException("jpdfium_page_mark_redacted failed", t);
         }
     }
 
@@ -1430,14 +1432,43 @@ public final class JpdfiumLib {
                     FunctionDescriptor.of(JAVA_INT, JAVA_LONG));
 
     public static void pageMarkRedactionIncomplete(long page) {
-        if (jpdfium_page_mark_redaction_incomplete != null) {
-            try {
-                int rc = (int) jpdfium_page_mark_redaction_incomplete.invokeExact(page);
-                check(rc, "pageMarkRedactionIncomplete");
-            } catch (Throwable t) {
-                NativeRuntime.rethrowFatal(t);
-                throw new JPDFiumException("jpdfium_page_mark_redaction_incomplete failed", t);
-            }
+        if (jpdfium_page_mark_redaction_incomplete == null) {
+            throw new UnsupportedOperationException(
+                    "jpdfium_page_mark_redaction_incomplete is not supported by this native build");
+        }
+        try {
+            int rc = (int) jpdfium_page_mark_redaction_incomplete.invokeExact(page);
+            check(rc, "pageMarkRedactionIncomplete");
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw new JPDFiumException("jpdfium_page_mark_redaction_incomplete failed", t);
+        }
+    }
+
+    private static final MethodHandle jpdfium_page_clear_strict_crop_incomplete =
+            Symbols.downcallOptional("jpdfium_page_clear_strict_crop_incomplete",
+                    FunctionDescriptor.of(JAVA_INT, JAVA_LONG));
+
+    /**
+     * Whether this build can both arm and clear the strict-crop incomplete
+     * marker. Both symbols are required: a bridge that only exports the mark
+     * would leave the page unsavable after a later successful audit.
+     */
+    public static boolean isStrictCropIncompleteSupported() {
+        return jpdfium_page_mark_redaction_incomplete != null
+                && jpdfium_page_clear_strict_crop_incomplete != null;
+    }
+
+    public static void pageClearRedactionIncomplete(long page) {
+        // Clearing is only meaningful after this branch's marking API armed the
+        // strict-crop state; older builds have nothing to clear.
+        if (jpdfium_page_clear_strict_crop_incomplete == null) return;
+        try {
+            int rc = (int) jpdfium_page_clear_strict_crop_incomplete.invokeExact(page);
+            check(rc, "pageClearRedactionIncomplete");
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw new JPDFiumException("jpdfium_page_clear_strict_crop_incomplete failed", t);
         }
     }
 

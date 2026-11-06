@@ -19,6 +19,10 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Added
 
+- Native qpdf font-stream replacement. `PdfFontEmbedder.embed(...)` replaces
+  `/FontFile2` or `/FontFile3` streams by exact `/BaseFont`, updating
+  `/Length1`; Type 1 `/FontFile` streams are rejected. `PdfXOptions.fontData(...)`
+  applies the same replacement before PDF/X validation.
 - PDF/X-1a, PDF/X-3, PDF/X-4, and PDF/X-6 metadata bootstrap. `PdfXConverter`
   now sets the standard base version, writes a missing `/TrimBox`, and
   optionally fails on non-embedded fonts. `PdfXOptions` gains

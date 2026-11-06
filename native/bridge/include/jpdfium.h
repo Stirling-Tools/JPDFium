@@ -218,6 +218,9 @@ JPDFIUM_EXPORT int32_t jpdfium_crop_remove_content_ex(int64_t page, float x, flo
                                                       float h, float margin) JPDFIUM_NOEXCEPT;
 JPDFIUM_EXPORT int32_t jpdfium_page_mark_redacted(int64_t page) JPDFIUM_NOEXCEPT;
 JPDFIUM_EXPORT int32_t jpdfium_page_mark_redaction_incomplete(int64_t page) JPDFIUM_NOEXCEPT;
+// Clear the strict-crop failure marker after a full strict-crop audit passes.
+// Other unresolved redaction areas on the page are preserved.
+JPDFIUM_EXPORT int32_t jpdfium_page_clear_strict_crop_incomplete(int64_t page) JPDFIUM_NOEXCEPT;
 // Content redaction. These entry points mutate the page content stream, so a
 // failure that already mutated (JPDFIUM_ERR_REDACT_INCOMPLETE) leaves part of the
 // original content in place: while such an incomplete redaction is pending, every
@@ -614,6 +617,13 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_force_version_file(const char* in_path, cons
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_force_version(const uint8_t* input, int64_t inputLen,
                                                   const char* version, uint8_t** output,
                                                   int64_t* outputLen);
+
+// Replace the stream behind a matching /BaseFont font descriptor.
+// Caller frees *output with jpdfium_free_buffer.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_replace_font_stream(const uint8_t* input, int64_t inputLen,
+                                                        const char* baseFont,
+                                                        const uint8_t* fontData, int64_t fontLen,
+                                                        uint8_t** output, int64_t* outputLen);
 
 // In-process qpdf structural sanitization (FFM, no CLI).
 // Scrubs metadata/info/structure, JavaScript actions, embedded files, AcroForm

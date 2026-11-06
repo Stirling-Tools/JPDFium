@@ -934,6 +934,211 @@ QpdfResult decryptPdf(std::span<const uint8_t> input, const char* password) {
     }
 }
 
+std::string stripPdfNamePrefix(std::string name) {
+    if (!name.empty() && name.front() == '/') name.erase(name.begin());
+    return name;
+}
+
+/**
+ * Check whether a candidate font's name matches the requested name.
+ *
+ * Matching is exact (case-sensitive, preserving subset prefixes).
+ * Leading '/' PDF name prefixes are stripped on both sides.
+ */
+bool isFontNameMatch(QPDFObjectHandle const& font, std::string const& candidate,
+                     std::string const& requested) {
+    (void)font;
+    std::string candExact = stripPdfNamePrefix(candidate);
+    std::string reqExact = stripPdfNamePrefix(requested);
+    return candExact == reqExact;
+}
+
+struct ReplaceFontResult {
+    std::shared_ptr<Buffer> buffer;
+    std::string error;
+    int32_t rc = 0;
+};
+
+/**
+ * Replace embedded font program streams matching an exact /BaseFont name.
+ *
+ * Safety & Invariant Guarantees:
+ * - Refuses signed documents: any /ByteRange, /FT /Sig, or /V signature dictionaries
+ *   immediately abort with rc = -3 because rewriting invalidates document signatures.
+ * - Password-protected documents that cannot be decrypted abort with rc = -2.
+ * - Searches all font dictionaries in the document, including direct /Type /Font
+ *   objects, resource dictionaries of pages and Form XObjects (streams), and AcroForm /DR.
+ * - Replaces /FontFile2 (TrueType) and /FontFile3 (CFF / OpenType), updating /Length1.
+ * - Refuses Type 1 /FontFile without Length1/2/3 with rc = -4 to avoid corrupting Type 1 fonts.
+ * - Deduplicates shared indirect /FontDescriptor dictionaries to prevent double-replacement
+ *   or corrupted stream state.
+ * - Serializes QPDF writer operations with WriterLock to guarantee thread safety.
+ *
+ * Return codes:
+ *   0: success, buffer populated
+ *   1: no matching font descriptor stream found
+ *  -1: general / QPDF parsing exception
+ *  -2: password-protected document
+ *  -3: signed document (ByteRange / signature field detected)
+ *  -4: unsupported font program type (e.g. Type 1 /FontFile)
+ */
+ReplaceFontResult replaceFontStream(std::span<const uint8_t> input, std::string const& baseFont,
+                                    std::span<const uint8_t> fontData) {
+    try {
+        auto qpdf = QPDF::create();
+        qpdf->processMemoryFile("font-in", reinterpret_cast<const char*>(input.data()),
+                                input.size());
+
+        // 1. Refuse signed documents: a full rewrite invalidates signatures.
+        for (auto& object : qpdf->getAllObjects()) {
+            auto dict = object.isStream() ? object.getDict()
+                                          : (object.isDictionary() ? object : QPDFObjectHandle());
+            if (dict.isDictionary()) {
+                if (dict.hasKey("/ByteRange")) {
+                    return {nullptr,
+                            "document contains signatures (/ByteRange); refusing to rewrite", -3};
+                }
+                auto ft = dict.getKey("/FT");
+                if (ft.isName() && ft.getName() == "/Sig") {
+                    return {nullptr, "document contains signatures (/FT /Sig); refusing to rewrite",
+                            -3};
+                }
+                auto v = dict.getKey("/V");
+                if (v.isDictionary() && v.hasKey("/ByteRange")) {
+                    return {nullptr,
+                            "document contains signatures (/V /ByteRange); refusing to rewrite",
+                            -3};
+                }
+            }
+        }
+
+        // 2. Helper to replace the font stream inside a /FontDescriptor dictionary,
+        // deduplicating indirect descriptors across multiple font references.
+        std::set<QPDFObjGen> seenDescriptors;
+        auto tryReplaceInDescriptor = [&](QPDFObjectHandle& descriptor) -> int {
+            if (!descriptor.isDictionary()) return 0;
+            if (descriptor.isIndirect()) {
+                if (!seenDescriptors.insert(descriptor.getObjGen()).second) {
+                    return 0;  // Already replaced or processed this descriptor
+                }
+            }
+            int count = 0;
+            for (char const* key : {"/FontFile", "/FontFile2", "/FontFile3"}) {
+                auto stream = descriptor.getKey(key);
+                if (!stream.isStream()) continue;
+                if (std::string(key) == "/FontFile") {
+                    return -4;
+                }
+                std::string bytes(reinterpret_cast<const char*>(fontData.data()), fontData.size());
+                auto replacement = QPDFObjectHandle::newStream(qpdf.get(), bytes);
+                auto replacementDict = replacement.getDict();
+                if (std::string(key) == "/FontFile2") {
+                    replacementDict.replaceKey(
+                        "/Length1",
+                        QPDFObjectHandle::newInteger(static_cast<long long>(fontData.size())));
+                } else {
+                    auto subtype = stream.getKey("/Subtype");
+                    if (subtype.isName()) replacementDict.replaceKey("/Subtype", subtype);
+                }
+                descriptor.replaceKey(key, replacement);
+                ++count;
+            }
+            return count;
+        };
+
+        // 3. Collect font candidates from direct /Font objects, Form XObject streams,
+        // and resource dictionaries.
+        std::vector<QPDFObjectHandle> fontCandidates;
+        auto collectFromResources = [&](QPDFObjectHandle const& res) {
+            if (res.isDictionary()) {
+                auto fontDict = res.getKey("/Font");
+                if (fontDict.isDictionary()) {
+                    for (auto const& [name, fontObj] : fontDict.getDictAsMap()) {
+                        if (fontObj.isDictionary()) fontCandidates.push_back(fontObj);
+                    }
+                }
+            }
+        };
+
+        for (auto& object : qpdf->getAllObjects()) {
+            auto dict = object.isStream() ? object.getDict()
+                                          : (object.isDictionary() ? object : QPDFObjectHandle());
+            if (dict.isDictionary()) {
+                auto type = dict.getKey("/Type");
+                if (type.isName() && type.getName() == "/Font") {
+                    fontCandidates.push_back(dict);
+                }
+                collectFromResources(dict.getKey("/Resources"));
+            }
+        }
+
+        // Also check AcroForm default resources (/DR) from catalog Root
+        auto root = qpdf->getRoot();
+        if (root.isDictionary()) {
+            auto acroForm = root.getKey("/AcroForm");
+            if (acroForm.isDictionary()) {
+                collectFromResources(acroForm.getKey("/DR"));
+            }
+        }
+
+        // 4. Iterate candidate fonts and replace descriptor streams for matching /BaseFont
+        int replaced = 0;
+        std::set<QPDFObjGen> seenFonts;
+        for (auto& font : fontCandidates) {
+            if (font.hasObjectDescription() && font.getObjGen().getObj() != 0) {
+                if (!seenFonts.insert(font.getObjGen()).second) continue;
+            }
+            auto base = font.getKey("/BaseFont");
+            if (!base.isName() || !isFontNameMatch(font, base.getName(), baseFont)) continue;
+
+            auto descriptor = font.getKey("/FontDescriptor");
+            int r = tryReplaceInDescriptor(descriptor);
+            if (r == -4) {
+                return {nullptr, "Type 1 /FontFile replacement without Length1/2/3 is unsupported",
+                        -4};
+            }
+            replaced += r;
+
+            // Type 0 CID fonts have /FontDescriptor in /DescendantFonts
+            auto descendantFonts = font.getKey("/DescendantFonts");
+            if (descendantFonts.isArray()) {
+                for (auto& df : descendantFonts.getArrayAsVector()) {
+                    if (!df.isDictionary()) continue;
+                    auto descDescriptor = df.getKey("/FontDescriptor");
+                    int dr = tryReplaceInDescriptor(descDescriptor);
+                    if (dr == -4) {
+                        return {nullptr,
+                                "Type 1 /FontFile replacement without Length1/2/3 is unsupported",
+                                -4};
+                    }
+                    replaced += dr;
+                }
+            }
+        }
+        if (replaced == 0) {
+            return {nullptr, "no matching font descriptor stream", 1};
+        }
+
+        // 5. Serialize output through thread-safe QPDFWriter
+        QPDFWriter writer{*qpdf};
+        writer.setCompressStreams(false);
+        writer.setDecodeLevel(qpdf_dl_none);
+        writer.setOutputMemory();
+        WriterLock lock{-1};
+        writer.write();
+        return {writer.getBufferSharedPointer(), "", 0};
+    } catch (QPDFExc const& e) {
+        if (e.getErrorCode() == qpdf_e_password) {
+            return {nullptr, "password protected", -2};
+        }
+        return {nullptr, e.what(), -1};
+    } catch (std::exception const& e) {
+        return {nullptr, e.what(), -1};
+    } catch (...) {
+        return {nullptr, "non-standard exception while replacing a font stream", -1};
+    }
+}
+
 }  // namespace
 
 extern "C" {
@@ -972,6 +1177,36 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_optimize_ex(const uint8_t* input, int64_t in
         std::memcpy(*output, buf->getBuffer(), static_cast<size_t>(*outputLen));
         return 0;
 
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
+    }
+}
+
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_replace_font_stream(const uint8_t* input, int64_t inputLen,
+                                                        const char* baseFont,
+                                                        const uint8_t* fontData, int64_t fontLen,
+                                                        uint8_t** output, int64_t* outputLen) {
+    try {
+        if (!input || inputLen <= 0 || !baseFont || !*baseFont || !fontData || fontLen <= 0 ||
+            !output || !outputLen) {
+            return -1;
+        }
+        *output = nullptr;
+        *outputLen = 0;
+        auto result = replaceFontStream({input, static_cast<size_t>(inputLen)}, baseFont,
+                                        {fontData, static_cast<size_t>(fontLen)});
+        if (result.rc != 0) {
+            return result.rc;
+        }
+        auto& buffer = result.buffer;
+        *outputLen = static_cast<int64_t>(buffer->getSize());
+        *output = static_cast<uint8_t*>(malloc(static_cast<size_t>(*outputLen)));
+        if (!*output) {
+            *outputLen = 0;
+            return -1;
+        }
+        std::memcpy(*output, buffer->getBuffer(), static_cast<size_t>(*outputLen));
+        return 0;
     } catch (...) {
         return JPDFIUM_ERR_NATIVE;
     }

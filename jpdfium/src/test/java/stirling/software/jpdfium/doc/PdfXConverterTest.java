@@ -296,6 +296,53 @@ class PdfXConverterTest {
     }
 
     @Test
+    void pdfDateToXmpValidatesCalendarDatesAndTimeZones() throws Exception {
+        assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
+
+        assertXmpModifyDate("D:20240229120000Z", "2024-02-29T12:00:00Z");
+        assertXmpModifyDate("D:20240301000000+05'30'", "2024-03-01T00:00:00+05:30");
+        assertXmpModifyDate("D:20240229120000-08'00'", "2024-02-29T12:00:00-08:00");
+        assertXmpModifyDate("D:20230229120000Z", null);
+        assertXmpModifyDate("D:20260231120000Z", null);
+        assertXmpModifyDate("D:20240229120000+25'00'", null);
+        assertXmpModifyDate("D:20240229120000+05'60'", null);
+    }
+
+    private static void assertXmpModifyDate(String pdfDate, String expectedXmp)
+            throws Exception {
+        byte[] input;
+        try (PDDocument pdfbox = new PDDocument()) {
+            pdfbox.addPage(new PDPage());
+            pdfbox.getDocumentInformation().getCOSObject()
+                    .setString(COSName.getPDFName("ModDate"), pdfDate);
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            pdfbox.save(out);
+            input = out.toByteArray();
+        }
+
+        PdfXOptions options = PdfXOptions.builder()
+                .standard(PdfXStandard.PDF_X_4)
+                .useCompactCmyk()
+                .build();
+        byte[] output = PdfXConverter.applyMetadata(input, options);
+        try (PDDocument pdfbox = Loader.loadPDF(output)) {
+            PDMetadata metadata = pdfbox.getDocumentCatalog().getMetadata();
+            assertNotNull(metadata, "XMP metadata missing for " + pdfDate);
+            String xmp = new String(metadata.toByteArray(), StandardCharsets.UTF_8);
+            if (expectedXmp == null) {
+                String invalidIso = pdfDate.substring(2, 6) + "-" + pdfDate.substring(6, 8)
+                        + "-" + pdfDate.substring(8, 10) + "T" + pdfDate.substring(10, 12)
+                        + ":" + pdfDate.substring(12, 14);
+                assertFalse(xmp.contains(invalidIso),
+                        "invalid date must not be written to XMP: " + pdfDate);
+            } else {
+                assertTrue(xmp.contains(expectedXmp),
+                        "missing XMP ModifyDate " + expectedXmp + " for " + pdfDate);
+            }
+        }
+    }
+
+    @Test
     void versionConverterWritesRequestedVersion() throws Exception {
         byte[] input = Files.readAllBytes(resource("/pdfs/general/minimal.pdf"));
         try (var doc = PdfDocument.open(input)) {
@@ -850,6 +897,11 @@ class PdfXConverterTest {
             assertThrows(stirling.software.jpdfium.exception.RedactIncompleteException.class,
                     doc::saveBytes,
                     "saveBytes() must fail closed with RedactIncompleteException when incomplete state is armed");
+            try (PdfPage page = doc.page(0)) {
+                page.clearRedactionIncomplete();
+            }
+            assertTrue(doc.saveBytes().length > 0,
+                    "a passing strict-crop audit must clear the failure marker");
         }
     }
 
@@ -949,6 +1001,61 @@ class PdfXConverterTest {
                     "Font auditor should detect Helvetica in Form XObject");
             assertTrue(PdfFontAuditor.hasNonEmbeddedFonts(doc),
                     "hasNonEmbeddedFonts should be true for non-embedded font in Form XObject");
+        }
+    }
+
+    @Test
+    void fontAuditorRejectsFormNestingDeeperThan32() throws Exception {
+        assumeTrue(PdfFontAuditor.isSupported(), "font auditor requires full PDFium natives");
+
+        try (PdfDocument doc = PdfDocument.open(nestedForms(32))) {
+            assertFalse(PdfFontAuditor.audit(doc).fonts().isEmpty(),
+                    "32 nested forms must still be auditable");
+        }
+
+        try (PdfDocument doc = PdfDocument.open(nestedForms(33))) {
+            JPDFiumException failure = assertThrows(JPDFiumException.class,
+                    () -> PdfFontAuditor.audit(doc),
+                    "33 nested forms must fail the audit rather than return a partial report");
+            assertTrue(failure.getMessage().contains("exceeds 32"), failure.getMessage());
+        }
+    }
+
+    private static byte[] nestedForms(int depth) throws IOException {
+        try (PDDocument pdfbox = new PDDocument();
+                ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            PDPage page = new PDPage(new org.apache.pdfbox.pdmodel.common.PDRectangle(612, 792));
+            pdfbox.addPage(page);
+
+            PDFormXObject nested = null;
+            for (int level = depth - 1; level >= 0; level--) {
+                PDFormXObject form = new PDFormXObject(pdfbox);
+                form.setBBox(new org.apache.pdfbox.pdmodel.common.PDRectangle(0, 0, 100, 100));
+                PDResources resources = new PDResources();
+                String childName = null;
+                if (nested == null) {
+                    resources.put(COSName.getPDFName("F1"),
+                            new PDType1Font(Standard14Fonts.FontName.HELVETICA));
+                } else {
+                    childName = resources.add(nested).getName();
+                }
+                form.setResources(resources);
+                try (var os = form.getContentStream().createOutputStream()) {
+                    String ops = nested == null
+                            ? "q BT /F1 12 Tf 10 10 Td (DeepText) Tj ET Q"
+                            : "q /" + childName + " Do Q";
+                    os.write(ops.getBytes(StandardCharsets.US_ASCII));
+                }
+                nested = form;
+            }
+
+            if (page.getResources() == null) page.setResources(new PDResources());
+            page.getResources().add(nested, "FmOuter");
+            try (PDPageContentStream contents = new PDPageContentStream(pdfbox, page)) {
+                contents.drawForm(nested);
+            }
+            pdfbox.save(out);
+            return out.toByteArray();
         }
     }
 }

@@ -1412,8 +1412,14 @@ public final class PdfPage implements AutoCloseable {
             return false;
         } catch (Throwable t) {
             NativeRuntime.rethrowFatal(t);
-            markRedacted();
-            throw new JPDFiumException("EPDFText_RedactInRect failed", t);
+            JPDFiumException failure = new JPDFiumException("EPDFText_RedactInRect failed", t);
+            try {
+                markRedacted();
+            } catch (Throwable markFailure) {
+                NativeRuntime.rethrowFatal(markFailure);
+                failure.addSuppressed(markFailure);
+            }
+            throw failure;
         }
     }
 
@@ -1477,6 +1483,15 @@ public final class PdfPage implements AutoCloseable {
         ensureOpen();
         ownerDoc.markContentModified();
         JpdfiumLib.pageMarkRedactionIncomplete(handle);
+    }
+
+    /**
+     * Clear the strict-crop failure marker after a full strict-crop audit passes.
+     * Other unresolved redaction areas on this page stay recorded.
+     */
+    public void clearRedactionIncomplete() {
+        ensureOpen();
+        JpdfiumLib.pageClearRedactionIncomplete(handle);
     }
 
     /**

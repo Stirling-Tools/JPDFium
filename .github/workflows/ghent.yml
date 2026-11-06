@@ -183,6 +183,7 @@ jobs:
             --tests 'stirling.software.jpdfium.doc.PdfXConverterTest' \
             --tests 'stirling.software.jpdfium.doc.QpdfParityTest' \
             --tests 'stirling.software.jpdfium.doc.QpdfApiSurfaceTest' \
+            --tests 'stirling.software.jpdfium.doc.PdfFontEmbedderTest' \
             --rerun-tasks --no-daemon --stacktrace
           rc=$?
           mkdir -p /tmp/jpdfium-reports/download-free
