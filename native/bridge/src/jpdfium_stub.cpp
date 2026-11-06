@@ -295,6 +295,7 @@ struct StubDoc {
     std::string path;
     std::vector<uint8_t> bytes;
     bool hasMutatedRedaction = false;
+    bool hasIncompleteRedaction = false;
     bool sanitizeOnSave = false;
     int32_t unappliedRedactMarksCount = 0;
     std::unordered_map<int32_t, int> pagePendingMarks;
@@ -498,6 +499,7 @@ int32_t jpdfium_doc_save(int64_t handle, const char* output_path) {
     auto it = g_docs.find(handle);
     if (it == g_docs.end()) return JPDFIUM_OK;
     const auto& doc = it->second;
+    if (doc.hasIncompleteRedaction) return JPDFIUM_ERR_REDACT_INCOMPLETE;
     if (doc.unappliedMarks() > 0) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
     // Alias protection, same as the real bridge: writing over the document's
     // own backing file would destroy the input it is still reading from. The
@@ -574,6 +576,7 @@ int32_t jpdfium_doc_save_bytes(int64_t handle, uint8_t** data, int64_t* len) {
     auto it = g_docs.find(handle);
     if (it == g_docs.end()) return return_stub();
     const auto& doc = it->second;
+    if (doc.hasIncompleteRedaction) return JPDFIUM_ERR_REDACT_INCOMPLETE;
     if (doc.unappliedMarks() > 0) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
 
     if (it->second.hasMutatedRedaction && it->second.sanitizeOnSave) {
@@ -864,6 +867,19 @@ int32_t jpdfium_crop_remove_content_ex(int64_t, float x, float y, float w, float
     return (!std::isfinite(margin) || margin < 0.0f || stub_rect_invalid(x, y, w, h))
                ? JPDFIUM_ERR_INVALID
                : JPDFIUM_OK;
+}
+int32_t jpdfium_page_mark_redacted(int64_t page) noexcept {
+    if (auto dit = g_page_doc.find(page); dit != g_page_doc.end()) {
+        g_docs[dit->second].hasMutatedRedaction = true;
+    }
+    return JPDFIUM_OK;
+}
+int32_t jpdfium_page_mark_redaction_incomplete(int64_t page) noexcept {
+    if (auto dit = g_page_doc.find(page); dit != g_page_doc.end()) {
+        g_docs[dit->second].hasMutatedRedaction = true;
+        g_docs[dit->second].hasIncompleteRedaction = true;
+    }
+    return JPDFIUM_OK;
 }
 int32_t jpdfium_redact_pattern(int64_t page, const char*, uint32_t,
                                int32_t remove_content) noexcept {
@@ -1563,6 +1579,21 @@ int32_t jpdfium_qpdf_optimize_file(const char* in_path, const char* out_path, in
                                    int32_t decode_level) {
     return jpdfium_qpdf_optimize_ex_file(in_path, out_path, flags, -1, object_stream_mode,
                                          stream_data_mode, decode_level, -1);
+}
+
+int32_t jpdfium_qpdf_force_version_file(const char* in_path, const char* out_path,
+                                        const char* /*version*/) {
+    return stub_copy_pdf_file(in_path, out_path);
+}
+
+int32_t jpdfium_qpdf_force_version(const uint8_t* in, int64_t in_len, const char* /*version*/,
+                                   uint8_t** out_ptr, int64_t* out_len) {
+    if (!in || in_len <= 0 || !out_ptr || !out_len) return -1;
+    *out_ptr = (uint8_t*)malloc((size_t)in_len);
+    if (!*out_ptr) return -1;
+    memcpy(*out_ptr, in, (size_t)in_len);
+    *out_len = in_len;
+    return 0;
 }
 
 int32_t jpdfium_qpdf_sanitize_file(const char* in_path, const char* out_path, int32_t) {
