@@ -6,7 +6,6 @@ import stirling.software.jpdfium.model.ImageToPdfOptions;
 import stirling.software.jpdfium.model.PageSize;
 import stirling.software.jpdfium.model.PdfToImageOptions;
 import stirling.software.jpdfium.model.Position;
-import stirling.software.jpdfium.model.RenderResult;
 import stirling.software.jpdfium.panama.JpdfiumLib;
 
 import stirling.software.jpdfium.internal.ImageCodecs;
@@ -171,8 +170,10 @@ public final class PdfImageConverter {
      * @return rendered image
      */
     public static BufferedImage pageToImage(PdfPage page, int dpi, boolean transparent) {
-        RenderResult result = page.renderAt(effectiveDpi(page.size(), dpi));
-        return result.toBufferedImage(transparent);
+        // renderImage renders straight into the BufferedImage raster on the full
+        // native build; going through renderAt() here would allocate a full-frame
+        // RGBA byte[] and repack it pixel by pixel for no benefit.
+        return page.renderImage(effectiveDpi(page.size(), dpi), transparent);
     }
 
     /**

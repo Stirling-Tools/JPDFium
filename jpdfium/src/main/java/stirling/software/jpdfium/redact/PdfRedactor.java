@@ -137,6 +137,11 @@ public final class PdfRedactor {
         Map<Integer, Set<String>> pageRedactionWords = new LinkedHashMap<>();
         String[] pageTexts = new String[totalPages];
         boolean needPageTexts = !options.piiPatterns().isEmpty() || !options.entities().isEmpty() || options.semanticRedact();
+        // Only the PII pass and the NER-only pass consume pageTexts; the semantic
+        // pass extracts its own text. Cache strings only for those consumers so a
+        // semantic-only run does not retain every page's text for nothing.
+        boolean cachePageTexts = !options.piiPatterns().isEmpty()
+                || (!options.semanticRedact() && !options.entities().isEmpty());
 
         FastKeywordIndex kwIndex = null;
         if (!options.words().isEmpty() && !options.useRegex()) {
@@ -170,7 +175,12 @@ public final class PdfRedactor {
                             pageRedactionWords.computeIfAbsent(i, k -> new HashSet<>()).addAll(options.words());
                             continue;
                         }
-                        if (charCount == 0) continue;
+                        if (charCount == 0) {
+                            // The later PII/NER pass extracts page text itself; caching the empty
+                            // string here saves it a second FPDFText_LoadPage on a blank page.
+                            if (cachePageTexts) pageTexts[i] = "";
+                            continue;
+                        }
 
                         long tPrefilterStart = System.nanoTime();
                         scratchMatches.clear();
@@ -180,11 +190,15 @@ public final class PdfRedactor {
                         kwIndex.findMatches(scratch.charBuffer(), charCount, false, scratchMatches);
                         pagePrefilterNs[i] = System.nanoTime() - tPrefilterStart;
 
+                        // The PII/NER pass needs every page's text, and it would reload the text
+                        // page for a page with no keyword hit. The char buffer is already here, so
+                        // keep the string for every page when that pass will run: it would allocate
+                        // these strings anyway, and this removes a second native extraction per page.
+                        if (cachePageTexts) {
+                            pageTexts[i] = scratch.createString(charCount);
+                        }
                         if (!scratchMatches.isEmpty()) {
                             pageRedactionWords.put(i, new HashSet<>(scratchMatches));
-                            if (needPageTexts) {
-                                pageTexts[i] = scratch.createString(charCount);
-                            }
                         }
                     }
                 }

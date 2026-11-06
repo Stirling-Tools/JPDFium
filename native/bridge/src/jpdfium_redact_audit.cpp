@@ -566,8 +566,9 @@ int32_t jpdfium_crop_remove_content_ex(int64_t page, float x, float y, float w, 
             }
         }
         if (!anythingToRemove) {
-            const int objCount = FPDFPage_CountObjects(pw->page);
-            for (int i = 0; i < objCount; ++i) {
+            // Nothing has mutated the page since the bounds pass above, so reuse
+            // its object count instead of paying for another FPDFPage_CountObjects.
+            for (int i = 0; i < fastObjCount; ++i) {
                 FPDF_PAGEOBJECT obj = FPDFPage_GetObject(pw->page, i);
                 if (!obj) continue;
                 if (FPDFPageObj_GetType(obj) == FPDF_PAGEOBJ_TEXT) continue;

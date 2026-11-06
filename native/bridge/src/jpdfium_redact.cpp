@@ -609,6 +609,10 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
 int32_t jpdfium_page_flatten(int64_t page) noexcept {
     PageWrapper* pw = decodePage(page);
     if (!pw || !pw->page) return JPDFIUM_ERR_INVALID;
+    // FPDFPage_Flatten only bakes annotation/widget appearances into the content
+    // stream. With no annotations there is nothing eligible, so skip the call
+    // (it would still walk the page and report FLATTEN_NOTHINGTODO).
+    if (FPDFPage_GetAnnotCount(pw->page) == 0) return JPDFIUM_OK;
     int rc = FPDFPage_Flatten(pw->page, FLAT_NORMALDISPLAY);
     return (rc == FLATTEN_SUCCESS || rc == FLATTEN_NOTHINGTODO) ? JPDFIUM_OK : JPDFIUM_ERR_NATIVE;
 }
@@ -622,6 +626,11 @@ int32_t jpdfium_doc_flatten_annotations(int64_t docHandle) noexcept {
         for (int i = 0; i < count; ++i) {
             UniquePage page(FPDF_LoadPage(dw->core->doc, i));
             if (!page) return mutated ? JPDFIUM_ERR_CONTENT_MUTATED : JPDFIUM_ERR_NOT_FOUND;
+            // Only annotation/widget appearances are eligible. Skipping a page
+            // with none avoids a content-generation pass that can only report
+            // FLATTEN_NOTHINGTODO, which matters on an ANNOTATIONS pass over a
+            // document where most pages are plain text.
+            if (FPDFPage_GetAnnotCount(page.get()) == 0) continue;
             const int rc = FPDFPage_Flatten(page.get(), FLAT_NORMALDISPLAY);
             if (rc != FLATTEN_SUCCESS && rc != FLATTEN_NOTHINGTODO) {
                 return mutated ? JPDFIUM_ERR_CONTENT_MUTATED : JPDFIUM_ERR_NATIVE;
