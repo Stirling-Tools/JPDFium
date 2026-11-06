@@ -22,6 +22,10 @@ publishing workflows, not library releases, so they are not listed here.
 - `StorageOptions.Builder.durable(false)` and `PdfSecurity.copyEncryption(..., SaveOptions)`
   skip the fsync for file outputs the caller reads back and deletes, such as
   split parts streamed into a response.
+- `PdfPage.extractTextCharsPacked()` and the native `jpdfium_text_get_chars_packed`
+  return a page's characters in a packed binary layout. `PdfTextExtractor` uses it
+  when the native bundle exports it, instead of formatting and parsing JSON, which
+  was most of the cost of text extraction.
 
 ### Changed
 
@@ -29,6 +33,18 @@ publishing workflows, not library releases, so they are not listed here.
   staging file without fsync and flush once when they publish the output, which
   now gets the destination's permissions as other saves do. They previously
   flushed the staging file and then renamed it without flushing the rename.
+- `PdfMerge.mergeFilesToFile`, `PdfSplit.extractPageRangeToFile`, the qpdf byte-array
+  merge and extract, and `PdfSecurity.copyEncryption` keep every stream's existing
+  encoding instead of deflating streams stored without a filter. Image-heavy inputs
+  with raw image data merge several times faster; such outputs are as large as their
+  inputs rather than compressed. `PdfOptimizer` still compresses on request.
+- `PdfSplit.extractPageRange` and `PdfSplit.extractPages` honour
+  `StorageOptions.reuseSourceFile`: an untouched file-backed document is read
+  from its file instead of being saved through PDFium before every extract.
+  `SplitCounters.extractSerializations` counts the snapshots they still take.
+- `PdfRedactor.redact` with fewer than eight literal words no longer reads every
+  page's text in Java before the native redaction reads it again; the native
+  redaction already skips pages without a match.
 
 ### Fixed
 
