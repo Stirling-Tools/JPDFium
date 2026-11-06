@@ -509,29 +509,46 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
 
         std::vector<FS_RECTF> appliedRects;
         appliedRects.reserve(sortedMatches.size());
+        // Apply marks in bounded batches. One mark per call makes the engine
+        // re-walk all page objects per match; an unbounded batch makes it
+        // intersect every text object with every region. 16 measured as the
+        // balance point on dense pages.
+        constexpr size_t batch = 16;
+        std::vector<FPDF_ANNOTATION> annots;
+        std::vector<FS_RECTF> pendingRects;
+        annots.reserve(std::min(batch, sortedMatches.size()));
+        pendingRects.reserve(std::min(batch, sortedMatches.size()));
         bool epdfOk = true;
-        for (const auto& m : sortedMatches) {
-            FPDF_ANNOTATION annot = FPDFPage_CreateAnnot(pw->page, FPDF_ANNOT_REDACT);
-            if (!annot) {
-                epdfOk = false;
-                break;
+        for (size_t start = 0; start < sortedMatches.size() && epdfOk; start += batch) {
+            const size_t end = std::min(start + batch, sortedMatches.size());
+            annots.clear();
+            pendingRects.clear();
+            for (size_t i = start; i < end; ++i) {
+                const TextMatch& m = sortedMatches[i];
+                FPDF_ANNOTATION annot = FPDFPage_CreateAnnot(pw->page, FPDF_ANNOT_REDACT);
+                if (!annot) {
+                    epdfOk = false;
+                    break;
+                }
+                FS_RECTF rect;
+                rect.left = m.bboxL;
+                rect.bottom = m.bboxB;
+                rect.right = m.bboxR;
+                rect.top = m.bboxT;
+                FPDFAnnot_SetRect(annot, &rect);
+                if (m.hasQuad) FPDFAnnot_AppendAttachmentPoints(annot, &m.quad);
+                annots.push_back(annot);
+                pendingRects.push_back(rect);
             }
-            FS_RECTF rect;
-            rect.left = m.bboxL;
-            rect.bottom = m.bboxB;
-            rect.right = m.bboxR;
-            rect.top = m.bboxT;
-            FPDFAnnot_SetRect(annot, &rect);
-            if (m.hasQuad) FPDFAnnot_AppendAttachmentPoints(annot, &m.quad);
-
-            uint32_t rem = 0;
-            FPDF_BOOL ok = EPDFPage_ApplyRedactions(pw->page, &annot, 1, &rem);
-            FPDFPage_CloseAnnot(annot);
-            if (!ok) {
-                epdfOk = false;
-                break;
+            if (epdfOk && !annots.empty()) {
+                uint32_t rem = 0;
+                epdfOk = EPDFPage_ApplyRedactions(pw->page, annots.data(),
+                                                  static_cast<int>(annots.size()), &rem) != 0;
             }
-            appliedRects.push_back(rect);
+            for (FPDF_ANNOTATION annot : annots) FPDFPage_CloseAnnot(annot);
+            if (epdfOk) {
+                appliedRects.insert(appliedRects.end(), pendingRects.begin(), pendingRects.end());
+            }
         }
         // Once one box is applied, tp indexes objects that redaction freed, so the
         // fission fallback cannot finish the page. The post-redaction check cannot
@@ -759,29 +776,53 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
 
         std::vector<FS_RECTF>& appliedRects = t_redactScratch.appliedRects;
         appliedRects.reserve(sortedMatches.size());
+        // Create every mark first and apply them in ONE EPDFPage_ApplyRedactions
+        // call per batch. The engine's documented contract is that marks passed
+        // together are applied together: it walks the page objects once and
+        // reads/writes each image once. Applying one mark per call instead
+        // re-walks every page object for every match, so a page with many hits
+        // (a common word on a dense page) becomes O(matches x objects).
+        //
+        // The engine also intersects every text object against every passed
+        // region, so an unbounded batch is itself O(objects x matches). 16 marks
+        // per call measured as the balance point on dense text pages; 1 mark per
+        // call (the historical behaviour) is many times slower.
+        constexpr size_t batch = 16;
+        std::vector<FPDF_ANNOTATION> annots;
+        std::vector<FS_RECTF> pendingRects;
+        annots.reserve(std::min(batch, sortedMatches.size()));
+        pendingRects.reserve(std::min(batch, sortedMatches.size()));
         bool epdfOk = true;
-        for (const auto& m : sortedMatches) {
-            FPDF_ANNOTATION annot = FPDFPage_CreateAnnot(pw->page, FPDF_ANNOT_REDACT);
-            if (!annot) {
-                epdfOk = false;
-                break;
+        for (size_t start = 0; start < sortedMatches.size() && epdfOk; start += batch) {
+            const size_t end = std::min(start + batch, sortedMatches.size());
+            annots.clear();
+            pendingRects.clear();
+            for (size_t i = start; i < end; ++i) {
+                const TextMatch& m = sortedMatches[i];
+                FPDF_ANNOTATION annot = FPDFPage_CreateAnnot(pw->page, FPDF_ANNOT_REDACT);
+                if (!annot) {
+                    epdfOk = false;
+                    break;
+                }
+                FS_RECTF rect;
+                rect.left = m.bboxL;
+                rect.bottom = m.bboxB;
+                rect.right = m.bboxR;
+                rect.top = m.bboxT;
+                FPDFAnnot_SetRect(annot, &rect);
+                if (m.hasQuad) FPDFAnnot_AppendAttachmentPoints(annot, &m.quad);
+                annots.push_back(annot);
+                pendingRects.push_back(rect);
             }
-            FS_RECTF rect;
-            rect.left = m.bboxL;
-            rect.bottom = m.bboxB;
-            rect.right = m.bboxR;
-            rect.top = m.bboxT;
-            FPDFAnnot_SetRect(annot, &rect);
-            if (m.hasQuad) FPDFAnnot_AppendAttachmentPoints(annot, &m.quad);
-
-            uint32_t rem = 0;
-            FPDF_BOOL ok = EPDFPage_ApplyRedactions(pw->page, &annot, 1, &rem);
-            FPDFPage_CloseAnnot(annot);
-            if (!ok) {
-                epdfOk = false;
-                break;
+            if (epdfOk && !annots.empty()) {
+                uint32_t rem = 0;
+                epdfOk = EPDFPage_ApplyRedactions(pw->page, annots.data(),
+                                                  static_cast<int>(annots.size()), &rem) != 0;
             }
-            appliedRects.push_back(rect);
+            for (FPDF_ANNOTATION annot : annots) FPDFPage_CloseAnnot(annot);
+            if (epdfOk) {
+                appliedRects.insert(appliedRects.end(), pendingRects.begin(), pendingRects.end());
+            }
         }
         // Once one box is applied, tp indexes objects that redaction freed, so the
         // fission fallback cannot finish the page. The post-redaction check cannot
@@ -1158,28 +1199,42 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
             appendRedactorAreas(item.area, redactAreas);
         }
 
+        // Apply marks in bounded batches. One mark per call makes the engine
+        // re-walk all page objects per match; an unbounded batch makes it
+        // intersect every text object with every region. 16 measured as the
+        // balance point on dense pages.
+        constexpr size_t batch = 16;
+        std::vector<FPDF_ANNOTATION> annotHandles;
+        annotHandles.reserve(std::min(batch, redactAnnots.size()));
+
         // appliedRects tracks exactly which boxes EPDF removed content for.
-        // After the first applied box, the page content streams are mutated and
+        // After a batch applies, the page content streams are mutated and
         // the pre-EPDF annotation indices (redactIndices) and rect list no
         // longer describe the page, so the fission fallback is banned - same
         // fail-closed contract as jpdfium_redact_pattern / _words_ex.
         std::vector<FS_RECTF> appliedRects;
         appliedRects.reserve(redactAnnots.size());
         bool epdfOk = true;
-        for (auto& item : redactAnnots) {
-            // Drop Acrobat's pre-baked /RO overlay: EmbedPDF ignores its /Matrix and
-            // repaints it near the origin, while we draw our own cover below.
-            EPDFAnnot_RemoveKey(item.annot.get(), "RO");
-
-            uint32_t rem = 0;
-            FPDF_ANNOTATION annot = item.annot.get();
-            FPDF_BOOL ok = EPDFPage_ApplyRedactions(pw->page, &annot, 1, &rem);
-            item.annot.reset();
-            if (!ok) {
-                epdfOk = false;
-                break;
+        for (size_t start = 0; start < redactAnnots.size() && epdfOk; start += batch) {
+            const size_t end = std::min(start + batch, redactAnnots.size());
+            annotHandles.clear();
+            for (size_t i = start; i < end; ++i) {
+                auto& item = redactAnnots[i];
+                // Drop Acrobat's pre-baked /RO overlay: EmbedPDF ignores its /Matrix and
+                // repaints it near the origin, while we draw our own cover below.
+                EPDFAnnot_RemoveKey(item.annot.get(), "RO");
+                annotHandles.push_back(item.annot.get());
             }
-            appliedRects.push_back(item.area.rect);
+            if (!annotHandles.empty()) {
+                uint32_t rem = 0;
+                epdfOk = EPDFPage_ApplyRedactions(pw->page, annotHandles.data(),
+                                                  static_cast<int>(annotHandles.size()), &rem) != 0;
+            }
+            for (size_t i = start; i < end; ++i) redactAnnots[i].annot.reset();
+            if (epdfOk) {
+                appliedRects.insert(appliedRects.end(), redactRects.begin() + start,
+                                    redactRects.begin() + end);
+            }
         }
         if (!epdfOk && !appliedRects.empty()) {
             // The page is half-redacted: a later commit can resolve it, but no
