@@ -45,8 +45,11 @@ class PdfTextExtractorPackedTest {
         badFontId.putInt(font.length).put(font);
         ByteBuffer overCount = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putInt(Integer.MAX_VALUE).putInt(0);
         ByteBuffer longFontName = ByteBuffer.allocate(8 + 4).order(ByteOrder.LITTLE_ENDIAN).putInt(0).putInt(1).putInt(64);
+        ByteBuffer negativeCharCount = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putInt(-1).putInt(0);
+        ByteBuffer negativeFontCount = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putInt(0).putInt(-1);
 
-        for (byte[] malformed : List.of(badFontId.array(), overCount.array(), longFontName.array(), new byte[3])) {
+        for (byte[] malformed : List.of(badFontId.array(), overCount.array(), longFontName.array(),
+                negativeCharCount.array(), negativeFontCount.array(), new byte[3])) {
             assertThrows(JPDFiumException.class, () -> PdfTextExtractor.parseCharsPacked(malformed));
         }
     }

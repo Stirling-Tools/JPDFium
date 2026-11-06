@@ -6,6 +6,7 @@
 #include <bit>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -202,6 +203,9 @@ namespace {
 static_assert(std::endian::native == std::endian::little,
               "jpdfium_text_get_chars_packed writes host byte order and documents little-endian");
 
+constexpr int64_t kPackedRecordBytes = 32;
+constexpr int64_t kPackedMaxBytes = std::numeric_limits<int32_t>::max();
+
 void appendI32(std::vector<uint8_t>& out, int32_t v) {
     uint8_t b[4];
     std::memcpy(b, &v, 4);
@@ -226,8 +230,11 @@ int32_t jpdfium_text_get_chars_packed(int64_t page, uint8_t** data, int64_t* len
         if (!tp) return JPDFIUM_ERR_NATIVE;
 
         int count = FPDFText_CountChars(tp.get());
+        if (8 + static_cast<int64_t>(count > 0 ? count : 0) * kPackedRecordBytes > kPackedMaxBytes) {
+            return JPDFIUM_ERR_TOO_LARGE;
+        }
         std::vector<uint8_t> records;
-        records.reserve(static_cast<size_t>(count > 0 ? count : 0) * 32);
+        records.reserve(static_cast<size_t>(count > 0 ? count : 0) * kPackedRecordBytes);
         std::unordered_map<std::string, int32_t> fontIds;
         std::vector<std::string> fonts;
         int32_t emitted = 0;
@@ -260,21 +267,29 @@ int32_t jpdfium_text_get_chars_packed(int64_t page, uint8_t** data, int64_t* len
             ++emitted;
         }
 
-        std::vector<uint8_t> out;
-        out.reserve(8 + records.size());
-        appendI32(out, emitted);
-        appendI32(out, static_cast<int32_t>(fonts.size()));
-        out.insert(out.end(), records.begin(), records.end());
-        for (const std::string& f : fonts) {
-            appendI32(out, static_cast<int32_t>(f.size()));
-            out.insert(out.end(), f.begin(), f.end());
-        }
+        int64_t total = 8 + static_cast<int64_t>(records.size());
+        for (const std::string& f : fonts) total += 4 + static_cast<int64_t>(f.size());
+        if (total > kPackedMaxBytes) return JPDFIUM_ERR_TOO_LARGE;
 
-        auto* buf = static_cast<uint8_t*>(malloc(out.empty() ? 1 : out.size()));
+        std::vector<uint8_t> header;
+        appendI32(header, emitted);
+        appendI32(header, static_cast<int32_t>(fonts.size()));
+        auto* buf = static_cast<uint8_t*>(malloc(static_cast<size_t>(total)));
         if (!buf) return JPDFIUM_ERR_NATIVE;
-        std::memcpy(buf, out.data(), out.size());
+        uint8_t* cursor = buf;
+        std::memcpy(cursor, header.data(), header.size());
+        cursor += header.size();
+        if (!records.empty()) std::memcpy(cursor, records.data(), records.size());
+        cursor += records.size();
+        for (const std::string& f : fonts) {
+            int32_t length = static_cast<int32_t>(f.size());
+            std::memcpy(cursor, &length, 4);
+            cursor += 4;
+            std::memcpy(cursor, f.data(), f.size());
+            cursor += f.size();
+        }
         *data = buf;
-        *len = static_cast<int64_t>(out.size());
+        *len = total;
         return JPDFIUM_OK;
     } catch (...) {
         return JPDFIUM_ERR_NATIVE;
