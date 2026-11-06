@@ -61,7 +61,8 @@ namespace {
 // after Java created it.
 static FILE* createOutputFile(const char* path) {
 #ifdef _WIN32
-    std::filesystem::path p = std::filesystem::u8path(path);
+    const auto* utf8 = reinterpret_cast<const char8_t*>(path);
+    std::filesystem::path p{std::u8string(utf8)};
     return ::_wfopen(p.c_str(), L"wb");
 #else
     int fd = ::open(path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);

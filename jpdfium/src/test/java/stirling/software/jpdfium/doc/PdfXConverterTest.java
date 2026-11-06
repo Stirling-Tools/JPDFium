@@ -336,9 +336,15 @@ class PdfXConverterTest {
                     standard + " base version missing: " + text.substring(0, 16));
             assertTrue(text.contains("GTS_PDFXVersion"), standard + " GTS_PDFXVersion attribute missing");
             assertTrue(text.contains(standard.gtsVersion()), standard + " GTS version missing");
-            assertTrue(text.contains("GTS_PDFXConformance"), standard + " GTS_PDFXConformance attribute missing");
-            assertTrue(text.contains(standard.gtsConformance()),
-                    standard + " GTS conformance missing");
+            if (standard.gtsConformance() != null) {
+                assertTrue(text.contains("GTS_PDFXConformance"),
+                        standard + " GTS_PDFXConformance attribute missing");
+                assertTrue(text.contains(standard.gtsConformance()),
+                        standard + " GTS conformance missing");
+            } else {
+                assertFalse(text.contains("GTS_PDFXConformance"),
+                        standard + " must not write GTS_PDFXConformance");
+            }
             PdfXConverter.checkMetadata(out, options);
         }
     }

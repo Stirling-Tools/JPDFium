@@ -860,6 +860,36 @@ bool XmlUpdateProperty(const pugi::xml_node& description, const std::string& loc
     return attr || element;
 }
 
+void XmlCollectMatchingElements(const pugi::xml_node& node, const std::string& local,
+                                const std::string& uri1, const std::string& uri2, int depth,
+                                std::vector<pugi::xml_node>* out) {
+    if (depth > kMaxXmpDepth) return;
+    for (pugi::xml_node child : node.children()) {
+        if (child.type() != pugi::node_element) continue;
+        if (XmlLocalName(child.name()) == local) {
+            const std::string ns = XmlNamespaceUri(child, XmlPrefix(child.name()));
+            if (ns == uri1 || (!uri2.empty() && ns == uri2)) out->push_back(child);
+        }
+        XmlCollectMatchingElements(child, local, uri1, uri2, depth + 1, out);
+    }
+}
+
+bool XmlRemoveProperty(pugi::xml_node description, const std::string& local,
+                       const std::string& uri1, const std::string& uri2) {
+    std::vector<pugi::xml_attribute> attributes;
+    for (pugi::xml_attribute attr : description.attributes()) {
+        if (XmlLocalName(attr.name()) != local) continue;
+        const std::string ns = XmlNamespaceUri(description, XmlPrefix(attr.name()));
+        if (ns == uri1 || (!uri2.empty() && ns == uri2)) attributes.push_back(attr);
+    }
+    for (pugi::xml_attribute attr : attributes) description.remove_attribute(attr);
+
+    std::vector<pugi::xml_node> elements;
+    XmlCollectMatchingElements(description, local, uri1, uri2, 0, &elements);
+    for (pugi::xml_node element : elements) element.parent().remove_child(element);
+    return !attributes.empty() || !elements.empty();
+}
+
 bool EditPdfxXml(pugi::xml_document* document, const std::string& version,
                  const std::string& conformance, const std::string& title = "",
                  const std::string& trapped = "", const std::string& mod_date = "") {
@@ -881,6 +911,8 @@ bool EditPdfxXml(pugi::xml_document* document, const std::string& version,
         if (!conformance.empty()) {
             has_conformance |= XmlUpdateProperty(description, "GTS_PDFXConformance", kPdfxNs,
                                                  kPdfxIdNs, conformance);
+        } else {
+            XmlRemoveProperty(description, "GTS_PDFXConformance", kPdfxNs, kPdfxIdNs);
         }
         if (!trapped.empty()) {
             has_trapped |= XmlUpdateProperty(description, "Trapped", kPdfNs, {}, trapped);
@@ -1009,6 +1041,8 @@ void UpdateOrCreatePdfxMetadata(QPDF* qpdf, const char* version, const char* con
         info.replaceKey("/GTS_PDFXVersion", QPDFObjectHandle::newUnicodeString(ver));
         if (!conf.empty()) {
             info.replaceKey("/GTS_PDFXConformance", QPDFObjectHandle::newUnicodeString(conf));
+        } else if (info.hasKey("/GTS_PDFXConformance")) {
+            info.removeKey("/GTS_PDFXConformance");
         }
         qpdf->getTrailer().replaceKey("/Info", info);
     }

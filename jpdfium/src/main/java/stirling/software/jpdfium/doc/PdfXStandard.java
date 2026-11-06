@@ -34,7 +34,10 @@ public enum PdfXStandard {
         return gtsVersion;
     }
 
-    /** Value of the XMP {@code GTS_PDFXConformance} property. */
+    /**
+     * Value of the XMP {@code GTS_PDFXConformance} property, or {@code null}
+     * when the standard does not define one (PDF/X-3).
+     */
     public String gtsConformance() {
         return gtsConformance;
     }
