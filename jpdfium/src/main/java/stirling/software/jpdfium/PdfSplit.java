@@ -4,7 +4,6 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -19,6 +18,7 @@ import stirling.software.jpdfium.doc.PdfPageImporter;
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.model.SaveOptions;
 import stirling.software.jpdfium.model.StorageOptions;
+import stirling.software.jpdfium.panama.OutputTransaction;
 import stirling.software.jpdfium.panama.QpdfLib;
 
 /**
@@ -444,24 +444,9 @@ public final class PdfSplit {
             // Save to a staging file first, then atomically replace the output.
             // A direct save to output would corrupt the file when output aliases input
             // (the document is still open), and a failed save would leave a partial file.
-            Path staged;
-            try {
-                staged = options.createStagingFile(output);
-            } catch (IOException _) {
-                staged = null;
-            }
-            if (staged != null) {
-                try {
-                    part.save(staged);
-                    Files.move(staged, output, StandardCopyOption.REPLACE_EXISTING);
-                    staged = null;
-                } finally {
-                    if (staged != null) {
-                        try { Files.deleteIfExists(staged); } catch (IOException _) {}
-                    }
-                }
-            } else {
-                part.save(output);
+            try (OutputTransaction tx = OutputTransaction.begin(output, options.durable())) {
+                part.saveTo(tx.staging(), SaveOptions.ephemeral());
+                tx.publish(SaveOptions.ephemeral());
             }
         }
     }
@@ -474,14 +459,15 @@ public final class PdfSplit {
      */
     private static boolean stageNativeExtract(Path input, int[] pageIndices, int expectedPages,
                                               Path output, StorageOptions options) throws IOException {
-        Path staged;
+        OutputTransaction tx;
         try {
-            staged = options.createStagingFile(output);
+            tx = OutputTransaction.begin(output, options.durable());
         } catch (IOException _) {
             return false;
         }
-        try {
-            if (!QpdfLib.extractPagesToFile(input, pageIndices, staged) || Files.size(staged) == 0) {
+        try (tx) {
+            Path staged = tx.staging();
+            if (!QpdfLib.extractPagesToFile(input, pageIndices, staged, false) || Files.size(staged) == 0) {
                 return false;
             }
             // The native extractor skips out-of-range indices; verify the
@@ -492,11 +478,8 @@ public final class PdfSplit {
                             + expectedPages + " requested pages");
                 }
             }
-            Files.move(staged, output, StandardCopyOption.REPLACE_EXISTING);
-            staged = null;
+            tx.publish(SaveOptions.ephemeral());
             return true;
-        } finally {
-            deleteQuietly(staged);
         }
     }
 
