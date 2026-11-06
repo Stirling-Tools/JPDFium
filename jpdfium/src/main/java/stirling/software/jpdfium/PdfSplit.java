@@ -444,24 +444,9 @@ public final class PdfSplit {
             // Save to a staging file first, then atomically replace the output.
             // A direct save to output would corrupt the file when output aliases input
             // (the document is still open), and a failed save would leave a partial file.
-            Path staged;
-            try {
-                staged = options.createStagingFile(output);
-            } catch (IOException _) {
-                staged = null;
-            }
-            if (staged != null) {
-                try {
-                    part.saveTo(staged, SaveOptions.ephemeral());
-                    OutputTransaction.publishStaged(staged, output, options.durable());
-                    staged = null;
-                } finally {
-                    if (staged != null) {
-                        try { Files.deleteIfExists(staged); } catch (IOException _) {}
-                    }
-                }
-            } else {
-                part.save(output);
+            try (OutputTransaction tx = OutputTransaction.begin(output, options.durable())) {
+                part.saveTo(tx.staging(), SaveOptions.ephemeral());
+                tx.publish(SaveOptions.ephemeral());
             }
         }
     }
@@ -474,13 +459,14 @@ public final class PdfSplit {
      */
     private static boolean stageNativeExtract(Path input, int[] pageIndices, int expectedPages,
                                               Path output, StorageOptions options) throws IOException {
-        Path staged;
+        OutputTransaction tx;
         try {
-            staged = options.createStagingFile(output);
+            tx = OutputTransaction.begin(output, options.durable());
         } catch (IOException _) {
             return false;
         }
-        try {
+        try (tx) {
+            Path staged = tx.staging();
             if (!QpdfLib.extractPagesToFile(input, pageIndices, staged, false) || Files.size(staged) == 0) {
                 return false;
             }
@@ -492,11 +478,8 @@ public final class PdfSplit {
                             + expectedPages + " requested pages");
                 }
             }
-            OutputTransaction.publishStaged(staged, output, options.durable());
-            staged = null;
+            tx.publish(SaveOptions.ephemeral());
             return true;
-        } finally {
-            deleteQuietly(staged);
         }
     }
 

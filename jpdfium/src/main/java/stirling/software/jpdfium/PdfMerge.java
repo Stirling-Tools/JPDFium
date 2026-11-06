@@ -328,24 +328,10 @@ public final class PdfMerge {
         if (paths.size() == 1) {
             // Use staging so the destination is replaced only on success and aliased
             // inputs (src == output) are handled safely, matching the multi-input path.
-            Path staged;
-            try {
-                staged = options.createStagingFile(output);
-            } catch (IOException _) {
-                staged = null;
+            try (OutputTransaction tx = OutputTransaction.begin(output, options.durable())) {
+                Files.copy(paths.getFirst(), tx.staging(), StandardCopyOption.REPLACE_EXISTING);
+                tx.publish(SaveOptions.ephemeral());
             }
-            if (staged != null) {
-                try {
-                    Files.copy(paths.getFirst(), staged, StandardCopyOption.REPLACE_EXISTING);
-                    OutputTransaction.publishStaged(staged, output, options.durable());
-                    staged = null;
-                    return;
-                } finally {
-                    deleteQuietly(staged);
-                }
-            }
-            // Staging unavailable, fall back to direct copy (best-effort).
-            Files.copy(paths.getFirst(), output, StandardCopyOption.REPLACE_EXISTING);
             return;
         }
 
@@ -359,15 +345,11 @@ public final class PdfMerge {
 
         // Save through a staging file so the destination is replaced only after the
         // merge and the save both succeed; a failed save must not truncate it.
-        Path staged = options.createStagingFile(output);
-        try {
+        try (OutputTransaction tx = OutputTransaction.begin(output, options.durable())) {
             try (PdfDocument merged = mergeFiles(paths, options)) {
-                merged.saveTo(staged, SaveOptions.ephemeral());
+                merged.saveTo(tx.staging(), SaveOptions.ephemeral());
             }
-            OutputTransaction.publishStaged(staged, output, options.durable());
-            staged = null;
-        } finally {
-            deleteQuietly(staged);
+            tx.publish(SaveOptions.ephemeral());
         }
     }
 
@@ -379,19 +361,18 @@ public final class PdfMerge {
      */
     private static boolean stageNativeMerge(List<Path> paths, Path output, StorageOptions options)
             throws IOException {
-        Path staged;
+        OutputTransaction tx;
         try {
-            staged = options.createStagingFile(output);
+            tx = OutputTransaction.begin(output, options.durable());
         } catch (IOException _) {
             return false;
         }
-        try {
-            if (!QpdfLib.mergeFiles(paths, staged, false) || Files.size(staged) == 0) return false;
-            OutputTransaction.publishStaged(staged, output, options.durable());
-            staged = null;
+        try (tx) {
+            if (!QpdfLib.mergeFiles(paths, tx.staging(), false) || Files.size(tx.staging()) == 0) {
+                return false;
+            }
+            tx.publish(SaveOptions.ephemeral());
             return true;
-        } finally {
-            deleteQuietly(staged);
         }
     }
 
