@@ -199,6 +199,13 @@ JPDFIUM_EXPORT void jpdfium_free_buffer(uint8_t* buffer) JPDFIUM_NOEXCEPT;
 // Returns per-character data as a compact JSON array: [{i,u,x,y,w,h,font,size}, ...]
 // The caller owns the returned string and must free it with jpdfium_free_string.
 JPDFIUM_EXPORT int32_t jpdfium_text_get_chars(int64_t page, char** json);
+// Same characters as jpdfium_text_get_chars, packed little-endian instead of JSON:
+// int32 char_count, int32 font_count; char_count records of
+// {int32 index, int32 unicode, float x, float y, float w, float h, float font_size, int32 font_id};
+// then font_count entries of {int32 byte_length, UTF-8 bytes}. font_id indexes that table.
+// The caller owns *data and must free it with jpdfium_free_buffer. Returns JPDFIUM_ERR_TOO_LARGE
+// when the result would exceed INT32_MAX bytes, the largest a Java byte[] can hold.
+JPDFIUM_EXPORT int32_t jpdfium_text_get_chars_packed(int64_t page, uint8_t** data, int64_t* len);
 JPDFIUM_EXPORT int32_t jpdfium_text_find(int64_t page, const char* query, char** json);
 JPDFIUM_EXPORT void jpdfium_free_string(char* str) JPDFIUM_NOEXCEPT;
 

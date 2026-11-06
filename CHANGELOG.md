@@ -34,6 +34,10 @@ publishing workflows, not library releases, so they are not listed here.
 - `StorageOptions.Builder.durable(false)` and `PdfSecurity.copyEncryption(..., SaveOptions)`
   skip the fsync for file outputs the caller reads back and deletes, such as
   split parts streamed into a response.
+- `PdfPage.extractTextCharsPacked()` and the native `jpdfium_text_get_chars_packed`
+  return a page's characters in a packed binary layout. `PdfTextExtractor` uses it
+  when the native bundle exports it, instead of formatting and parsing JSON, which
+  was most of the cost of text extraction.
 
 ### Changed
 

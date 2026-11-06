@@ -2,7 +2,12 @@ package stirling.software.jpdfium.text;
 
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
+import java.nio.BufferUnderflowException;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -31,6 +36,8 @@ import java.util.List;
  */
 public final class PdfTextExtractor {
 
+    private static final int PACKED_RECORD_BYTES = 32;
+
     private PdfTextExtractor() {}
 
     /**
@@ -42,8 +49,10 @@ public final class PdfTextExtractor {
      */
     public static PageText extractPage(PdfDocument doc, int pageIndex) {
         try (PdfPage page = doc.page(pageIndex)) {
-            String json = page.extractTextJson();
-            List<TextChar> chars = parseCharsJson(json);
+            byte[] packed = page.extractTextCharsPacked();
+            List<TextChar> chars = packed != null
+                    ? parseCharsPacked(packed)
+                    : parseCharsJson(page.extractTextJson());
             List<TextLine> lines = buildLines(chars);
             return new PageText(pageIndex, lines, chars);
         }
@@ -85,6 +94,52 @@ public final class PdfTextExtractor {
      * handed to {@code Integer.parseInt}/{@code Float.parseFloat} as substrings.
      * Malformed objects are skipped wholesale.
      */
+    static List<TextChar> parseCharsPacked(byte[] packed) {
+        try {
+            return decodeCharsPacked(packed);
+        } catch (BufferUnderflowException | IllegalArgumentException | IndexOutOfBoundsException e) {
+            throw new JPDFiumException("malformed packed text characters", e);
+        }
+    }
+
+    private static List<TextChar> decodeCharsPacked(byte[] packed) {
+        ByteBuffer buf = ByteBuffer.wrap(packed).order(ByteOrder.LITTLE_ENDIAN);
+        int count = buf.getInt();
+        int fontCount = buf.getInt();
+        int recordsStart = buf.position();
+        long recordsEnd = recordsStart + (long) count * PACKED_RECORD_BYTES;
+        if (count < 0 || fontCount < 0 || recordsEnd > packed.length) {
+            throw new IllegalArgumentException("counts exceed the buffer");
+        }
+        buf.position((int) recordsEnd);
+        String[] fonts = new String[fontCount];
+        for (int f = 0; f < fontCount; f++) {
+            int len = buf.getInt();
+            if (len < 0 || len > buf.remaining()) {
+                throw new IllegalArgumentException("font name exceeds the buffer");
+            }
+            fonts[f] = new String(packed, buf.position(), len, StandardCharsets.UTF_8);
+            buf.position(buf.position() + len);
+        }
+        buf.position(recordsStart);
+        List<TextChar> chars = new ArrayList<>(count);
+        for (int c = 0; c < count; c++) {
+            int index = buf.getInt();
+            int unicode = buf.getInt();
+            float x = buf.getFloat();
+            float y = buf.getFloat();
+            float w = buf.getFloat();
+            float h = buf.getFloat();
+            float size = buf.getFloat();
+            int fontId = buf.getInt();
+            if (fontId < 0 || fontId >= fontCount) {
+                throw new IllegalArgumentException("font id " + fontId + " out of range");
+            }
+            chars.add(new TextChar(index, unicode, x, y, w, h, fonts[fontId], size));
+        }
+        return chars;
+    }
+
     static List<TextChar> parseCharsJson(String json) {
         if (json == null || json.isEmpty() || "[]".equals(json)) return new ArrayList<>();
         final int jsonLength = json.length();
