@@ -22,6 +22,8 @@ public final class PdfXOptions {
     private final int jpegQuality;
     private final boolean strictImages;
     private final boolean convertLosslessImages;
+    private final boolean requireEmbeddedFonts;
+    private final String title;
 
     private PdfXOptions(Builder b) {
         this.standard = b.standard;
@@ -38,6 +40,8 @@ public final class PdfXOptions {
         this.jpegQuality = b.jpegQuality;
         this.strictImages = b.strictImages;
         this.convertLosslessImages = b.convertLosslessImages;
+        this.requireEmbeddedFonts = b.requireEmbeddedFonts;
+        this.title = b.title;
     }
 
     public PdfXStandard standard() {
@@ -94,6 +98,19 @@ public final class PdfXOptions {
         return convertLosslessImages;
     }
 
+    /**
+     * Whether conversion fails when {@link PdfFontAuditor} finds a non-embedded font in page
+     * text or nested form XObjects.
+     */
+    public boolean requireEmbeddedFonts() {
+        return requireEmbeddedFonts;
+    }
+
+    /** Optional document title written to the information dictionary. */
+    public String title() {
+        return title;
+    }
+
     /** Build the vector/image conversion options represented by these PDF/X options. */
     public PdfColorConverter.ColorConvertOptions colorOptions() {
         byte[] profile = outputIntentProfile();
@@ -130,6 +147,8 @@ public final class PdfXOptions {
         private int jpegQuality = 90;
         private boolean strictImages;
         private boolean convertLosslessImages;
+        private boolean requireEmbeddedFonts;
+        private String title;
 
         private Builder() {}
 
@@ -208,6 +227,18 @@ public final class PdfXOptions {
          */
         public Builder convertLosslessImages(boolean value) {
             this.convertLosslessImages = value;
+            return this;
+        }
+
+        /** Fail when the audit finds a non-embedded font in page text or form XObjects. */
+        public Builder requireEmbeddedFonts(boolean value) {
+            this.requireEmbeddedFonts = value;
+            return this;
+        }
+
+        /** Optional title for the output document information dictionary. */
+        public Builder title(String value) {
+            this.title = value;
             return this;
         }
 
