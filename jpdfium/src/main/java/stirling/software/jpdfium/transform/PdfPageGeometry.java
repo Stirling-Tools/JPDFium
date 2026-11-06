@@ -5,9 +5,15 @@ import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.doc.PdfAnnotations;
 import stirling.software.jpdfium.doc.PdfPageEditor;
 import stirling.software.jpdfium.exception.JPDFiumException;
+import stirling.software.jpdfium.exception.RedactIncompleteException;
+import stirling.software.jpdfium.exception.RedactUnverifiableException;
 import stirling.software.jpdfium.model.PageSize;
 import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.panama.FormFillBindings;
+import stirling.software.jpdfium.text.PageText;
+import stirling.software.jpdfium.text.PdfTextExtractor;
+import stirling.software.jpdfium.text.TextChar;
+import stirling.software.jpdfium.text.TextWord;
 import stirling.software.jpdfium.panama.JpdfiumLib;
 
 import java.lang.foreign.Arena;
@@ -115,8 +121,8 @@ public final class PdfPageGeometry {
      * is clipped from view.
      *
      * <p>A post-pass audit fails loudly with
-     * {@link stirling.software.jpdfium.exception.RedactIncompleteException} or
-     * {@link stirling.software.jpdfium.exception.RedactUnverifiableException}
+     * {@link RedactIncompleteException} or
+     * {@link RedactUnverifiableException}
      * when content survives or the audit cannot run. Incremental save is
      * refused afterwards; a full save is required.
      *
@@ -128,6 +134,82 @@ public final class PdfPageGeometry {
      */
     public static void cropAndRemoveContent(PdfDocument doc, int pageIndex, Rect rect) {
         cropAndRemoveContent(doc, pageIndex, rect, AUTO_CONTENT_MARGIN);
+    }
+
+    /**
+     * Hard crop that also removes a word crossing the crop edge. The normal
+     * crop keeps straddling words whole and clips their outside glyphs with the
+     * page box, which leaves that text extractable. This variant redacts each
+     * glyph of a word that crosses the crop edge before applying the crop, so
+     * the outside part is gone while neighbouring words are not redacted as a
+     * side effect.
+     *
+     * @param doc       open PDF document
+     * @param pageIndex zero-based page index
+     * @param rect      crop rectangle in PDF points (x, y, width, height)
+     * @throws IllegalArgumentException if {@code rect} is invalid
+     */
+    public static void cropAndRemoveContentStrict(PdfDocument doc, int pageIndex, Rect rect) {
+        requireValidCrop(rect);
+        removeBoundaryCrossingText(doc, pageIndex, rect);
+        cropAndRemoveContent(doc, pageIndex, rect);
+
+        // Strict audit: verify no non-whitespace text survived outside or across the crop edge
+        PageText remaining = PdfTextExtractor.extractPage(doc, pageIndex);
+        float eps = 0.5f;
+        for (TextChar ch : remaining.chars()) {
+            if (Character.isWhitespace(ch.unicode()) || ch.width() <= 0 || ch.height() <= 0) {
+                continue;
+            }
+            boolean fullyInside = ch.x() >= rect.x() - eps
+                    && ch.y() >= rect.y() - eps
+                    && ch.x() + ch.width() <= rect.x() + rect.width() + eps
+                    && ch.y() + ch.height() <= rect.y() + rect.height() + eps;
+            if (!fullyInside) {
+                try (PdfPage page = doc.page(pageIndex)) {
+                    page.markRedactionIncomplete();
+                }
+                throw new RedactIncompleteException(
+                        "strict crop could not remove a boundary-crossing glyph");
+            }
+        }
+    }
+
+    private static void removeBoundaryCrossingText(PdfDocument doc, int pageIndex, Rect crop) {
+        PageText text = PdfTextExtractor.extractPage(doc, pageIndex);
+        try (PdfPage page = doc.page(pageIndex)) {
+            for (TextWord word : text.allWords()) {
+                if (word.chars().isEmpty() || word.text().trim().isEmpty()
+                        || word.width() <= 0 || word.height() <= 0) {
+                    continue;
+                }
+                if (intersects(word, crop) && !isFullyInside(word, crop)) {
+                    for (TextChar ch : word.chars()) {
+                        if (ch.isWhitespace() || ch.width() <= 0 || ch.height() <= 0) {
+                            continue;
+                        }
+                        page.redactInRect(
+                                new Rect(ch.x(), ch.y(), ch.width(), ch.height()),
+                                true,
+                                false);
+                    }
+                }
+            }
+        }
+    }
+
+    private static boolean intersects(TextWord w, Rect crop) {
+        return w.x() <= crop.x() + crop.width()
+                && w.x() + w.width() >= crop.x()
+                && w.y() <= crop.y() + crop.height()
+                && w.y() + w.height() >= crop.y();
+    }
+
+    private static boolean isFullyInside(TextWord w, Rect crop) {
+        return w.x() >= crop.x()
+                && w.y() >= crop.y()
+                && w.x() + w.width() <= crop.x() + crop.width()
+                && w.y() + w.height() <= crop.y() + crop.height();
     }
 
     /**

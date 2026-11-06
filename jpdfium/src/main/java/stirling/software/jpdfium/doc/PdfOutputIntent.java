@@ -112,8 +112,7 @@ public final class PdfOutputIntent {
                     + " (jpdfium_color_pdfx_* unavailable; requires QPDF)");
         }
         Spec effective = spec == null ? new Spec(SUBTYPE_PDFX, "", "") : spec;
-        String conformance = gtsConformance == null || gtsConformance.isBlank()
-                ? gtsVersion : gtsConformance;
+        String conformance = gtsConformance == null ? "" : gtsConformance;
         byte[] result = ColorBindings.pdfxBytes(pdf, iccProfile, gtsVersion, conformance,
                 effective.conditionIdentifier(), effective.info());
         if (result == null) {
@@ -132,8 +131,7 @@ public final class PdfOutputIntent {
         }
         if (!pdfxSupported()) return false;
         Spec effective = spec == null ? new Spec(SUBTYPE_PDFX, "", "") : spec;
-        String conformance = gtsConformance == null || gtsConformance.isBlank()
-                ? gtsVersion : gtsConformance;
+        String conformance = gtsConformance == null ? "" : gtsConformance;
         return ColorBindings.pdfxFile(in.toString(), out.toString(), iccProfile, gtsVersion,
                 conformance, effective.conditionIdentifier(), effective.info());
     }
