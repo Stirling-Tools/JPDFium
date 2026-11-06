@@ -819,11 +819,11 @@ JPDF_API FPDF_BOOL jpdf_guard_EPDFDoc_SetPageRotationByObjectNumber(FPDF_DOCUMEN
     }
 }
 
-JPDF_API FPDF_BOOL jpdf_guard_EPDFFont_AddFallbackFont(EPDF_FONT_ID font_id) noexcept {
+JPDF_API FPDF_BOOL jpdf_guard_EPDFFont_AddFallbackFont(EPDF_FONT_ID font_id, int tier) noexcept {
     jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
     if (!guard.admitted()) return {};
     try {
-        return EPDFFont_AddFallbackFont(font_id);
+        return EPDFFont_AddFallbackFont(font_id, tier);
     } catch (...) {
         jpdf::set_guard_refusal(JPDF_E_INTERNAL);
         return {};
@@ -977,6 +977,32 @@ JPDF_API int jpdf_guard_EPDFForm_CountFields(EPDF_FORM_MODEL model) noexcept {
     }
 }
 
+JPDF_API FPDF_BOOL jpdf_guard_EPDFForm_DeleteField(FPDF_DOCUMENT document, uint32_t field_objnum,
+                                                   uint32_t* out_detached_widgets,
+                                                   unsigned long buffer_size,
+                                                   unsigned long* out_detached_count) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return EPDFForm_DeleteField(document, field_objnum, out_detached_widgets, buffer_size,
+                                    out_detached_count);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
+JPDF_API int jpdf_guard_EPDFForm_GetFieldFamily(EPDF_FORM_MODEL model, int field_index) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return EPDFForm_GetFieldFamily(model, field_index);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
 JPDF_API uint32_t jpdf_guard_EPDFForm_GetFieldObjNum(EPDF_FORM_MODEL model,
                                                      int field_index) noexcept {
     jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
@@ -1006,6 +1032,33 @@ JPDF_API EPDF_FORM_MODEL jpdf_guard_EPDFForm_LoadModel(FPDF_DOCUMENT document) n
     if (!guard.admitted()) return {};
     try {
         return EPDFForm_LoadModel(document);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
+JPDF_API FPDF_BOOL jpdf_guard_EPDFForm_RedrawFieldWidgets(
+    FPDF_DOCUMENT document, uint32_t field_objnum, uint32_t* changed_widget_objnums,
+    unsigned long buffer_size, unsigned long* out_changed_count) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return EPDFForm_RedrawFieldWidgets(document, field_objnum, changed_widget_objnums,
+                                           buffer_size, out_changed_count);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
+JPDF_API FPDF_BOOL jpdf_guard_EPDFForm_SetFieldValue(FPDF_DOCUMENT document, uint32_t field_objnum,
+                                                     int kind, const FPDF_WIDESTRING* values,
+                                                     unsigned long value_count) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return EPDFForm_SetFieldValue(document, field_objnum, kind, values, value_count);
     } catch (...) {
         jpdf::set_guard_refusal(JPDF_E_INTERNAL);
         return {};
@@ -2451,6 +2504,52 @@ JPDF_API int jpdf_guard_FPDFFont_GetWeight(FPDF_FONT font) noexcept {
     }
 }
 
+JPDF_API int jpdf_guard_FPDFFormObj_CountObjects(FPDF_PAGEOBJECT form_object) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return FPDFFormObj_CountObjects(form_object);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
+JPDF_API FPDF_PAGEOBJECT jpdf_guard_FPDFFormObj_GetObject(FPDF_PAGEOBJECT form_object,
+                                                          unsigned long index) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return FPDFFormObj_GetObject(form_object, index);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
+JPDF_API unsigned long jpdf_guard_FPDFFormObj_GetObjectNumber(
+    FPDF_PAGEOBJECT form_object) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return FPDFFormObj_GetObjectNumber(form_object);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
+JPDF_API FPDF_BOOL jpdf_guard_FPDFFormObj_MarkDirty(FPDF_PAGEOBJECT form_object) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return FPDFFormObj_MarkDirty(form_object);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
 JPDF_API FPDF_BITMAP jpdf_guard_FPDFImageObj_GetBitmap(FPDF_PAGEOBJECT image_object) noexcept {
     jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
     if (!guard.admitted()) return {};
@@ -2820,6 +2919,56 @@ JPDF_API FPDF_BOOL jpdf_guard_FPDFPageObj_GetFillColor(FPDF_PAGEOBJECT page_obje
     }
 }
 
+JPDF_API FPDF_BOOL jpdf_guard_FPDFPageObj_GetFillColorCMYK(FPDF_PAGEOBJECT page_object,
+                                                           unsigned int* C, unsigned int* M,
+                                                           unsigned int* Y, unsigned int* K,
+                                                           unsigned int* A) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return FPDFPageObj_GetFillColorCMYK(page_object, C, M, Y, K, A);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
+JPDF_API int jpdf_guard_FPDFPageObj_GetFillColorComponents(FPDF_PAGEOBJECT page_object,
+                                                           float* components,
+                                                           int capacity) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return FPDFPageObj_GetFillColorComponents(page_object, components, capacity);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
+JPDF_API unsigned long jpdf_guard_FPDFPageObj_GetFillColorIccProfile(
+    FPDF_PAGEOBJECT page_object, void* buffer, unsigned long length) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return FPDFPageObj_GetFillColorIccProfile(page_object, buffer, length);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
+JPDF_API int jpdf_guard_FPDFPageObj_GetFillColorSpace(FPDF_PAGEOBJECT page_object) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return FPDFPageObj_GetFillColorSpace(page_object);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
 JPDF_API FPDF_PAGEOBJECTMARK jpdf_guard_FPDFPageObj_GetMark(FPDF_PAGEOBJECT page_object,
                                                             unsigned long index) noexcept {
     jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
@@ -2852,6 +3001,56 @@ JPDF_API FPDF_BOOL jpdf_guard_FPDFPageObj_GetStrokeColor(FPDF_PAGEOBJECT page_ob
     if (!guard.admitted()) return {};
     try {
         return FPDFPageObj_GetStrokeColor(page_object, R, G, B, A);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
+JPDF_API FPDF_BOOL jpdf_guard_FPDFPageObj_GetStrokeColorCMYK(FPDF_PAGEOBJECT page_object,
+                                                             unsigned int* C, unsigned int* M,
+                                                             unsigned int* Y, unsigned int* K,
+                                                             unsigned int* A) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return FPDFPageObj_GetStrokeColorCMYK(page_object, C, M, Y, K, A);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
+JPDF_API int jpdf_guard_FPDFPageObj_GetStrokeColorComponents(FPDF_PAGEOBJECT page_object,
+                                                             float* components,
+                                                             int capacity) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return FPDFPageObj_GetStrokeColorComponents(page_object, components, capacity);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
+JPDF_API unsigned long jpdf_guard_FPDFPageObj_GetStrokeColorIccProfile(
+    FPDF_PAGEOBJECT page_object, void* buffer, unsigned long length) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return FPDFPageObj_GetStrokeColorIccProfile(page_object, buffer, length);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
+JPDF_API int jpdf_guard_FPDFPageObj_GetStrokeColorSpace(FPDF_PAGEOBJECT page_object) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return FPDFPageObj_GetStrokeColorSpace(page_object);
     } catch (...) {
         jpdf::set_guard_refusal(JPDF_E_INTERNAL);
         return {};
@@ -2954,6 +3153,20 @@ JPDF_API FPDF_BOOL jpdf_guard_FPDFPageObj_SetFillColor(FPDF_PAGEOBJECT page_obje
     }
 }
 
+JPDF_API FPDF_BOOL jpdf_guard_FPDFPageObj_SetFillColorCMYK(FPDF_PAGEOBJECT page_object,
+                                                           unsigned int C, unsigned int M,
+                                                           unsigned int Y, unsigned int K,
+                                                           unsigned int A) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return FPDFPageObj_SetFillColorCMYK(page_object, C, M, Y, K, A);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
 JPDF_API FPDF_BOOL jpdf_guard_FPDFPageObj_SetLineCap(FPDF_PAGEOBJECT page_object,
                                                      int line_cap) noexcept {
     jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
@@ -2985,6 +3198,20 @@ JPDF_API FPDF_BOOL jpdf_guard_FPDFPageObj_SetStrokeColor(FPDF_PAGEOBJECT page_ob
     if (!guard.admitted()) return {};
     try {
         return FPDFPageObj_SetStrokeColor(page_object, R, G, B, A);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
+JPDF_API FPDF_BOOL jpdf_guard_FPDFPageObj_SetStrokeColorCMYK(FPDF_PAGEOBJECT page_object,
+                                                             unsigned int C, unsigned int M,
+                                                             unsigned int Y, unsigned int K,
+                                                             unsigned int A) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return FPDFPageObj_SetStrokeColorCMYK(page_object, C, M, Y, K, A);
     } catch (...) {
         jpdf::set_guard_refusal(JPDF_E_INTERNAL);
         return {};
@@ -3409,6 +3636,18 @@ JPDF_API FPDF_BOOL jpdf_guard_FPDFPath_Close(FPDF_PAGEOBJECT path) noexcept {
     if (!guard.admitted()) return {};
     try {
         return FPDFPath_Close(path);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
+JPDF_API FPDF_BOOL jpdf_guard_FPDFPath_GetDrawMode(FPDF_PAGEOBJECT path, int* fillmode,
+                                                   FPDF_BOOL* stroke) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return FPDFPath_GetDrawMode(path, fillmode, stroke);
     } catch (...) {
         jpdf::set_guard_refusal(JPDF_E_INTERNAL);
         return {};
