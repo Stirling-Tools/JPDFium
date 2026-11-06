@@ -407,8 +407,10 @@ public final class PdfTextExtractor {
     static List<TextLine> buildLines(List<TextChar> characters) {
         if (characters.isEmpty()) return List.of();
 
-        List<TextLine> lines = new ArrayList<>();
         int count = characters.size();
+        // Most pages hold a few dozen lines; sizing once avoids the growth copies
+        // of a default-capacity list without pinning a large buffer.
+        List<TextLine> lines = new ArrayList<>(Math.max(4, count >> 5));
         int lineStart = 0;
         float currentLineY = characters.getFirst().y();
         float lineThreshold = characters.getFirst().height() * 0.5f;
@@ -416,27 +418,29 @@ public final class PdfTextExtractor {
         for (int i = 0; i < count; i++) {
             TextChar textChar = characters.get(i);
             if (i > lineStart && Math.abs(textChar.y() - currentLineY) > lineThreshold) {
-                lines.add(buildLine(characters.subList(lineStart, i)));
+                lines.add(buildLine(characters, lineStart, i));
                 lineStart = i;
                 lineThreshold = textChar.height() * 0.5f;
             }
             currentLineY = textChar.y();
         }
         if (lineStart < count) {
-            lines.add(buildLine(characters.subList(lineStart, count)));
+            lines.add(buildLine(characters, lineStart, count));
         }
 
         return lines;
     }
 
-    private static TextLine buildLine(List<TextChar> lineChars) {
-        List<TextWord> words = buildWords(lineChars);
-        if (lineChars.isEmpty()) return new TextLine(words, 0f, 0f, 0f, 0f);
+    /** Builds one line from the half-open character range {@code [from, to)}. */
+    private static TextLine buildLine(List<TextChar> characters, int from, int to) {
+        List<TextWord> words = buildWords(characters, from, to);
+        if (from >= to) return new TextLine(words, 0f, 0f, 0f, 0f);
         float minX = Float.POSITIVE_INFINITY;
         float minY = Float.POSITIVE_INFINITY;
         float maxX = Float.NEGATIVE_INFINITY;
         float maxY = Float.NEGATIVE_INFINITY;
-        for (TextChar textChar : lineChars) {
+        for (int i = from; i < to; i++) {
+            TextChar textChar = characters.get(i);
             float charX = textChar.x();
             float charY = textChar.y();
             if (charX < minX) minX = charX;
@@ -449,13 +453,13 @@ public final class PdfTextExtractor {
         return new TextLine(words, minX, minY, maxX - minX, maxY - minY);
     }
 
-    private static List<TextWord> buildWords(List<TextChar> lineChars) {
-        if (lineChars.isEmpty()) return List.of();
-        List<TextWord> words = new ArrayList<>();
-        int count = lineChars.size();
+    private static List<TextWord> buildWords(List<TextChar> lineChars, int from, int to) {
+        if (from >= to) return List.of();
+        // Roughly one word per four characters keeps the common case from growing.
+        List<TextWord> words = new ArrayList<>(Math.max(4, (to - from) >> 2));
         int wordStart = -1;
 
-        for (int i = 0; i < count; i++) {
+        for (int i = from; i < to; i++) {
             TextChar textChar = lineChars.get(i);
             if (textChar.isWhitespace() || textChar.isNewline()) {
                 if (wordStart >= 0) {
@@ -470,7 +474,7 @@ public final class PdfTextExtractor {
         }
 
         if (wordStart >= 0) {
-            words.add(buildWord(lineChars, wordStart, count));
+            words.add(buildWord(lineChars, wordStart, to));
         }
 
         return words;
@@ -483,10 +487,8 @@ public final class PdfTextExtractor {
         float minY = Float.POSITIVE_INFINITY;
         float maxX = Float.NEGATIVE_INFINITY;
         float maxY = Float.NEGATIVE_INFINITY;
-        List<TextChar> wordChars = new ArrayList<>(wordLen);
         for (int i = fromIndex; i < toIndex; i++) {
             TextChar textChar = lineChars.get(i);
-            wordChars.add(textChar);
             float charX = textChar.x();
             float charY = textChar.y();
             if (charX < minX) minX = charX;
@@ -496,6 +498,9 @@ public final class PdfTextExtractor {
             if (rightX > maxX) maxX = rightX;
             if (bottomY > maxY) maxY = bottomY;
         }
-        return new TextWord(wordChars, minX, minY, maxX - minX, maxY - minY);
+        // The characters are never mutated after extraction, so a view of the page
+        // list is equivalent to the old per-word copy and drops one reference array
+        // (plus its fill loop) for every word on the page.
+        return new TextWord(lineChars.subList(fromIndex, toIndex), minX, minY, maxX - minX, maxY - minY);
     }
 }
