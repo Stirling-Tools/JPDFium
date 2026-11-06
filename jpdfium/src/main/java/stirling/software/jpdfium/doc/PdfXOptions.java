@@ -1,5 +1,7 @@
 package stirling.software.jpdfium.doc;
 
+import java.util.Map;
+
 /**
  * PDF/X metadata options. The output-intent ICC profile is also the vector and
  * image conversion target, so separation uses the declared printing condition.
@@ -17,11 +19,14 @@ public final class PdfXOptions {
     private final boolean convertImages;
     private final boolean convertForms;
     private final boolean convertSpecialColors;
+    private final Map<String, byte[]> fontData;
     private final boolean convertSpotColors;
     private final boolean extractBlack;
     private final int jpegQuality;
     private final boolean strictImages;
     private final boolean convertLosslessImages;
+    private final boolean requireEmbeddedFonts;
+    private final String title;
 
     private PdfXOptions(Builder b) {
         this.standard = b.standard;
@@ -33,11 +38,14 @@ public final class PdfXOptions {
         this.convertImages = b.convertImages;
         this.convertForms = b.convertForms;
         this.convertSpecialColors = b.convertSpecialColors;
+        this.fontData = b.fontData == null ? Map.of() : Map.copyOf(b.fontData);
         this.convertSpotColors = b.convertSpotColors;
         this.extractBlack = b.extractBlack;
         this.jpegQuality = b.jpegQuality;
         this.strictImages = b.strictImages;
         this.convertLosslessImages = b.convertLosslessImages;
+        this.requireEmbeddedFonts = b.requireEmbeddedFonts;
+        this.title = b.title;
     }
 
     public PdfXStandard standard() {
@@ -73,6 +81,11 @@ public final class PdfXOptions {
         return convertSpecialColors;
     }
 
+    /** Font programs keyed by {@code /BaseFont}; empty leaves fonts unchanged. */
+    public Map<String, byte[]> fontData() {
+        return fontData;
+    }
+
     public boolean convertSpotColors() {
         return convertSpotColors;
     }
@@ -92,6 +105,19 @@ public final class PdfXOptions {
     /** Whether lossless image sources may be re-encoded as lossy JPEG. */
     public boolean convertLosslessImages() {
         return convertLosslessImages;
+    }
+
+    /**
+     * Whether conversion fails when {@link PdfFontAuditor} finds a non-embedded font in page
+     * text or nested form XObjects.
+     */
+    public boolean requireEmbeddedFonts() {
+        return requireEmbeddedFonts;
+    }
+
+    /** Optional document title written to the information dictionary. */
+    public String title() {
+        return title;
     }
 
     /** Build the vector/image conversion options represented by these PDF/X options. */
@@ -125,11 +151,14 @@ public final class PdfXOptions {
         private boolean convertImages = true;
         private boolean convertForms = false;
         private boolean convertSpecialColors;
+        private Map<String, byte[]> fontData;
         private boolean convertSpotColors;
         private boolean extractBlack = true;
         private int jpegQuality = 90;
         private boolean strictImages;
         private boolean convertLosslessImages;
+        private boolean requireEmbeddedFonts;
+        private String title;
 
         private Builder() {}
 
@@ -182,6 +211,12 @@ public final class PdfXOptions {
             return this;
         }
 
+        /** Font programs keyed by {@code /BaseFont}; null/empty leaves fonts unchanged. */
+        public Builder fontData(Map<String, byte[]> value) {
+            this.fontData = value == null ? null : Map.copyOf(value);
+            return this;
+        }
+
         public Builder convertSpotColors(boolean value) {
             this.convertSpotColors = value;
             return this;
@@ -208,6 +243,18 @@ public final class PdfXOptions {
          */
         public Builder convertLosslessImages(boolean value) {
             this.convertLosslessImages = value;
+            return this;
+        }
+
+        /** Fail when the audit finds a non-embedded font in page text or form XObjects. */
+        public Builder requireEmbeddedFonts(boolean value) {
+            this.requireEmbeddedFonts = value;
+            return this;
+        }
+
+        /** Optional title for the output document information dictionary. */
+        public Builder title(String value) {
+            this.title = value;
             return this;
         }
 

@@ -51,11 +51,11 @@ public final class StorageOptions {
     public boolean reuseSourceFile() { return reuseSourceFile; }
 
     /**
-     * Whether a published output must survive a crash (fsync of the staged file
-     * and its directory). Defaults to {@code true}. Set to {@code false} for
-     * rebuildable intermediates or throughput-first pipelines where the page cache
-     * already provides the required visibility; the file merge and range-extract
-     * outputs honour it.
+     * Whether a file written by {@code mergeFilesToFile} or {@code extractPageRangeToFile} is
+     * published durably: fsynced, given the replaced file's permissions, then renamed with a
+     * best-effort directory flush. On by default. Turn it off for outputs the caller reads back
+     * and deletes, such as files streamed into a response; those are renamed into place owner-only
+     * and without fsync.
      */
     public boolean durable() { return durable; }
 

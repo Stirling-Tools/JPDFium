@@ -1,10 +1,11 @@
 package stirling.software.jpdfium;
 
 import java.io.IOException;
+import java.io.OutputStream;
 import java.lang.foreign.MemorySegment;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -396,15 +397,11 @@ public final class PdfMerge {
         if (paths.size() == 1) {
             // Stage beside the destination so it is replaced only on success and aliased
             // inputs (src == output) are handled safely, matching the multi-input path.
-            // Staging is never downgraded to a direct in-place copy: a failed copy would
-            // truncate an existing destination, so an unavailable staging file is refused.
-            Path staged = OutputTransaction.stagingFile(options, output);
-            try {
-                Files.copy(paths.getFirst(), staged, StandardCopyOption.REPLACE_EXISTING);
-                publishStagedFile(staged, output, options.durable());
-                staged = null;
-            } finally {
-                deleteQuietly(staged);
+            try (OutputTransaction tx = OutputTransaction.begin(output, options.durable())) {
+                try (OutputStream out = Files.newOutputStream(tx.staging(), StandardOpenOption.TRUNCATE_EXISTING)) {
+                    Files.copy(paths.getFirst(), out);
+                }
+                tx.publish(SaveOptions.ephemeral());
             }
             return;
         }
@@ -419,17 +416,11 @@ public final class PdfMerge {
 
         // Save through a staging file so the destination is replaced only after the
         // merge and the save both succeed; a failed save must not truncate it.
-        Path staged = OutputTransaction.stagingFile(options, output);
-        try {
+        try (OutputTransaction tx = OutputTransaction.begin(output, options.durable())) {
             try (PdfDocument merged = mergeFiles(paths, options)) {
-                // The commit below fsyncs the staging file and its directory, so
-                // the staged write itself must not duplicate that work.
-                merged.saveTo(staged, SaveOptions.ephemeral());
+                merged.saveTo(tx.staging(), SaveOptions.ephemeral());
             }
-            publishStagedFile(staged, output, options.durable());
-            staged = null;
-        } finally {
-            deleteQuietly(staged);
+            tx.publish(SaveOptions.ephemeral());
         }
     }
 
@@ -441,33 +432,18 @@ public final class PdfMerge {
      */
     private static boolean stageNativeMerge(List<Path> paths, Path output, StorageOptions options)
             throws IOException {
-        Path staged;
+        OutputTransaction tx;
         try {
-            staged = OutputTransaction.stagingFile(options, output);
+            tx = OutputTransaction.begin(output, options.durable());
         } catch (IOException _) {
             return false;
         }
-        try {
-            boolean merged;
-            try {
-                merged = QpdfLib.mergeFilesInto(paths, staged);
-            } catch (JPDFiumException _) {
-                // A native or alias failure must reach the documented false
-                // contract so the caller can fall back in AUTO mode.
+        try (tx) {
+            if (!QpdfLib.mergeFiles(paths, tx.staging(), false) || Files.size(tx.staging()) == 0) {
                 return false;
             }
-            if (!merged || !OutputTransaction.isPublishableStaging(staged)) {
-                return false;
-            }
-            // Single durable commit: the native writer filled the staging file
-            // this method owns, so this is the only rename and the only fsync on
-            // the merge-to-file path. Nothing is fsynced under an intermediate
-            // name that is about to be renamed away.
-            publishStagedFile(staged, output, options.durable());
-            staged = null;
+            tx.publish(SaveOptions.ephemeral());
             return true;
-        } finally {
-            deleteQuietly(staged);
         }
     }
 

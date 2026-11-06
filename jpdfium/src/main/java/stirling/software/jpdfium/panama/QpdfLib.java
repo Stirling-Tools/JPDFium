@@ -111,6 +111,63 @@ public final class QpdfLib {
         return QPDF_BOUND;
     }
 
+    private static final MethodHandle REPLACE_FONT_STREAM_HANDLE = Symbols.downcallOptionalUnguarded(
+            "jpdfium_qpdf_replace_font_stream",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS, ADDRESS, JAVA_LONG,
+                    ADDRESS, ADDRESS));
+
+    /** True when this native build exposes qpdf font-stream replacement. */
+    public static boolean isFontReplacementSupported() {
+        return REPLACE_FONT_STREAM_HANDLE != null;
+    }
+
+    /**
+     * Replace the stream behind a font descriptor matching {@code baseFont}.
+     *
+     * <p>The data must be a complete font program matching the existing font
+     * dictionary. The {@code baseFont} name matching is exact (preserving subset prefix),
+     * and the caller remains responsible for encoding, widths and ToUnicode compatibility.
+     *
+     * @return rewritten PDF bytes
+     * @throws JPDFiumException when no matching descriptor or stream was found,
+     *                          or if rewriting is refused (e.g. signed/password-protected)
+     */
+    public static byte[] replaceFontStream(byte[] input, String baseFont, byte[] fontData) {
+        if (input == null || input.length == 0 || baseFont == null || baseFont.isBlank()
+                || fontData == null || fontData.length == 0
+                || REPLACE_FONT_STREAM_HANDLE == null) {
+            return null;
+        }
+        Semaphore held = acquireSlotOrThrow("font stream replacement");
+        try (QpdfCall call = new QpdfCall()) {
+            MemorySegment inputSeg = call.copyBytes(input);
+            MemorySegment nameSeg = call.cString(baseFont);
+            MemorySegment fontSeg = call.copyBytes(fontData);
+            int rc = (int) REPLACE_FONT_STREAM_HANDLE.invokeExact(
+                    inputSeg, (long) input.length, nameSeg, fontSeg, (long) fontData.length,
+                    call.outPtr, call.outLen);
+            if (rc == 0) {
+                return call.copyAndFree("qpdfReplaceFontStream");
+            } else if (rc == 1) {
+                throw new JPDFiumException("no font descriptor or program matching /BaseFont " + baseFont);
+            } else if (rc == -2) {
+                throw new JPDFiumException("cannot replace font on password-protected document");
+            } else if (rc == -3) {
+                throw new JPDFiumException("cannot replace font on signed document (/ByteRange present)");
+            } else if (rc == -4) {
+                throw new JPDFiumException("Type 1 /FontFile replacement without Length1/2/3 is unsupported");
+            } else {
+                throw new JPDFiumException("qpdf font stream replacement failed (rc=" + rc + ")");
+            }
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            if (t instanceof JPDFiumException jpe) throw jpe;
+            throw new JPDFiumException("qpdf font stream replacement failed", t);
+        } finally {
+            releaseSlot(held);
+        }
+    }
+
     /**
      * Acquire a slot when bounded; no-op when unlimited.
      *
@@ -249,6 +306,14 @@ public final class QpdfLib {
                     "jpdfium_qpdf_set_docinfo_file",
                     FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, ADDRESS, JAVA_INT,
                             ADDRESS));
+    private static final MethodHandle FORCE_VERSION_FILE_HANDLE =
+            Symbols.downcallOptionalUnguarded(
+                    "jpdfium_qpdf_force_version_file",
+                    FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
+    private static final MethodHandle FORCE_VERSION_MEM_HANDLE =
+            Symbols.downcallOptionalUnguarded(
+                    "jpdfium_qpdf_force_version",
+                    FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS, ADDRESS, ADDRESS));
     private static final MethodHandle MERGE_FILES_HANDLE = Symbols.downcallOptionalUnguarded(
             "jpdfium_qpdf_merge_files",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, ADDRESS));
@@ -601,6 +666,73 @@ public final class QpdfLib {
     public static boolean setDocInfoToFile(Path input, Path output, Map<String, String> fields,
             String password) {
         return setDocInfoToFile(input, output, fields, password, 0);
+    }
+
+    /** True when the file-backed exact-version writer resolved. */
+    public static boolean isForceVersionFileSupported() {
+        return FORCE_VERSION_FILE_HANDLE != null;
+    }
+
+    /** True when the in-memory exact-version writer resolved. */
+    public static boolean isForceVersionSupported() {
+        return FORCE_VERSION_MEM_HANDLE != null;
+    }
+
+    /**
+     * Rewrite PDF bytes with an exact base version and no catalog /Version override.
+     */
+    public static byte[] forceVersionToBytes(byte[] input, String version) {
+        if (FORCE_VERSION_MEM_HANDLE == null || input == null || input.length == 0
+                || version == null || version.isBlank()) {
+            return null;
+        }
+        Semaphore held = acquireSlotOrThrow("force version");
+        try (QpdfCall call = new QpdfCall()) {
+            MemorySegment inputSeg = call.copyBytes(input);
+            int rc = (int) FORCE_VERSION_MEM_HANDLE.invokeExact(
+                    inputSeg, (long) input.length, call.cString(version), call.outPtr, call.outLen);
+            if (rc != 0) {
+                return null;
+            }
+            return call.copyAndFree("qpdfForceVersion");
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw new JPDFiumException("qpdf force version failed", t);
+        } finally {
+            releaseSlot(held);
+        }
+    }
+
+    /**
+     * Rewrite a PDF with an exact base version and no catalog /Version override.
+     * The output is staged and published atomically.
+     */
+    public static boolean forceVersionToFile(Path input, Path output, String version) {
+        if (FORCE_VERSION_FILE_HANDLE == null || input == null || output == null
+                || version == null || version.isBlank() || !Files.isReadable(input)) {
+            return false;
+        }
+        Semaphore held = acquireSlotOrThrow("force version");
+        Path staging = null;
+        try (QpdfCall call = new QpdfCall();
+                OutputTransaction tx = OutputTransaction.begin(output)) {
+            rejectAlias(List.of(input), output);
+            staging = tx.staging();
+            MemorySegment inSeg = call.cString(input.toAbsolutePath().toString());
+            MemorySegment outSeg = call.cString(staging.toAbsolutePath().toString());
+            int rc = (int) FORCE_VERSION_FILE_HANDLE.invokeExact(inSeg, outSeg,
+                    call.cString(version));
+            if (rc != 0) return false;
+            publish(staging, output, 0);
+            staging = null;
+            return true;
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw new JPDFiumException("qpdf force version failed", t);
+        } finally {
+            deleteQuietly(staging);
+            releaseSlot(held);
+        }
     }
 
     /**

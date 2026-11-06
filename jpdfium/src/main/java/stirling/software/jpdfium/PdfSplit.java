@@ -474,12 +474,10 @@ public final class PdfSplit {
             // Snapshot first, in its own try: only a snapshot-step failure
             // falls through to the per-range path below. Extraction-loop
             // failures are RuntimeExceptions and propagate after cleanup.
-            Path reusable = null;
+            Path reusable = reusableSource(doc, options);
             boolean ownsReusable = false;
             try {
-                if (src != null && options.reuseSourceFile() && Files.isReadable(src)) {
-                    reusable = src;
-                } else {
+                if (reusable == null) {
                     reusable = options.createTempFile("jpdfium-split-src", ".pdf");
                     ownsReusable = true;
                     // An untouched source file is byte-identical to what the
@@ -849,21 +847,12 @@ public final class PdfSplit {
         }
         try (PdfDocument doc = PdfDocument.open(input);
              PdfDocument part = extractPageRange(doc, fromPage, toPage, options)) {
-            // Stage beside the destination and publish atomically. A direct save to
-            // output would corrupt the file when output aliases input (the document is
-            // still open), and a failed save would leave a partial file, so an
-            // unavailable staging file is refused rather than downgraded.
-            Path staged = OutputTransaction.stagingFile(options, output);
-            try {
-                // The commit below fsyncs the staging file and its directory, so
-                // the staged write itself must not duplicate that work.
-                part.saveTo(staged, SaveOptions.ephemeral());
-                publishStagedFile(staged, output, options.durable());
-                staged = null;
-            } finally {
-                if (staged != null) {
-                    try { Files.deleteIfExists(staged); } catch (IOException _) {}
-                }
+            // Save to a staging file first, then atomically replace the output.
+            // A direct save to output would corrupt the file when output aliases input
+            // (the document is still open), and a failed save would leave a partial file.
+            try (OutputTransaction tx = OutputTransaction.begin(output, options.durable())) {
+                part.saveTo(tx.staging(), SaveOptions.ephemeral());
+                tx.publish(SaveOptions.ephemeral());
             }
         }
     }
@@ -876,22 +865,15 @@ public final class PdfSplit {
      */
     private static boolean stageNativeExtract(Path input, int[] pageIndices, int expectedPages,
                                               Path output, StorageOptions options) throws IOException {
-        Path staged;
+        OutputTransaction tx;
         try {
-            staged = OutputTransaction.stagingFile(options, output);
+            tx = OutputTransaction.begin(output, options.durable());
         } catch (IOException _) {
             return false;
         }
-        try {
-            // A thrown JPDFiumException must fall back like a false return so AUTO
-            // mode still recovers instead of failing the whole split.
-            boolean extracted;
-            try {
-                extracted = QpdfLib.extractPagesInto(input, pageIndices, staged);
-            } catch (JPDFiumException _) {
-                return false;
-            }
-            if (!extracted || !OutputTransaction.isPublishableStaging(staged)) {
+        try (tx) {
+            Path staged = tx.staging();
+            if (!QpdfLib.extractPagesToFile(input, pageIndices, staged, false) || Files.size(staged) == 0) {
                 return false;
             }
             // The native extractor skips out-of-range indices; verify the
@@ -902,14 +884,8 @@ public final class PdfSplit {
                             + expectedPages + " requested pages");
                 }
             }
-            // Single durable commit: the native extractor filled the staging
-            // file this method owns, so this is the only rename and the only
-            // fsync on the extract-to-file path.
-            publishStagedFile(staged, output, options.durable());
-            staged = null;
+            tx.publish(SaveOptions.ephemeral());
             return true;
-        } finally {
-            deleteQuietly(staged);
         }
     }
 
@@ -935,12 +911,12 @@ public final class PdfSplit {
         return true;
     }
 
-    /** Best-effort temp cleanup: a failed delete must not mask the real outcome. */
     private static Path reusableSource(PdfDocument doc, StorageOptions options) {
         Path src = doc.sourcePath();
         return src != null && options.reuseSourceFile() && Files.isReadable(src) ? src : null;
     }
 
+    /** Best-effort temp cleanup: a failed delete must not mask the real outcome. */
     private static void deleteQuietly(Path path) {
         if (path != null) {
             try {

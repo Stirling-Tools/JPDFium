@@ -187,13 +187,14 @@ fi
 # then sees no cache and falls back to direct clones, sidestepping the
 # depot_tools git.bat shim which cmd.exe child processes can't resolve
 # from bash's exported PATH. On Linux/macOS, use a real cache dir for sync
-# performance.
+# performance. The cache must live outside the gclient checkout: newer
+# depot_tools rejects a cachepath inside BUILD_DIR outright.
 case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*)
         export GIT_CACHE_PATH=""
         ;;
     *)
-        export GIT_CACHE_PATH="${BUILD_DIR}/.gitcache"
+        export GIT_CACHE_PATH="${BUILD_DIR}-gitcache"
         mkdir -p "${GIT_CACHE_PATH}"
         ;;
 esac

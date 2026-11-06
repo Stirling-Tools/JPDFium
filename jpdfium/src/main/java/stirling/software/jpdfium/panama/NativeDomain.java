@@ -387,6 +387,7 @@ public final class NativeDomain {
         if (rc != OK) {
             throw new JPDFiumException("jpdf_runtime_init failed: " + describe(rc));
         }
+        RedactImageDecoder.install();
         // Exit teardown quiesces first and destroys only when nothing is open.
         // Platform thread required: virtual threads cannot be shutdown hooks.
         Runtime.getRuntime().addShutdownHook(

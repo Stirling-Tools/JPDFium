@@ -147,6 +147,10 @@ struct DocCore {
     // recorded area there still holds text, so neither a commit on another page
     // nor an unrelated commit on this one can clear the failure.
     std::map<int32_t, std::vector<RedactArea>> incompleteRedactPages{};
+    // Pages whose strict-crop audit failed. Unlike incompleteRedactPages, a
+    // later redaction commit cannot clear this: only a full strict-crop audit
+    // that passes on the same page may remove the entry.
+    std::set<int32_t> strictCropIncompletePages{};
     int32_t unappliedRedactMarksCount = 0;
     // Structural generation: bumped whenever native state is freed and
     // replaced (document reload, page raster replacement). Pages capture it
@@ -197,7 +201,7 @@ struct DocCore {
     // not resolved by a later successful commit on that same page - see
     // incompleteRedactPages.
     bool hasIncompleteRedaction() const {
-        return !incompleteRedactPages.empty();
+        return !incompleteRedactPages.empty() || !strictCropIncompletePages.empty();
     }
 
     void addRedactLiteral(const char* s) {

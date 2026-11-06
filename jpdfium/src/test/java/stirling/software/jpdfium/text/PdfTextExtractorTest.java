@@ -47,6 +47,21 @@ class PdfTextExtractorTest {
     }
 
     @Test
+    void parseNegativeFractionalAndScientificCoordinates() {
+        String json = "[{\"i\":0,\"u\":65,\"x\":-12.34,\"y\":-5e-05,\"w\":8.0,\"h\":12.0,"
+                + "\"font\":\"Arial\",\"size\":12.0},"
+                + "{\"i\":1,\"u\":66,\"x\":-0.34,\"y\":0.0,\"w\":8.0,\"h\":12.0,"
+                + "\"font\":\"Arial\",\"size\":12.0}]";
+        List<TextChar> chars = PdfTextExtractor.parseCharsJson(json);
+        TextChar ch0 = chars.get(0);
+        assertEquals(-12.34f, ch0.x(), 0.001f);
+        assertEquals(-0.00005f, ch0.y(), 0.000001f);
+
+        TextChar ch1 = chars.get(1);
+        assertEquals(-0.34f, ch1.x(), 0.001f);
+    }
+
+    @Test
     void parseWhitespaceAndNewline() {
         TextChar space = new TextChar(0, 32, 0, 0, 5, 12, "Arial", 12);
         assertTrue(space.isWhitespace());

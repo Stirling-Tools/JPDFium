@@ -3,12 +3,14 @@
 #include <fpdf_text.h>
 #include <fpdfview.h>
 
+#include <bit>
 #include <charconv>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <system_error>
@@ -346,6 +348,12 @@ static_assert(offsetof(PackedCharRecord, h) == 20, "wire layout");
 static_assert(offsetof(PackedCharRecord, size) == 24, "wire layout");
 static_assert(offsetof(PackedCharRecord, fontId) == 28, "wire layout");
 
+static_assert(std::endian::native == std::endian::little,
+              "jpdfium_text_get_chars_packed writes host byte order and documents little-endian");
+
+constexpr int64_t kPackedRecordBytes = 32;
+constexpr int64_t kPackedMaxBytes = std::numeric_limits<int32_t>::max();
+
 }  // namespace
 
 int32_t jpdfium_text_get_chars_packed(int64_t page, uint8_t** data, int64_t* len) {
@@ -358,6 +366,10 @@ int32_t jpdfium_text_get_chars_packed(int64_t page, uint8_t** data, int64_t* len
         if (!tp) return JPDFIUM_ERR_NATIVE;
 
         int count = FPDFText_CountChars(tp.get());
+        if (8 + static_cast<int64_t>(count > 0 ? count : 0) * kPackedRecordBytes >
+            kPackedMaxBytes) {
+            return JPDFIUM_ERR_TOO_LARGE;
+        }
         std::vector<PackedCharRecord> records;
         records.reserve(static_cast<size_t>(count > 0 ? count : 0));
         std::unordered_map<std::string, int32_t> fontIds;
@@ -367,7 +379,6 @@ int32_t jpdfium_text_get_chars_packed(int64_t page, uint8_t** data, int64_t* len
         char lastFont[256];
         size_t lastFontLen = 0;
         int32_t lastFontId = -1;
-
         for (int i = 0; i < count; ++i) {
             unsigned int uni = FPDFText_GetUnicode(tp.get(), i);
             if (uni == 0) continue;
@@ -376,7 +387,6 @@ int32_t jpdfium_text_get_chars_packed(int64_t page, uint8_t** data, int64_t* len
             if (!FPDFText_GetCharBox(tp.get(), i, &l, &r, &b, &t)) {
                 l = r = b = t = 0.0;
             }
-
             // FPDFText_GetFontInfo returns the length including the trailing NUL
             // and leaves the buffer untouched when the name does not fit, so a
             // preset first byte is enough: no 256-byte clear per character.
@@ -418,6 +428,7 @@ int32_t jpdfium_text_get_chars_packed(int64_t page, uint8_t** data, int64_t* len
         }
 
         const size_t total = 8 + bodyBytes;
+        if (static_cast<int64_t>(total) > kPackedMaxBytes) return JPDFIUM_ERR_TOO_LARGE;
         auto* buf = static_cast<uint8_t*>(malloc(total));
         if (!buf) return JPDFIUM_ERR_NATIVE;
 

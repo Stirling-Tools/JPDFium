@@ -2,9 +2,11 @@ package stirling.software.jpdfium.text;
 
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.nio.BufferUnderflowException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
@@ -104,14 +106,29 @@ public final class PdfTextExtractor {
      * Malformed objects are skipped wholesale.
      */
     public static List<TextChar> parseCharsPacked(byte[] packed) {
+        try {
+            return decodeCharsPacked(packed);
+        } catch (BufferUnderflowException | IllegalArgumentException | IndexOutOfBoundsException e) {
+            throw new JPDFiumException("malformed packed text characters", e);
+        }
+    }
+
+    private static List<TextChar> decodeCharsPacked(byte[] packed) {
         ByteBuffer buf = ByteBuffer.wrap(packed).order(ByteOrder.LITTLE_ENDIAN);
         int count = buf.getInt();
         int fontCount = buf.getInt();
         int recordsStart = buf.position();
-        buf.position(recordsStart + count * PACKED_RECORD_BYTES);
+        long recordsEnd = recordsStart + (long) count * PACKED_RECORD_BYTES;
+        if (count < 0 || fontCount < 0 || recordsEnd > packed.length) {
+            throw new IllegalArgumentException("counts exceed the buffer");
+        }
+        buf.position((int) recordsEnd);
         String[] fonts = new String[fontCount];
         for (int f = 0; f < fontCount; f++) {
             int len = buf.getInt();
+            if (len < 0 || len > buf.remaining()) {
+                throw new IllegalArgumentException("font name exceeds the buffer");
+            }
             fonts[f] = new String(packed, buf.position(), len, StandardCharsets.UTF_8);
             buf.position(buf.position() + len);
         }
@@ -126,6 +143,9 @@ public final class PdfTextExtractor {
             float h = buf.getFloat();
             float size = buf.getFloat();
             int fontId = buf.getInt();
+            if (fontId < 0 || fontId >= fontCount) {
+                throw new IllegalArgumentException("font id " + fontId + " out of range");
+            }
             chars.add(new TextChar(index, unicode, x, y, w, h, fonts[fontId], size));
         }
         return chars;
@@ -402,9 +422,39 @@ public final class PdfTextExtractor {
     /** Parses one numeric literal the way the generic path does, 0 when the JDK rejects it. */
     private static float parseFloatWithJdk(String s, int start, int end) {
         try {
-            return Float.parseFloat(s.substring(start, end));
-        } catch (NumberFormatException | IndexOutOfBoundsException _) {
-            return 0.0f;
+            for (int i = start; i < end; i++) {
+                char c = s.charAt(i);
+                if (c == 'e' || c == 'E') {
+                    return Float.parseFloat(s.substring(start, end));
+                }
+            }
+            int dot = -1;
+            for (int i = start; i < end; i++) {
+                if (s.charAt(i) == '.') {
+                    dot = i;
+                    break;
+                }
+            }
+            if (dot < 0) {
+                return (float) parseIntFast(s, start, end);
+            }
+            boolean negative = start < end && s.charAt(start) == '-';
+            int digitsStart = negative ? start + 1 : start;
+            int intPart = parseIntFast(s, digitsStart, dot);
+            int fracPart = parseIntFast(s, dot + 1, end);
+            int fracDigits = end - (dot + 1);
+            float frac = fracPart;
+            for (int i = 0; i < fracDigits; i++) {
+                frac /= 10.0f;
+            }
+            float value = intPart + frac;
+            return negative ? -value : value;
+        } catch (NumberFormatException | IndexOutOfBoundsException | NullPointerException _) {
+            try {
+                return Float.parseFloat(s.substring(start, end));
+            } catch (NumberFormatException _) {
+                return 0.0f;
+            }
         }
     }
 

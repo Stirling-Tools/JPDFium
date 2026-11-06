@@ -588,6 +588,17 @@ JPDF_API int32_t jpdf_guard_jpdfium_metadata_strip_all(int64_t doc) noexcept {
     }
 }
 
+JPDF_API int32_t jpdf_guard_jpdfium_page_clear_strict_crop_incomplete(int64_t page) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return jpdfium_page_clear_strict_crop_incomplete(page);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
 JPDF_API void jpdf_guard_jpdfium_page_close(int64_t page) noexcept {
     jpdf::GuardScope guard(jpdf::Purpose::Teardown);
     if (!guard.admitted()) return;
@@ -637,6 +648,28 @@ JPDF_API int32_t jpdf_guard_jpdfium_page_info(int64_t page, float* width, float*
     if (!guard.admitted()) return {};
     try {
         return jpdfium_page_info(page, width, height);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
+JPDF_API int32_t jpdf_guard_jpdfium_page_mark_redacted(int64_t page) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return jpdfium_page_mark_redacted(page);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
+JPDF_API int32_t jpdf_guard_jpdfium_page_mark_redaction_incomplete(int64_t page) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return jpdfium_page_mark_redaction_incomplete(page);
     } catch (...) {
         jpdf::set_guard_refusal(JPDF_E_INTERNAL);
         return {};

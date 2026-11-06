@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.SyntheticPdfFactory;
+import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.panama.NativeRuntime;
 
 import java.nio.ByteBuffer;
@@ -14,6 +15,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 class PdfTextExtractorPackedTest {
@@ -32,6 +34,24 @@ class PdfTextExtractorPackedTest {
         assertEquals(List.of(
                 new TextChar(0, 'H', -1.5f, 700f, 6f, 9f, "Helvetica", 12f),
                 new TextChar(3, 'i', 8f, 700f, 3f, 9f, "Helvetica", 12f)), chars);
+    }
+
+    @Test
+    void rejectsMalformedBuffers() {
+        byte[] font = "Helvetica".getBytes(StandardCharsets.UTF_8);
+        ByteBuffer badFontId = ByteBuffer.allocate(8 + 32 + 4 + font.length).order(ByteOrder.LITTLE_ENDIAN);
+        badFontId.putInt(1).putInt(1);
+        badFontId.putInt(0).putInt('H').putFloat(0f).putFloat(0f).putFloat(1f).putFloat(1f).putFloat(12f).putInt(1);
+        badFontId.putInt(font.length).put(font);
+        ByteBuffer overCount = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putInt(Integer.MAX_VALUE).putInt(0);
+        ByteBuffer longFontName = ByteBuffer.allocate(8 + 4).order(ByteOrder.LITTLE_ENDIAN).putInt(0).putInt(1).putInt(64);
+        ByteBuffer negativeCharCount = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putInt(-1).putInt(0);
+        ByteBuffer negativeFontCount = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putInt(0).putInt(-1);
+
+        for (byte[] malformed : List.of(badFontId.array(), overCount.array(), longFontName.array(),
+                negativeCharCount.array(), negativeFontCount.array(), new byte[3])) {
+            assertThrows(JPDFiumException.class, () -> PdfTextExtractor.parseCharsPacked(malformed));
+        }
     }
 
     @Test

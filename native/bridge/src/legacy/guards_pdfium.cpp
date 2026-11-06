@@ -1316,6 +1316,17 @@ JPDF_API FPDF_BOOL jpdf_guard_EPDFText_RedactInRect(FPDF_PAGE page, const FS_REC
     }
 }
 
+JPDF_API FPDF_TRAPPED_STATUS jpdf_guard_EPDF_GetMetaTrapped(FPDF_DOCUMENT document) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return EPDF_GetMetaTrapped(document);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
 JPDF_API FPDF_BOOL jpdf_guard_EPDF_GetPageBoxByIndex(FPDF_DOCUMENT document, int page_index,
                                                      EPDF_PAGE_BOX_TYPE box_type,
                                                      FS_RECTF* box) noexcept {
@@ -1440,6 +1451,30 @@ JPDF_API FPDF_BOOL jpdf_guard_EPDF_SetEncryption(FPDF_DOCUMENT document,
     if (!guard.admitted()) return {};
     try {
         return EPDF_SetEncryption(document, user_password, owner_password, allowed_flags);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
+JPDF_API FPDF_BOOL jpdf_guard_EPDF_SetMetaText(FPDF_DOCUMENT document, FPDF_BYTESTRING tag,
+                                               FPDF_WIDESTRING value) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return EPDF_SetMetaText(document, tag, value);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
+JPDF_API FPDF_BOOL jpdf_guard_EPDF_SetMetaTrapped(FPDF_DOCUMENT document,
+                                                  FPDF_TRAPPED_STATUS status) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return EPDF_SetMetaTrapped(document, status);
     } catch (...) {
         jpdf::set_guard_refusal(JPDF_E_INTERNAL);
         return {};
@@ -1796,6 +1831,28 @@ JPDF_API unsigned long jpdf_guard_FPDFAnnot_GetFormFieldValue(FPDF_FORMHANDLE hH
     if (!guard.admitted()) return {};
     try {
         return FPDFAnnot_GetFormFieldValue(hHandle, annot, buffer, buflen);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
+JPDF_API FPDF_PAGEOBJECT jpdf_guard_FPDFAnnot_GetObject(FPDF_ANNOTATION annot, int index) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return FPDFAnnot_GetObject(annot, index);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
+JPDF_API int jpdf_guard_FPDFAnnot_GetObjectCount(FPDF_ANNOTATION annot) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return FPDFAnnot_GetObjectCount(annot);
     } catch (...) {
         jpdf::set_guard_refusal(JPDF_E_INTERNAL);
         return {};

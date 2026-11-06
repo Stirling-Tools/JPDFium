@@ -213,7 +213,8 @@ JPDFIUM_EXPORT int32_t jpdfium_text_get_chars(int64_t page, char** json);
 // int32 char_count, int32 font_count; char_count records of
 // {int32 index, int32 unicode, float x, float y, float w, float h, float font_size, int32 font_id};
 // then font_count entries of {int32 byte_length, UTF-8 bytes}. font_id indexes that table.
-// The caller owns *data and must free it with jpdfium_free_buffer.
+// The caller owns *data and must free it with jpdfium_free_buffer. Returns JPDFIUM_ERR_TOO_LARGE
+// when the result would exceed INT32_MAX bytes, the largest a Java byte[] can hold.
 JPDFIUM_EXPORT int32_t jpdfium_text_get_chars_packed(int64_t page, uint8_t** data, int64_t* len);
 JPDFIUM_EXPORT int32_t jpdfium_text_find(int64_t page, const char* query, char** json);
 JPDFIUM_EXPORT void jpdfium_free_string(char* str) JPDFIUM_NOEXCEPT;
@@ -232,6 +233,11 @@ JPDFIUM_EXPORT int32_t jpdfium_crop_remove_content(int64_t page, float x, float 
 // content (AUTO).
 JPDFIUM_EXPORT int32_t jpdfium_crop_remove_content_ex(int64_t page, float x, float y, float w,
                                                       float h, float margin) JPDFIUM_NOEXCEPT;
+JPDFIUM_EXPORT int32_t jpdfium_page_mark_redacted(int64_t page) JPDFIUM_NOEXCEPT;
+JPDFIUM_EXPORT int32_t jpdfium_page_mark_redaction_incomplete(int64_t page) JPDFIUM_NOEXCEPT;
+// Clear the strict-crop failure marker after a full strict-crop audit passes.
+// Other unresolved redaction areas on the page are preserved.
+JPDFIUM_EXPORT int32_t jpdfium_page_clear_strict_crop_incomplete(int64_t page) JPDFIUM_NOEXCEPT;
 // Content redaction. These entry points mutate the page content stream, so a
 // failure that already mutated (JPDFIUM_ERR_REDACT_INCOMPLETE) leaves part of the
 // original content in place: while such an incomplete redaction is pending, every
@@ -619,6 +625,22 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_set_docinfo_file(const char* in_path, const 
                                                      const char* const* keys,
                                                      const char* const* values, int32_t count,
                                                      const char* password);
+
+// Rewrite a file with an exact PDF version and no catalog /Version override.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_force_version_file(const char* in_path, const char* out_path,
+                                                       const char* version);
+
+// Rewrite a PDF with an exact base version and no catalog /Version override in memory.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_force_version(const uint8_t* input, int64_t inputLen,
+                                                  const char* version, uint8_t** output,
+                                                  int64_t* outputLen);
+
+// Replace the stream behind a matching /BaseFont font descriptor.
+// Caller frees *output with jpdfium_free_buffer.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_replace_font_stream(const uint8_t* input, int64_t inputLen,
+                                                        const char* baseFont,
+                                                        const uint8_t* fontData, int64_t fontLen,
+                                                        uint8_t** output, int64_t* outputLen);
 
 // In-process qpdf structural sanitization (FFM, no CLI).
 // Scrubs metadata/info/structure, JavaScript actions, embedded files, AcroForm

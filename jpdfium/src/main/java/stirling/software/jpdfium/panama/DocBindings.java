@@ -18,6 +18,10 @@ public final class DocBindings {
         return Symbols.downcall(name, desc);
     }
 
+    private static MethodHandle downcallOptional(String name, FunctionDescriptor desc) {
+        return Symbols.downcallOptional(name, desc);
+    }
+
     public static final MethodHandle FPDF_GetMetaText = downcall("FPDF_GetMetaText",
             FunctionDescriptor.of(JAVA_LONG, ADDRESS, ADDRESS, ADDRESS, JAVA_LONG));
 
@@ -43,6 +47,24 @@ public final class DocBindings {
     /** Close a raw FPDF_DOCUMENT handle (mirrors FPDF_CloseDocument). */
     public static final MethodHandle FPDF_CloseDocument = downcall("FPDF_CloseDocument",
             FunctionDescriptor.ofVoid(ADDRESS));
+
+    /** Set a document information metadata value (EmbedPDF extension). */
+    public static final MethodHandle EPDF_SetMetaText = downcallOptional("EPDF_SetMetaText",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
+
+    /** Trapped status enum values matching FPDF_TRAPPED_STATUS. */
+    public static final int PDFTRAPPED_NOTSET = 0;
+    public static final int PDFTRAPPED_TRUE = 1;
+    public static final int PDFTRAPPED_FALSE = 2;
+    public static final int PDFTRAPPED_UNKNOWN = 3;
+
+    /** Get the document /Trapped status (EmbedPDF extension). */
+    public static final MethodHandle EPDF_GetMetaTrapped = downcallOptional("EPDF_GetMetaTrapped",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS));
+
+    /** Set the document /Trapped status (EmbedPDF extension). */
+    public static final MethodHandle EPDF_SetMetaTrapped = downcallOptional("EPDF_SetMetaTrapped",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
 
     /** Get the PDF file version (e.g. 14 for PDF 1.4). Returns 1 on success. */
     public static final MethodHandle FPDF_GetFileVersion = downcall("FPDF_GetFileVersion",

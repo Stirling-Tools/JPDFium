@@ -269,9 +269,6 @@ public final class OutputTransaction implements AutoCloseable {
             publishDurableResolved(staging, target);
             return;
         }
-        // Permissions are part of the publication contract even without
-        // durability: a plain rename would expose the owner-only staging mode.
-        applyDestinationPermissions(staging, target);
         moveIntoPlace(staging, target);
     }
 
@@ -305,7 +302,9 @@ public final class OutputTransaction implements AutoCloseable {
                 throw new IOException("empty or oversized staging for " + targetPath);
             }
             Path target = resolveSymlinks(targetPath.toAbsolutePath());
-            applyDestinationPermissions(staging, target);
+            if (durable) {
+                applyDestinationPermissions(staging, target);
+            }
             resolved.add(target);
         }
         if (durable) {

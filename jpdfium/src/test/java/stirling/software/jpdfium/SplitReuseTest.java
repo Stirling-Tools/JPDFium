@@ -196,6 +196,12 @@ class SplitReuseTest {
                         assertEquals(b.extractText(), a.extractText(), "page " + i);
                     }
                 }
+                int[] picked = {3, 5, 7};
+                for (int i = 0; i < picked.length; i++) {
+                    try (PdfPage a = pages.page(i); PdfPage b = doc.page(picked[i])) {
+                        assertEquals(b.extractText(), a.extractText(), "picked page " + picked[i]);
+                    }
+                }
             }
             assertEquals(1, PdfSplit.COUNTERS.extractSerializations.get(),
                     "only the reference extract may snapshot once the caller vouches for the file");
