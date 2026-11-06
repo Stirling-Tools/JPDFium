@@ -140,6 +140,19 @@ class PdfFontEmbedderTest {
     }
 
     @Test
+    void blankNormalizedFontNameIsRejected() {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
+        byte[] pdf = new byte[] {1};
+        byte[] font = new byte[] {1, 2, 3};
+        for (String name : new String[] {"/", " / ", "  "}) {
+            IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+                    () -> PdfFontEmbedder.embed(pdf, Map.of(name, font)),
+                    "blank font name must be rejected before native work: '" + name + "'");
+            assertTrue(failure.getMessage().contains("must not be empty"), failure.getMessage());
+        }
+    }
+
+    @Test
     void missingFontDescriptorFailsInsteadOfReturningTheInput() throws Exception {
         assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
         Path source = Path.of(PdfFontEmbedderTest.class.getResource("/pdfs/general/minimal.pdf")
@@ -229,6 +242,14 @@ class PdfFontEmbedderTest {
         byte[] outBytes = PdfXConverter.applyMetadata(input, options);
         boolean verified1 = false;
         try (PDDocument pdf = Loader.loadPDF(outBytes)) {
+            assertNotNull(pdf.getDocumentCatalog().getMetadata(),
+                    "XMP metadata must survive font replacement");
+            String xmp = new String(pdf.getDocumentCatalog().getMetadata().toByteArray(),
+                    java.nio.charset.StandardCharsets.UTF_8);
+            assertTrue(xmp.contains("Memory Font Data"),
+                    "XMP title must survive font replacement");
+            assertFalse(pdf.getDocumentCatalog().getOutputIntents().isEmpty(),
+                    "output intent must survive font replacement");
             PDResources resources = pdf.getPage(0).getResources();
             for (COSName name : resources.getFontNames()) {
                 PDFont f = resources.getFont(name);
@@ -248,6 +269,14 @@ class PdfFontEmbedderTest {
                 PdfDocument resDoc = PdfXConverter.applyMetadata(srcDoc, options)) {
             byte[] outDocBytes = resDoc.saveBytes();
             try (PDDocument pdf = Loader.loadPDF(outDocBytes)) {
+                assertNotNull(pdf.getDocumentCatalog().getMetadata(),
+                        "XMP metadata must survive font replacement on PdfDocument overload");
+                String xmp = new String(pdf.getDocumentCatalog().getMetadata().toByteArray(),
+                        java.nio.charset.StandardCharsets.UTF_8);
+                assertTrue(xmp.contains("Memory Font Data"),
+                        "XMP title must survive font replacement on PdfDocument overload");
+                assertFalse(pdf.getDocumentCatalog().getOutputIntents().isEmpty(),
+                        "output intent must survive font replacement on PdfDocument overload");
                 PDResources resources = pdf.getPage(0).getResources();
                 for (COSName name : resources.getFontNames()) {
                     PDFont f = resources.getFont(name);

@@ -21,9 +21,13 @@ import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.WeakHashMap;
 
 /**
  * Page geometry operations: crop, rotate, resize, and box manipulation.
@@ -50,6 +54,15 @@ public final class PdfPageGeometry {
      * crop. Words and objects that straddle the crop edge survive whole.
      */
     public static final float AUTO_CONTENT_MARGIN = 0.0f;
+
+    /**
+     * Crop rectangles whose strict audit failed, keyed by document and page.
+     * A page-wide native marker cannot tell which rectangle failed, so a
+     * later successful crop may only clear it once every failed rectangle it
+     * covers has been resolved.
+     */
+    private static final Map<PdfDocument, Map<Integer, List<Rect>>> STRICT_CROP_FAILURES =
+            Collections.synchronizedMap(new WeakHashMap<>());
 
     private PdfPageGeometry() {}
 
@@ -152,7 +165,17 @@ public final class PdfPageGeometry {
      */
     public static void cropAndRemoveContentStrict(PdfDocument doc, int pageIndex, Rect rect) {
         requireValidCrop(rect);
-        removeBoundaryCrossingText(doc, pageIndex, rect);
+        if (!JpdfiumLib.isStrictCropIncompleteSupported()) {
+            throw new UnsupportedOperationException(
+                    "strict crop requires both jpdfium_page_mark_redaction_incomplete and "
+                            + "jpdfium_page_clear_strict_crop_incomplete");
+        }
+        try {
+            removeBoundaryCrossingText(doc, pageIndex, rect);
+        } catch (RuntimeException failure) {
+            recordStrictCropFailure(doc, pageIndex, rect);
+            throw failure;
+        }
         cropAndRemoveContent(doc, pageIndex, rect);
 
         // Strict audit: verify no non-whitespace text survived outside or across the crop edge
@@ -167,6 +190,7 @@ public final class PdfPageGeometry {
                     && ch.x() + ch.width() <= rect.x() + rect.width() + eps
                     && ch.y() + ch.height() <= rect.y() + rect.height() + eps;
             if (!fullyInside) {
+                recordStrictCropFailure(doc, pageIndex, rect);
                 try (PdfPage page = doc.page(pageIndex)) {
                     page.markRedactionIncomplete();
                 }
@@ -175,11 +199,67 @@ public final class PdfPageGeometry {
             }
         }
 
-        // The full strict-crop audit passed, so a failure recorded by an earlier
-        // attempt on this page no longer applies. Other incomplete redaction
-        // areas on the page stay recorded.
-        try (PdfPage page = doc.page(pageIndex)) {
-            page.clearRedactionIncomplete();
+        // The full strict-crop audit passed, so failures from earlier attempts
+        // that this rectangle now covers are resolved. Other failed rectangles
+        // and other incomplete redaction areas on the page stay recorded.
+        if (clearResolvedStrictCropFailures(doc, pageIndex, rect)) {
+            try (PdfPage page = doc.page(pageIndex)) {
+                page.clearRedactionIncomplete();
+            }
+        }
+    }
+
+    static void recordStrictCropFailure(PdfDocument doc, int pageIndex, Rect rect) {
+        synchronized (STRICT_CROP_FAILURES) {
+            STRICT_CROP_FAILURES
+                    .computeIfAbsent(doc, ignored -> new HashMap<>())
+                    .computeIfAbsent(pageIndex, ignored -> new ArrayList<>())
+                    .add(rect);
+        }
+    }
+
+    /**
+     * Remove failed rectangles covered by {@code crop}. Returns true when the
+     * page has no unresolved strict-crop failures left, so the page-wide
+     * marker may be cleared.
+     */
+    static boolean clearResolvedStrictCropFailures(
+            PdfDocument doc, int pageIndex, Rect crop) {
+        synchronized (STRICT_CROP_FAILURES) {
+            Map<Integer, List<Rect>> pages = STRICT_CROP_FAILURES.get(doc);
+            if (pages == null) return true;
+            List<Rect> failures = pages.get(pageIndex);
+            if (failures == null || failures.isEmpty()) return true;
+            failures.removeIf(failure -> contains(crop, failure));
+            if (!failures.isEmpty()) return false;
+            pages.remove(pageIndex);
+            if (pages.isEmpty()) STRICT_CROP_FAILURES.remove(doc);
+            return true;
+        }
+    }
+
+    private static boolean contains(Rect outer, Rect inner) {
+        float eps = 0.5f;
+        return inner.x() >= outer.x() - eps
+                && inner.y() >= outer.y() - eps
+                && inner.x() + inner.width() <= outer.x() + outer.width() + eps
+                && inner.y() + inner.height() <= outer.y() + outer.height() + eps;
+    }
+
+    /** Test hook: whether a page still has unresolved strict-crop failures. */
+    static boolean hasUnresolvedStrictCropFailure(PdfDocument doc, int pageIndex) {
+        synchronized (STRICT_CROP_FAILURES) {
+            Map<Integer, List<Rect>> pages = STRICT_CROP_FAILURES.get(doc);
+            if (pages == null) return false;
+            List<Rect> failures = pages.get(pageIndex);
+            return failures != null && !failures.isEmpty();
+        }
+    }
+
+    /** Test hook: forget tracked strict-crop failures for a document. */
+    static void clearTrackedStrictCropFailures(PdfDocument doc) {
+        synchronized (STRICT_CROP_FAILURES) {
+            STRICT_CROP_FAILURES.remove(doc);
         }
     }
 

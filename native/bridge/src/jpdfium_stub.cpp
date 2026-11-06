@@ -887,7 +887,7 @@ int32_t jpdfium_page_mark_redaction_incomplete(int64_t page) noexcept {
     try {
         if (auto dit = g_page_doc.find(page); dit != g_page_doc.end()) {
             g_docs[dit->second].hasMutatedRedaction = true;
-            g_docs[dit->second].incompleteRedactionPages.insert(page);
+            g_docs[dit->second].incompleteRedactionPages.insert(g_page_idx.at(page));
         }
     } catch (...) {
         return JPDFIUM_ERR_NATIVE;
@@ -897,7 +897,7 @@ int32_t jpdfium_page_mark_redaction_incomplete(int64_t page) noexcept {
 int32_t jpdfium_page_clear_strict_crop_incomplete(int64_t page) noexcept {
     try {
         if (auto dit = g_page_doc.find(page); dit != g_page_doc.end()) {
-            g_docs[dit->second].incompleteRedactionPages.erase(page);
+            g_docs[dit->second].incompleteRedactionPages.erase(g_page_idx.at(page));
         }
     } catch (...) {
         return JPDFIUM_ERR_NATIVE;

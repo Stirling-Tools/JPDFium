@@ -1449,6 +1449,16 @@ public final class JpdfiumLib {
             Symbols.downcallOptional("jpdfium_page_clear_strict_crop_incomplete",
                     FunctionDescriptor.of(JAVA_INT, JAVA_LONG));
 
+    /**
+     * Whether this build can both arm and clear the strict-crop incomplete
+     * marker. Both symbols are required: a bridge that only exports the mark
+     * would leave the page unsavable after a later successful audit.
+     */
+    public static boolean isStrictCropIncompleteSupported() {
+        return jpdfium_page_mark_redaction_incomplete != null
+                && jpdfium_page_clear_strict_crop_incomplete != null;
+    }
+
     public static void pageClearRedactionIncomplete(long page) {
         // Clearing is only meaningful after this branch's marking API armed the
         // strict-crop state; older builds have nothing to clear.

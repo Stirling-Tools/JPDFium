@@ -62,6 +62,9 @@ public final class PdfFontEmbedder {
                 throw new IllegalArgumentException("font name and data must not be empty");
             }
             String existing = normalizeName(name);
+            if (existing.isBlank()) {
+                throw new IllegalArgumentException("font name and data must not be empty");
+            }
             byte[] previous = normalized.putIfAbsent(existing, data);
             if (previous != null && !Arrays.equals(previous, data)) {
                 throw new IllegalArgumentException(

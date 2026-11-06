@@ -1002,7 +1002,15 @@ std::string PdfDateToXmp(const std::string& pdf) {
     const int hour = number(8, 2);
     const int minute = number(10, 2);
     const int second = number(12, 2);
-    if (month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59 || second > 59) {
+    const bool leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    int monthDays = 31;
+    if (month == 2) {
+        monthDays = leap ? 29 : 28;
+    } else if (month == 4 || month == 6 || month == 9 || month == 11) {
+        monthDays = 30;
+    }
+    if (month < 1 || month > 12 || day < 1 || day > monthDays || hour > 23 || minute > 59 ||
+        second > 59) {
         return {};
     }
 

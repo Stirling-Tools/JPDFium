@@ -1121,6 +1121,8 @@ ReplaceFontResult replaceFontStream(std::span<const uint8_t> input, std::string 
 
         // 5. Serialize output through thread-safe QPDFWriter
         QPDFWriter writer{*qpdf};
+        writer.setCompressStreams(false);
+        writer.setDecodeLevel(qpdf_dl_none);
         writer.setOutputMemory();
         WriterLock lock{-1};
         writer.write();
