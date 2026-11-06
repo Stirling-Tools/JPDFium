@@ -15,12 +15,16 @@ import java.lang.foreign.MemorySegment;
 import java.lang.invoke.MethodHandle;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -1033,9 +1037,7 @@ public final class QpdfLib {
             throw new JPDFiumException("qpdf extract interrupted while waiting for a job slot", e);
         }
         try (QpdfCall call = new QpdfCall()) {
-            for (Path out : stagingTargets) {
-                rejectAlias(List.of(input), out);
-            }
+            rejectAliasBatch(input, stagingTargets);
             return invokeExtractRangesFile(call, input, indexRanges, stagingTargets) == 0;
         } catch (Throwable t) {
             NativeRuntime.rethrowFatal(t);
@@ -1307,6 +1309,9 @@ public final class QpdfLib {
 
     private static void rejectAlias(List<Path> inputs, Path output) throws IOException {
         Path absOut = output.toAbsolutePath().normalize();
+        // A target that does not exist cannot alias an input. Checking this
+        // first turns the common "new output" case into zero isSameFile stats.
+        if (!Files.exists(absOut, LinkOption.NOFOLLOW_LINKS)) return;
         for (Path in : inputs) {
             if (in == null) continue;
             Path absIn = in.toAbsolutePath().normalize();
@@ -1322,6 +1327,98 @@ public final class QpdfLib {
                     continue;
                 }
                 throw e;
+            }
+        }
+    }
+
+    /**
+     * Upper bound for a directory listing used by alias checks. A directory
+     * with more entries (a shared temp dir can hold tens of thousands) is not
+     * worth materializing: the caller falls back to targeted existence checks.
+     */
+    private static final int MAX_ALIAS_LIST_ENTRIES = 256;
+
+    /**
+     * Batch alias check for many staging targets: normalize the input once and
+     * list the shared target directory once, so non-existent targets cost no
+     * per-target stat. Targets that exist (staging files usually do) still get
+     * the exact {@code isSameFile} check.
+     */
+    private static void rejectAliasBatch(Path input, List<Path> stagingTargets)
+            throws IOException {
+        Path absIn = input.toAbsolutePath().normalize();
+        Set<Path> existing = null;
+        Path parent = null;
+        for (Path target : stagingTargets) {
+            if (target == null) continue;
+            Path absTarget = target.toAbsolutePath().normalize();
+            Path targetParent = absTarget.getParent();
+            if (targetParent != null) {
+                if (parent == null) {
+                    parent = targetParent;
+                } else if (!parent.equals(targetParent)) {
+                    // Targets span several directories: skip the shared listing
+                    // and fall back to an existence check per target.
+                    existing = null;
+                    parent = null;
+                    break;
+                }
+            }
+        }
+        if (parent != null) {
+            try (var stream = Files.list(parent)) {
+                Set<Path> listed = new HashSet<>();
+                var iterator = stream.iterator();
+                while (iterator.hasNext()) {
+                    if (listed.size() >= MAX_ALIAS_LIST_ENTRIES) {
+                        listed = null;
+                        break;
+                    }
+                    listed.add(iterator.next().toAbsolutePath().normalize());
+                }
+                existing = listed;
+            } catch (IOException _) {
+                existing = null;
+            }
+        }
+        // The input size is needed for every target, so stat it once. -1 means
+        // the size could not be read, which simply disables the zero-byte fast
+        // path instead of failing the alias check.
+        long inSize = -1L;
+        try {
+            inSize = Files.size(absIn);
+        } catch (IOException _) {
+            // Fall through: every target gets the exact isSameFile check.
+        }
+        for (Path target : stagingTargets) {
+            if (target == null) continue;
+            Path absTarget = target.toAbsolutePath().normalize();
+            if (absIn.equals(absTarget)) {
+                throw new JPDFiumException("qpdf input and output must differ: " + target);
+            }
+            if (existing != null && !existing.contains(absTarget)) continue;
+            BasicFileAttributes attrs;
+            try {
+                attrs = Files.readAttributes(
+                        absTarget, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+            } catch (NoSuchFileException _) {
+                // Deleted (or never created) between listing and check: it
+                // cannot alias the input.
+                continue;
+            }
+            // The files just created before a batch extract are empty staging
+            // files. A zero-byte regular file cannot be the same file as a
+            // non-empty input PDF, so the isSameFile stat can be skipped for
+            // every one of them.
+            if (!attrs.isSymbolicLink() && inSize > 0 && attrs.size() == 0) {
+                continue;
+            }
+            try {
+                if (Files.isSameFile(absIn, absTarget)) {
+                    throw new JPDFiumException("qpdf input and output must differ: " + target);
+                }
+            } catch (NoSuchFileException _) {
+                // Deleted between stat and check: it cannot alias the input.
             }
         }
     }

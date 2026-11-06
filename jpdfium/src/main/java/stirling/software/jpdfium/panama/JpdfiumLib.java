@@ -30,6 +30,7 @@ import java.nio.channels.WritableByteChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.concurrent.locks.Lock;
@@ -590,6 +591,57 @@ public final class JpdfiumLib {
 
     public static void docSaveToFile(long doc, Path destination) {
         docSaveToFile(doc, destination, SaveOptions.fast());
+    }
+
+    /**
+     * Publish an untouched source file instead of re-serializing the open
+     * document. Used by {@link PdfDocument#saveTo(Path, SaveOptions)} when the
+     * live document still matches its open-time bytes, so a lazy temp-owned
+     * document can be saved without ever opening PDFium.
+     */
+    public static void copyFileToDestination(Path sourceFile, Path destination,
+            SaveOptions options) {
+        SaveOptions opts = options == null ? SaveOptions.fast() : options;
+        try (OutputTransaction tx = OutputTransaction.begin(destination, opts.durable())) {
+            Files.copy(sourceFile, tx.staging(), StandardCopyOption.REPLACE_EXISTING);
+            tx.publish(opts);
+        } catch (IOException e) {
+            throw new JPDFiumException("docSaveToFile failed", e);
+        }
+    }
+
+    /**
+     * Publish an untouched, not-yet-opened owned temp file by moving it onto
+     * {@code destination} instead of copying it.
+     *
+     * <p>Only valid when no native handle holds the file open (the caller checks
+     * {@code handle == 0}). The move is atomic and reuses the same validation
+     * and publication contract as {@link #copyFileToDestination}, so a split
+     * that writes thousands of parts avoids one temp creation, byte copy,
+     * rename and unlink per part.
+     *
+     * <p>When the move cannot be used (for example {@code EXDEV} because the
+     * destination is on another filesystem) it falls back to the copying path.
+     *
+     * @param ownedTempFile temp file owned by the document, closed in PDFium
+     * @param destination   caller-chosen destination
+     * @param options       save policy; null uses {@link SaveOptions#fast()}
+     * @return true when the temp file was moved (the caller no longer owns it),
+     *     false when it was copied and must still be deleted by the owner
+     */
+    public static boolean moveOrCopyTempToDestination(Path ownedTempFile, Path destination,
+            SaveOptions options) {
+        SaveOptions opts = options == null ? SaveOptions.fast() : options;
+        try {
+            OutputTransaction.validateStaged(ownedTempFile, opts);
+            OutputTransaction.publishStaged(ownedTempFile, destination, opts.durable());
+            return true;
+        } catch (IOException _) {
+            // Cross-filesystem move (EXDEV) or another staging failure: fall
+            // back to copy, leaving the owned temp file for its owner to delete.
+            copyFileToDestination(ownedTempFile, destination, opts);
+            return false;
+        }
     }
 
     /**

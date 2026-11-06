@@ -18,7 +18,6 @@ import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -221,8 +220,13 @@ public final class PdfImageConverter {
      */
     public static byte[] pageToBytes(PdfPage page, int dpi, ImageFormat format,
                                       int quality, boolean transparent) throws IOException {
-        BufferedImage image = pageToImage(page, dpi, transparent);
-        return imageToBytes(image, format, quality);
+        // Render + encode in one pass: PdfPage hands the native pixel view to
+        // the active codec (libvips when present), avoiding a BufferedImage
+        // round-trip and the heap copy that used to precede encoding. Clamp the
+        // DPI exactly like pageToImage so both APIs produce matching dimensions.
+        int effectiveDpi = effectiveDpi(page.size(), dpi);
+        return page.renderToBytes(effectiveDpi, format, quality,
+                transparent ? ColorType.ARGB : ColorType.RGB);
     }
 
     /**
@@ -312,11 +316,15 @@ public final class PdfImageConverter {
         // Decode through the active codec (libvips when jpdfium-vips is on the
         // classpath, which also adds HEIC/HEIF/AVIF/JXL/JPEG2000 inputs), with
         // ImageIO as the fallback.
-        List<byte[]> frames = new ArrayList<>(imagePaths.size());
-        for (Path path : imagePaths) {
-            frames.addAll(ImageCodecs.decodeFrames(path));
+        ImagePdfBuilder builder = new ImagePdfBuilder(options);
+        try {
+            for (Path path : imagePaths) {
+                for (byte[] frame : ImageCodecs.decodeFrames(path)) builder.addFrame(frame);
+            }
+            return builder.finish();
+        } finally {
+            builder.close();
         }
-        return embedRgbaImages(frames, options);
     }
 
     /**
@@ -332,11 +340,15 @@ public final class PdfImageConverter {
         if (imageBytes == null || imageBytes.isEmpty()) {
             throw new IllegalArgumentException("At least one image is required");
         }
-        List<byte[]> frames = new ArrayList<>(imageBytes.size());
-        for (byte[] data : imageBytes) {
-            frames.addAll(ImageCodecs.decodeFrames(data));
+        ImagePdfBuilder builder = new ImagePdfBuilder(options);
+        try {
+            for (byte[] data : imageBytes) {
+                for (byte[] frame : ImageCodecs.decodeFrames(data)) builder.addFrame(frame);
+            }
+            return builder.finish();
+        } finally {
+            builder.close();
         }
-        return embedRgbaImages(frames, options);
     }
 
     /**
@@ -352,11 +364,15 @@ public final class PdfImageConverter {
         if (streams == null || streams.isEmpty()) {
             throw new IllegalArgumentException("At least one stream is required");
         }
-        List<byte[]> frames = new ArrayList<>(streams.size());
-        for (InputStream in : streams) {
-            frames.addAll(ImageCodecs.decodeFrames(in));
+        ImagePdfBuilder builder = new ImagePdfBuilder(options);
+        try {
+            for (InputStream in : streams) {
+                for (byte[] frame : ImageCodecs.decodeFrames(in)) builder.addFrame(frame);
+            }
+            return builder.finish();
+        } finally {
+            builder.close();
         }
-        return embedRgbaImages(frames, options);
     }
 
     /**
@@ -377,31 +393,29 @@ public final class PdfImageConverter {
         if (images.isEmpty()) {
             throw new IllegalArgumentException("At least one image is required");
         }
-        List<byte[]> frames = new ArrayList<>(images.size());
-        for (BufferedImage image : images) {
-            frames.add(ImageCodecs.frameFromImage(image));
+        ImagePdfBuilder builder = new ImagePdfBuilder(options);
+        try {
+            for (BufferedImage image : images) builder.addFrame(ImageCodecs.frameFromImage(image));
+            return builder.finish();
+        } finally {
+            builder.close();
         }
-        return embedRgbaImages(frames, options);
     }
 
     /**
-     * Embed pre-decoded RGBA frames into a new PDF document. Each frame must
-     * carry the 8-byte {@code [width LE][height LE]} header the C bridge's
-     * {@code format=3} path reads, followed by {@code width*height*4} RGBA bytes
-     * (the layout {@link ImageCodecs#frameFromImage} produces). Shared by
-     * {@link #imagesToPdfInternal} and the optional {@code jpdfium-vips}
-     * {@code VipsImageToPdf} (libvips decode) so the page-size/position/embed
-     * logic lives in one place.
+     * Streaming image-to-PDF builder. Frames are appended as they are decoded,
+     * so a long image list does not keep every RGBA frame on the heap at once.
      */
-    public static PdfDocument embedRgbaImages(List<byte[]> rgbaFrames, ImageToPdfOptions options) {
-        if (rgbaFrames.isEmpty()) {
-            throw new IllegalArgumentException("At least one image is required");
-        }
-        try {
-            long docHandle = 0;
-            boolean first = true;
+    private static final class ImagePdfBuilder implements AutoCloseable {
+        private final ImageToPdfOptions options;
+        private long docHandle;
+        private boolean first = true;
 
-            for (byte[] rgba : rgbaFrames) {
+        ImagePdfBuilder(ImageToPdfOptions options) {
+            this.options = options;
+        }
+
+        void addFrame(byte[] rgba) {
                 if (rgba == null || rgba.length < 8) {
                     throw new IllegalArgumentException("Each RGBA frame must contain an 8-byte header");
                 }
@@ -436,21 +450,74 @@ public final class PdfImageConverter {
                 int position = toNativePosition(options.position());
                 int imageFormat = 3; // raw RGBA with 8-byte [width][height] header
 
-                if (first) {
-                    docHandle = JpdfiumLib.imageToPdf(
+                if (this.first) {
+                    this.docHandle = JpdfiumLib.imageToPdf(
                             rgba, pageWidth, pageHeight,
                             options.margin(), position, imageFormat);
-                    first = false;
+                    this.first = false;
                 } else {
                     JpdfiumLib.docAddImagePage(
-                            docHandle, rgba, pageWidth, pageHeight,
+                            this.docHandle, rgba, pageWidth, pageHeight,
                             options.margin(), position, imageFormat, -1);
                 }
-            }
+        }
 
-            return new PdfDocument(docHandle);
-        } catch (Exception e) {
-            throw new UncheckedIOException("Failed to create PDF from images", new IOException(e));
+        PdfDocument finish() {
+            if (first) throw new IllegalArgumentException("At least one image is required");
+            PdfDocument document = new PdfDocument(docHandle);
+            docHandle = 0;
+            return document;
+        }
+
+        @Override
+        public void close() {
+            if (docHandle != 0) {
+                JpdfiumLib.docClose(docHandle);
+                docHandle = 0;
+            }
+        }
+    }
+
+    /**
+     * Embed pre-decoded RGBA frames into a new PDF document. Each frame must
+     * carry the 8-byte {@code [width LE][height LE]} header the C bridge's
+     * {@code format=3} path reads, followed by {@code width*height*4} RGBA bytes
+     * (the layout {@link ImageCodecs#frameFromImage} produces). Shared by
+     * {@link #imagesToPdfInternal} and the optional {@code jpdfium-vips}
+     * {@code VipsImageToPdf} (libvips decode) so the page-size/position/embed
+     * logic lives in one place.
+     */
+    public static PdfDocument embedRgbaImages(List<byte[]> rgbaFrames, ImageToPdfOptions options) {
+        if (rgbaFrames.isEmpty()) {
+            throw new IllegalArgumentException("At least one image is required");
+        }
+        ImagePdfBuilder builder = new ImagePdfBuilder(options);
+        try {
+            for (byte[] rgba : rgbaFrames) builder.addFrame(rgba);
+            return builder.finish();
+        } finally {
+            builder.close();
+        }
+    }
+
+    /**
+     * Embed lazily decoded RGBA frame batches into a new PDF document. Each
+     * batch is consumed and appended before the next one is requested, so a
+     * caller that decodes one image at a time (for example
+     * {@code VipsImageToPdf}) holds only the current image's frames on the
+     * heap. The returned document is owned by the caller.
+     *
+     * @param frameBatches batches of 8-byte-header RGBA frames, in page order
+     * @param options      conversion options
+     * @return PDF document
+     */
+    public static PdfDocument embedRgbaFrameBatches(Iterable<List<byte[]>> frameBatches,
+                                                    ImageToPdfOptions options) {
+        try (ImagePdfBuilder builder = new ImagePdfBuilder(options)) {
+            for (List<byte[]> frames : frameBatches) {
+                for (byte[] rgba : frames) builder.addFrame(rgba);
+            }
+            return builder.finish();
         }
     }
 

@@ -51,9 +51,11 @@ public final class StorageOptions {
     public boolean reuseSourceFile() { return reuseSourceFile; }
 
     /**
-     * Whether a file written by {@code mergeFilesToFile} or {@code extractPageRangeToFile} is
-     * flushed to disk (fsync plus directory flush) when it is published. On by default; turn it
-     * off for outputs the caller reads back and deletes, such as files streamed into a response.
+     * Whether a published output must survive a crash (fsync of the staged file
+     * and its directory). Defaults to {@code true}. Set to {@code false} for
+     * rebuildable intermediates or throughput-first pipelines where the page cache
+     * already provides the required visibility; the file merge and range-extract
+     * outputs honour it.
      */
     public boolean durable() { return durable; }
 
@@ -139,6 +141,16 @@ public final class StorageOptions {
         /** Heap intermediates. Needed for password-protected inputs. */
         public Builder memory() {
             this.mode = Mode.MEMORY;
+            return this;
+        }
+
+        /**
+         * Require the published output to survive a crash (fsync of the file and
+         * directory). Defaults to true; disable only when the output is
+         * rebuildable or the caller owns durability.
+         */
+        public Builder durable(boolean durable) {
+            this.durable = durable;
             return this;
         }
 

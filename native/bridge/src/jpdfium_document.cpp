@@ -102,6 +102,7 @@ FILE* open_staging_sibling(const char* path, std::string& stagingOut) {
     return nullptr;
 }
 
+
 // Rename staging over the destination. Falls back to a non-atomic replace when
 // the platform refuses (a cross-device rename cannot happen for a sibling file,
 // but some filesystems reject rename onto an open target).

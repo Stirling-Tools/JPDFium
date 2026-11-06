@@ -12,7 +12,13 @@ import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Objects;
+import java.util.Set;
 
 /**
  * Transactional file publication for document saves.
@@ -159,8 +165,13 @@ public final class OutputTransaction implements AutoCloseable {
     }
 
     /**
-     * Fast path for internal staging files: an atomic rename with no permission mirroring and no
-     * fsync, since the same process reopens and deletes the file.
+     * Publish a staging file with an explicit durability policy.
+     *
+     * <p>Both modes follow an existing destination symlink and apply the destination's current
+     * permissions (or the platform default for a new file) before the atomic rename. With
+     * {@code durable=false} the file and directory fsync barriers are skipped; the atomic rename
+     * and permission handling are preserved. {@code durable=true} additionally flushes the file
+     * before the rename and the destination directory afterwards.
      */
     public static void publishStaged(Path staging, Path destination, boolean durable)
             throws IOException {
@@ -250,7 +261,81 @@ public final class OutputTransaction implements AutoCloseable {
             publishDurableResolved(staging, target);
             return;
         }
+        // Permissions are part of the publication contract even without
+        // durability: a plain rename would expose the owner-only staging mode.
+        applyDestinationPermissions(staging, target);
         moveIntoPlace(staging, target);
+    }
+
+    /**
+     * Publish several finished staging files with one directory flush after all renames.
+     *
+     * <p>With {@code durable=true} the per-file content flush runs before each rename and the
+     * unique destination directories are flushed once afterwards. With {@code durable=false} both
+     * barriers are skipped; validation, symlink resolution, permission handling and the atomic
+     * renames still run.
+     *
+     * @return whether a durable publication's directory flush was confirmed; always
+     *     {@link Durability#CONFIRMED} for a non-durable publication
+     */
+    public static Durability publishStagedBatch(List<Path> stagings, List<Path> targets,
+                                                boolean durable) throws IOException {
+        if (stagings == null || targets == null) {
+            throw new IllegalArgumentException("staging and target lists must not be null");
+        }
+        if (stagings.size() != targets.size()) {
+            throw new IllegalArgumentException("staging/target count mismatch");
+        }
+        List<Path> resolved = new ArrayList<>(targets.size());
+        for (int i = 0; i < stagings.size(); i++) {
+            Path staging = stagings.get(i);
+            Path targetPath = targets.get(i);
+            if (staging == null || targetPath == null) {
+                throw new IllegalArgumentException("staging and target entries must not be null");
+            }
+            if (!isPublishableStaging(staging)) {
+                throw new IOException("empty or oversized staging for " + targetPath);
+            }
+            Path target = resolveSymlinks(targetPath.toAbsolutePath());
+            applyDestinationPermissions(staging, target);
+            resolved.add(target);
+        }
+        if (durable) {
+            for (Path staging : stagings) {
+                fsyncFile(staging);
+            }
+        }
+        for (int i = 0; i < stagings.size(); i++) {
+            moveIntoPlace(stagings.get(i), resolved.get(i));
+        }
+        if (!durable) {
+            return Durability.CONFIRMED;
+        }
+        boolean confirmed = true;
+        for (Path dir : new LinkedHashSet<>(resolved.stream()
+                .map(Path::getParent).filter(Objects::nonNull).toList())) {
+            try (FileChannel dirChannel = FileChannel.open(dir, StandardOpenOption.READ)) {
+                dirChannel.force(true);
+            } catch (IOException | UnsupportedOperationException e) {
+                confirmed = false;
+            }
+        }
+        return confirmed ? Durability.CONFIRMED : Durability.UNCONFIRMED;
+    }
+
+    /**
+     * Publish several finished staging files with one directory flush after all renames. Kept as
+     * the explicit durable entry point; see {@link #publishStagedBatch(List, List, boolean)}.
+     */
+    public static Durability publishStagedBatchDurable(List<Path> stagings, List<Path> targets)
+            throws IOException {
+        return publishStagedBatch(stagings, targets, true);
+    }
+
+    private static void fsyncFile(Path staging) throws IOException {
+        try (FileChannel channel = FileChannel.open(staging, StandardOpenOption.WRITE)) {
+            channel.force(true);
+        }
     }
 
     private static Durability publishDurableResolved(Path staging, Path target) throws IOException {
@@ -258,9 +343,7 @@ public final class OutputTransaction implements AutoCloseable {
         // Flush file content before the rename: without this a power loss can
         // leave the destination with zero or partial bytes despite a
         // successful rename, breaking the no-partial-destination contract.
-        try (FileChannel channel = FileChannel.open(staging, StandardOpenOption.WRITE)) {
-            channel.force(true);
-        }
+        fsyncFile(staging);
         moveIntoPlace(staging, target);
         // Flush the directory entry so the rename itself survives a crash. The
         // destination already holds the new bytes here, so a failure is
@@ -340,32 +423,71 @@ public final class OutputTransaction implements AutoCloseable {
         throw new IOException("too many symbolic links resolving " + destination);
     }
 
+    /**
+     * The process umask is global, so the default creation mode is learned once
+     * from a single probe file instead of creating and deleting a probe for
+     * every published output. {@code null} means POSIX permissions are
+     * unavailable.
+     */
+    private static final Set<PosixFilePermission> DEFAULT_CREATE_PERMS =
+            probeDefaultCreatePermissions();
+
+    private static Set<PosixFilePermission> probeDefaultCreatePermissions() {
+        Path probe = null;
+        try {
+            Path dir = Path.of(System.getProperty("java.io.tmpdir", "."));
+            String name = ".jpdfium-umask-probe-"
+                    + ProcessHandle.current().pid() + "-" + System.nanoTime();
+            probe = dir.resolve(name);
+            Files.createFile(probe);
+            return Set.copyOf(Files.getPosixFilePermissions(probe));
+        } catch (UnsupportedOperationException | IOException _) {
+            return null;
+        } finally {
+            deleteQuietly(probe);
+        }
+    }
+
+    /**
+     * Apply the platform's default file-creation permissions (the {@code 0666} mode masked by the
+     * process umask) to an already-created file.
+     *
+     * <p>Native writers such as the qpdf batch extractor create their output with
+     * {@code rw-------}. A caller that writes straight to the final path (no staging rename) must
+     * normalise that afterwards so the result matches a plain {@link Files#write} destination.
+     * Non-POSIX platforms and unsupported permission updates are a no-op.
+     *
+     * @param target existing file to normalise
+     * @throws IOException when the permissions cannot be applied; callers that treat permissions
+     *     as best-effort may catch it
+     */
+    public static void applyDefaultCreatePermissions(Path target) throws IOException {
+        if (target == null || DEFAULT_CREATE_PERMS == null) return;
+        try {
+            Files.setPosixFilePermissions(target, DEFAULT_CREATE_PERMS);
+        } catch (UnsupportedOperationException _) {
+            // Non-POSIX: Windows inherits the directory ACL; nothing to do.
+        }
+    }
+
     private static void applyDestinationPermissions(Path staging, Path target) {
         try {
+            // Existence is part of the normal case (a split writes hundreds of
+            // brand-new parts), so probe instead of letting getPosixFilePermissions
+            // allocate and throw NoSuchFileException for every one of them.
             if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
-                Files.setPosixFilePermissions(staging, Files.getPosixFilePermissions(target));
-                return;
+                Files.setPosixFilePermissions(
+                        staging, Files.getPosixFilePermissions(target, LinkOption.NOFOLLOW_LINKS));
+            } else if (DEFAULT_CREATE_PERMS != null) {
+                // No destination yet, so mirror what a direct Files.write would
+                // create: 0666 masked by the process umask, cached at class load.
+                Files.setPosixFilePermissions(staging, DEFAULT_CREATE_PERMS);
             }
-            // No destination yet, so mirror what a direct Files.write would
-            // create: 0666 masked by the process umask. createFile applies the
-            // umask (createTempFile does not - it always forces owner-only), so
-            // it is the only way to learn the effective default. The probe name
-            // derives from the already-unique staging name.
-            Path parent = staging.getParent();
-            if (parent == null) return;
-            Path probe = parent.resolve(staging.getFileName() + ".perm");
-            Files.createFile(probe);
-            try {
-                Files.setPosixFilePermissions(staging, Files.getPosixFilePermissions(probe));
-            } finally {
-                Files.deleteIfExists(probe);
-            }
-        } catch (UnsupportedOperationException _) {
+        } catch (UnsupportedOperationException | IOException _) {
             // Non-POSIX: a move keeps the file, and Windows inherits the
-            // destination directory's ACL, so there is nothing to copy.
-        } catch (IOException _) {
-            // Permissions are best effort: the bytes are already correct and a
-            // stricter mode is safer than failing the publication.
+            // destination directory's ACL, so there is nothing to copy. Other
+            // I/O failures are best effort: a stricter mode is safer than
+            // failing the publication.
         }
     }
 

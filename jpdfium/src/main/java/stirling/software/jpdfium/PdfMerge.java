@@ -42,8 +42,8 @@ public final class PdfMerge {
     private static final System.Logger LOG = System.getLogger(PdfMerge.class.getName());
 
     /**
-     * Publish a staging file this class owns, reporting a publication that
-     * landed without a confirmed directory sync instead of assuming durability.
+     * Publish a staging file with the caller's durability policy. A non-durable
+     * publish is still an atomic rename; only the fsync barriers are skipped.
      */
     private static void publishStagedFile(Path staged, Path output, boolean durable)
             throws IOException {
@@ -381,6 +381,14 @@ public final class PdfMerge {
      * Merge files straight to an output file with explicit storage control.
      * Existing output is replaced only after the merge succeeds. FILE mode
      * fails loudly when the native file-backed merge is unavailable or fails.
+     *
+     * <p>Use {@link StorageOptions.Builder#durable(boolean)} to choose the
+     * publish barrier. The default is durable (fsync of the staged file and
+     * directory); rebuildable outputs can opt out and keep the atomic rename.
+     *
+     * @param paths file paths to merge in order
+     * @param output destination PDF file path
+     * @param options storage and durability policy
      */
     public static void mergeFilesToFile(List<Path> paths, Path output, StorageOptions options) throws IOException {
         if (paths.isEmpty()) throw new IllegalArgumentException("At least one file path is required");

@@ -1205,7 +1205,16 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_ranges_file(
         // caller must guarantee rangeOffsets[rangeCount] == the flat array length.
         for (int32_t r = 0; r < rangeCount; ++r) {
             if (rangeOffsets[r] < 0 || rangeOffsets[r + 1] < rangeOffsets[r]) return -1;
+            // Validate every page index before any output file is opened: a
+            // bad index must fail here, not after earlier ranges are on disk.
+            for (int32_t i = rangeOffsets[r]; i < rangeOffsets[r + 1]; ++i) {
+                const int32_t idx = pageIndices[i];
+                if (idx < 0 || idx >= totalPages) return -1;
+            }
         }
+        // One IO buffer for every output instead of letting libc malloc/free a
+        // 256 KiB buffer per range (thousands of times on large splits).
+        std::vector<char> ioBuf(kQpdfIoBufferBytes);
         for (int32_t r = 0; r < rangeCount; ++r) {
             const int32_t begin = rangeOffsets[r];
             const int32_t end = rangeOffsets[r + 1];
@@ -1222,13 +1231,13 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_ranges_file(
                 std::fprintf(stderr, "jpdfium qpdf ranges: cannot open output %s\n", outPaths[r]);
                 return -1;
             }
+            setvbuf(out, ioBuf.data(), _IOFBF, ioBuf.size());
             bool writerOwnsFile = false;
             try {
                 QPDFWriter w{*dest};
                 w.setOutputFile("jpdfium-out", out, true);
                 writerOwnsFile = true;
-                w.setObjectStreamMode(qpdf_o_generate);
-                w.setCompressStreams(true);
+                configureAssembledWriter(w);
                 w.write();
             } catch (...) {
                 if (!writerOwnsFile) std::fclose(out);
