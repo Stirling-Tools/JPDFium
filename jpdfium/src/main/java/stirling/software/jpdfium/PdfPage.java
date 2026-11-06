@@ -32,6 +32,8 @@ import stirling.software.jpdfium.panama.JpdfiumLib;
 import stirling.software.jpdfium.panama.PdfiumBuffers;
 import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.TextPageBindings;
+import stirling.software.jpdfium.text.PdfTextExtractor;
+import stirling.software.jpdfium.text.TextChar;
 import stirling.software.jpdfium.transform.PdfPageBoxes;
 
 import java.awt.image.BufferedImage;
@@ -866,6 +868,34 @@ public final class PdfPage implements AutoCloseable {
     public byte[] extractTextCharsPacked() {
         ensureOpen();
         return JpdfiumLib.textGetCharsPacked(handle);
+    }
+
+    /**
+     * Parses the packed character layout directly from the native buffer, avoiding the
+     * page-sized heap copy made by {@link #extractTextCharsPacked()}.
+     *
+     * @param parser consumer that must not retain the supplied native segment
+     * @param <T> parsed result type
+     * @return parser result, or {@code null} when the native bundle predates the packed layout
+     */
+    public <T> T extractTextCharsParsed(JpdfiumLib.PackedCharsParser<T> parser) {
+        ensureOpen();
+        return JpdfiumLib.textGetCharsPackedParsed(handle, parser);
+    }
+
+    /**
+     * Structured characters of this page, parsed straight from native memory.
+     *
+     * <p>Falls back to the legacy heap copy when the loaded native bundle predates the
+     * packed character layout.
+     *
+     * @return characters in page order
+     */
+    public List<TextChar> extractTextChars() {
+        List<TextChar> chars = extractTextCharsParsed(PdfTextExtractor::parseCharsPacked);
+        if (chars != null) return chars;
+        byte[] packed = extractTextCharsPacked();
+        return packed != null ? PdfTextExtractor.parseCharsPacked(packed) : List.of();
     }
 
     /** Returns raw character data as JSON: [{i,u,x,y,w,h,font,size}, ...] */

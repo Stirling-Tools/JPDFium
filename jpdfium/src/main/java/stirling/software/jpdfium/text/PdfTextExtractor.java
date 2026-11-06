@@ -3,6 +3,8 @@ package stirling.software.jpdfium.text;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
 
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
@@ -36,6 +38,12 @@ public final class PdfTextExtractor {
 
     private static final int PACKED_RECORD_BYTES = 32;
 
+    // The bridge emits the packed layout little-endian; records need not be aligned.
+    private static final ValueLayout.OfInt PACKED_I32 =
+            ValueLayout.JAVA_INT_UNALIGNED.withOrder(ByteOrder.LITTLE_ENDIAN);
+    private static final ValueLayout.OfFloat PACKED_F32 =
+            ValueLayout.JAVA_FLOAT_UNALIGNED.withOrder(ByteOrder.LITTLE_ENDIAN);
+
     private PdfTextExtractor() {}
 
     /**
@@ -47,10 +55,11 @@ public final class PdfTextExtractor {
      */
     public static PageText extractPage(PdfDocument doc, int pageIndex) {
         try (PdfPage page = doc.page(pageIndex)) {
-            byte[] packed = page.extractTextCharsPacked();
-            List<TextChar> chars = packed != null
-                    ? parseCharsPacked(packed)
-                    : parseCharsJson(page.extractTextJson());
+            // Parse from the native buffer while it is alive: no page-sized byte[] copy.
+            List<TextChar> chars = page.extractTextCharsParsed(PdfTextExtractor::parseCharsPacked);
+            if (chars == null) {
+                chars = parseCharsJson(page.extractTextJson());
+            }
             List<TextLine> lines = buildLines(chars);
             return new PageText(pageIndex, lines, chars);
         }
@@ -94,7 +103,7 @@ public final class PdfTextExtractor {
      * handed to {@code Integer.parseInt}/{@code Float.parseFloat} as substrings.
      * Malformed objects are skipped wholesale.
      */
-    static List<TextChar> parseCharsPacked(byte[] packed) {
+    public static List<TextChar> parseCharsPacked(byte[] packed) {
         ByteBuffer buf = ByteBuffer.wrap(packed).order(ByteOrder.LITTLE_ENDIAN);
         int count = buf.getInt();
         int fontCount = buf.getInt();
@@ -118,6 +127,41 @@ public final class PdfTextExtractor {
             float size = buf.getFloat();
             int fontId = buf.getInt();
             chars.add(new TextChar(index, unicode, x, y, w, h, fonts[fontId], size));
+        }
+        return chars;
+    }
+
+    /**
+     * Parses the packed layout directly from native memory. The returned {@link TextChar}
+     * objects copy every field, so {@code data} may be freed as soon as this returns.
+     */
+    public static List<TextChar> parseCharsPacked(MemorySegment data, long length) {
+        if (length < 8) return List.of();
+        int count = data.get(PACKED_I32, 0);
+        int fontCount = data.get(PACKED_I32, 4);
+        long fontPos = 8L + (long) count * PACKED_RECORD_BYTES;
+        String[] fonts = new String[fontCount];
+        for (int f = 0; f < fontCount; f++) {
+            int len = data.get(PACKED_I32, fontPos);
+            fontPos += 4;
+            byte[] name = new byte[len];
+            MemorySegment.copy(data, ValueLayout.JAVA_BYTE, fontPos, name, 0, len);
+            fonts[f] = new String(name, StandardCharsets.UTF_8);
+            fontPos += len;
+        }
+        List<TextChar> chars = new ArrayList<>(count);
+        long p = 8;
+        for (int c = 0; c < count; c++) {
+            int index = data.get(PACKED_I32, p);
+            int unicode = data.get(PACKED_I32, p + 4);
+            float x = data.get(PACKED_F32, p + 8);
+            float y = data.get(PACKED_F32, p + 12);
+            float w = data.get(PACKED_F32, p + 16);
+            float h = data.get(PACKED_F32, p + 20);
+            float size = data.get(PACKED_F32, p + 24);
+            int fontId = data.get(PACKED_I32, p + 28);
+            chars.add(new TextChar(index, unicode, x, y, w, h, fonts[fontId], size));
+            p += PACKED_RECORD_BYTES;
         }
         return chars;
     }

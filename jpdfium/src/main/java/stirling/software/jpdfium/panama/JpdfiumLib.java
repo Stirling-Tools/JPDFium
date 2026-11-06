@@ -1580,6 +1580,50 @@ public final class JpdfiumLib {
         });
     }
 
+    /** Parses a packed character buffer directly from native memory before it is freed. */
+    @FunctionalInterface
+    public interface PackedCharsParser<T> {
+        /**
+         * @param data native packed buffer, valid only for the duration of the call
+         * @param length number of valid bytes in {@code data}
+         * @return parsed value, which must not retain {@code data}
+         */
+        T parse(MemorySegment data, long length);
+    }
+
+    /**
+     * Characters of a page parsed straight from the native packed buffer.
+     *
+     * <p>This is the allocation-free counterpart of {@link #textGetCharsPacked(long)}: the
+     * bridge buffer is handed to {@code parser} inside the native call's lifetime and is
+     * freed immediately afterwards, so no page-sized heap {@code byte[]} is created.
+     *
+     * @return the parser result, or {@code null} when the loaded bridge predates the packed layout
+     */
+    public static <T> T textGetCharsPackedParsed(long page, PackedCharsParser<T> parser) {
+        if (TEXT_GET_CHARS_PACKED_HANDLE == null) return null;
+        return PdfiumRuntime.execute(() -> {
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment dataOut = a.allocate(ADDRESS);
+                MemorySegment lenOut = a.allocate(JAVA_LONG);
+                check((int) TEXT_GET_CHARS_PACKED_HANDLE.invokeExact(page, dataOut, lenOut),
+                        "textGetCharsPackedParsed");
+                MemorySegment data = dataOut.get(ADDRESS, 0);
+                long len = lenOut.get(JAVA_LONG, 0);
+                try {
+                    return parser.parse(data.reinterpret(len), len);
+                } finally {
+                    JpdfiumH.jpdfium_free_buffer(data);
+                }
+            } catch (RuntimeException re) {
+                throw re;
+            } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
+                throw new JPDFiumException("textGetCharsPackedParsed failed", t);
+            }
+        });
+    }
+
     public static String textGetChars(long page) {
         return PdfiumRuntime.execute(() -> {
             check(JpdfiumH.jpdfium_text_get_chars(page, SCRATCH.get().addr), "textGetChars");
