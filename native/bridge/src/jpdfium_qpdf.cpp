@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <map>
 #include <memory>
 #include <set>
@@ -60,7 +61,9 @@ namespace {
 // after Java created it.
 static FILE* createOutputFile(const char* path) {
 #ifdef _WIN32
-    return std::fopen(path, "wb");
+    const auto* utf8 = reinterpret_cast<const char8_t*>(path);
+    std::filesystem::path p{std::u8string(utf8)};
+    return ::_wfopen(p.c_str(), L"wb");
 #else
     int fd = ::open(path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
     if (fd < 0) return nullptr;
@@ -792,7 +795,15 @@ bool applyDocInfo(QPDF& pdf, const char* const* keys, const char* const* values,
         std::string key = keys[i];
         if (key.front() != '/') key.insert(key.begin(), '/');
         if (values[i]) {
-            info.replaceKey(key, QPDFObjectHandle::newUnicodeString(values[i]));
+            if (key == "/Trapped") {
+                std::string val = values[i];
+                if (val.empty() || val.front() != '/') {
+                    val.insert(val.begin(), '/');
+                }
+                info.replaceKey(key, QPDFObjectHandle::newName(val));
+            } else {
+                info.replaceKey(key, QPDFObjectHandle::newUnicodeString(values[i]));
+            }
         } else {
             info.removeKey(key);
         }
@@ -858,6 +869,40 @@ int setDocInfoFile(const char* in_path, const char* out_path, const char* const*
         }
     } catch (std::exception const& e) {
         std::fprintf(stderr, "jpdfium qpdf docinfo file: %s\n", e.what());
+        return -1;
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
+    }
+}
+
+int forceVersionFile(const char* in_path, const char* out_path, const char* version) {
+    if (!in_path || !out_path || !version || !*version) return -1;
+    try {
+        auto pdf = QPDF::create();
+        pdf->processFile(in_path);
+        pdf->getRoot().removeKey("/Version");
+
+        FILE* out = createOutputFile(out_path);
+        if (!out) return -1;
+        bool writerOwnsFile = false;
+        try {
+            QPDFWriter writer{*pdf};
+            writer.setOutputFile("jpdfium-out", out, true);
+            writerOwnsFile = true;
+            writer.forcePDFVersion(version);
+            WriterLock lock{-1};
+            writer.write();
+            return 0;
+        } catch (std::exception const& e) {
+            std::fprintf(stderr, "jpdfium qpdf force version file: %s\n", e.what());
+            if (!writerOwnsFile) std::fclose(out);
+            return -1;
+        } catch (...) {
+            if (!writerOwnsFile) std::fclose(out);
+            return JPDFIUM_ERR_NATIVE;
+        }
+    } catch (std::exception const& e) {
+        std::fprintf(stderr, "jpdfium qpdf force version file: %s\n", e.what());
         return -1;
     } catch (...) {
         return JPDFIUM_ERR_NATIVE;
@@ -938,6 +983,46 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_optimize(const uint8_t* input, int64_t input
                                              int32_t streamDataMode, int32_t decodeLevel) {
     return jpdfium_qpdf_optimize_ex(input, inputLen, output, outputLen, flags, compressionLevel,
                                     objectStreamMode, streamDataMode, decodeLevel, -1);
+}
+
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_force_version_file(const char* in_path, const char* out_path,
+                                                       const char* version) {
+    try {
+        return forceVersionFile(in_path, out_path, version);
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
+    }
+}
+
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_force_version(const uint8_t* input, int64_t inputLen,
+                                                  const char* version, uint8_t** output,
+                                                  int64_t* outputLen) {
+    if (!input || inputLen <= 0 || !version || !*version || !output || !outputLen) return -1;
+    *output = nullptr;
+    *outputLen = 0;
+    try {
+        auto pdf = QPDF::create();
+        pdf->processMemoryFile("jpdfium-mem", reinterpret_cast<const char*>(input),
+                               static_cast<size_t>(inputLen));
+        pdf->getRoot().removeKey("/Version");
+        QPDFWriter writer{*pdf};
+        writer.setOutputMemory();
+        writer.forcePDFVersion(version);
+        WriterLock lock{-1};
+        writer.write();
+        auto buf = writer.getBufferSharedPointer();
+        if (!buf || buf->getSize() == 0) return -1;
+        *outputLen = static_cast<int64_t>(buf->getSize());
+        *output = static_cast<uint8_t*>(std::malloc(static_cast<size_t>(*outputLen)));
+        if (!*output) {
+            *outputLen = 0;
+            return -1;
+        }
+        std::memcpy(*output, buf->getBuffer(), static_cast<size_t>(*outputLen));
+        return 0;
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
+    }
 }
 
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_inspect(const uint8_t* input, int64_t inputLen,
