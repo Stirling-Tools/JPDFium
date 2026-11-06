@@ -16,6 +16,7 @@ import stirling.software.jpdfium.doc.PdfPageImporter;
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.model.SaveOptions;
 import stirling.software.jpdfium.model.StorageOptions;
+import stirling.software.jpdfium.panama.OutputTransaction;
 import stirling.software.jpdfium.panama.QpdfLib;
 
 /**
@@ -336,7 +337,7 @@ public final class PdfMerge {
             if (staged != null) {
                 try {
                     Files.copy(paths.getFirst(), staged, StandardCopyOption.REPLACE_EXISTING);
-                    Files.move(staged, output, StandardCopyOption.REPLACE_EXISTING);
+                    OutputTransaction.publishStaged(staged, output, options.durable());
                     staged = null;
                     return;
                 } finally {
@@ -361,9 +362,9 @@ public final class PdfMerge {
         Path staged = options.createStagingFile(output);
         try {
             try (PdfDocument merged = mergeFiles(paths, options)) {
-                merged.save(staged);
+                merged.saveTo(staged, SaveOptions.ephemeral());
             }
-            Files.move(staged, output, StandardCopyOption.REPLACE_EXISTING);
+            OutputTransaction.publishStaged(staged, output, options.durable());
             staged = null;
         } finally {
             deleteQuietly(staged);
@@ -385,8 +386,8 @@ public final class PdfMerge {
             return false;
         }
         try {
-            if (!QpdfLib.mergeFiles(paths, staged) || Files.size(staged) == 0) return false;
-            Files.move(staged, output, StandardCopyOption.REPLACE_EXISTING);
+            if (!QpdfLib.mergeFiles(paths, staged, false) || Files.size(staged) == 0) return false;
+            OutputTransaction.publishStaged(staged, output, options.durable());
             staged = null;
             return true;
         } finally {
