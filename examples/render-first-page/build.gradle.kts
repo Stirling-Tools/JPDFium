@@ -6,6 +6,9 @@ plugins {
 }
 
 repositories {
+    maven("https://maven.stirlingpdf.com") {
+        content { includeGroup("com.stirling") }
+    }
     mavenCentral()
 }
 

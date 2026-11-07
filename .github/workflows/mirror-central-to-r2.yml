@@ -1,0 +1,102 @@
+name: Copy Central releases to maven.stirlingpdf.com
+
+on:
+  workflow_dispatch:
+    inputs:
+      versions:
+        description: 'Versions to copy: all, or a list such as 1.2.0,1.3.0'
+        required: true
+        default: 'all'
+      latest:
+        description: 'With all, copy only this many of the newest versions (smoke needs 1.1.0 or newer)'
+        required: false
+        default: '5'
+      destination:
+        description: 'Bucket prefix to copy to, e.g. staging/mirror-test/. Empty is the live repo root.'
+        required: false
+        default: ''
+      smoke:
+        description: 'Also run the six-platform smoke against each copied version'
+        required: false
+        default: false
+        type: boolean
+      dryRun:
+        description: 'Only list what would be copied'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  copy:
+    name: Copy from Maven Central
+    runs-on: ubuntu-latest
+    environment: maven
+    concurrency:
+      group: stirling-maven
+      cancel-in-progress: false
+    outputs:
+      versions: ${{ steps.mirror.outputs.versions }}
+      url: ${{ steps.mirror.outputs.url }}
+    steps:
+      - name: Refuse smoke for releases older than its artifact set
+        if: ${{ inputs.smoke && inputs.versions != 'all' }}
+        env:
+          VERSIONS: ${{ inputs.versions }}
+        run: |
+          for v in $(echo "$VERSIONS" | tr -s ', ' '\n'); do
+            if [ "$(printf '%s\n1.1.0\n' "$v" | sort -V | head -1)" != 1.1.0 ]; then
+              echo "ERROR: smoke expects the jpdfium-vips modules added in 1.1.0; $v predates them. Copy it without smoke."
+              exit 1
+            fi
+          done
+
+      - id: mirror
+        uses: Stirling-Tools/maven-r2-publish/mirror@137b6b342d035155657660adf93da370b518ed8d # main
+        with:
+          group: com.stirling
+          artifact: jpdfium
+          versions: ${{ inputs.versions }}
+          latest: ${{ inputs.latest }}
+          destination: ${{ inputs.destination }}
+          dry-run: ${{ inputs.dryRun }}
+          endpoint: ${{ secrets.R2_ENDPOINT }}
+          access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          bucket: ${{ vars.R2_BUCKET || 'stirling-maven' }}
+
+  smoke:
+    name: Smoke ${{ matrix.version }} (${{ matrix.platform }})
+    needs: copy
+    if: ${{ inputs.smoke && !inputs.dryRun && needs.copy.outputs.versions != '[]' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ${{ fromJSON(needs.copy.outputs.versions) }}
+        platform: [linux-x64, linux-arm64, darwin-x64, darwin-arm64, windows-x64, windows-arm64]
+        include:
+          - { platform: linux-x64,     runner: ubuntu-24.04     }
+          - { platform: linux-arm64,   runner: ubuntu-24.04-arm }
+          - { platform: darwin-x64,    runner: macos-15-intel   }
+          - { platform: darwin-arm64,  runner: macos-15         }
+          - { platform: windows-x64,   runner: windows-latest   }
+          - { platform: windows-arm64, runner: windows-11-arm   }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+
+      - uses: actions/setup-java@816722acf8fd27c9d1e9ae6ee6085da07e0d44c1 # v5.7.0
+        with:
+          distribution: ${{ matrix.platform == 'windows-arm64' && 'microsoft' || 'temurin' }}
+          java-version: '25'
+
+      - name: Verify every artifact and run the smoke
+        shell: bash
+        env:
+          MODE: r2
+          R2_REPO_URL: ${{ needs.copy.outputs.url }}
+          VERSION: ${{ matrix.version }}
+          PLATFORM: ${{ matrix.platform }}
+        run: bash .github/scripts/verify-central.sh
