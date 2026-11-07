@@ -42,7 +42,7 @@ jobs:
       url: ${{ steps.mirror.outputs.url }}
     steps:
       - id: mirror
-        uses: Stirling-Tools/maven-r2-publish/mirror@0a5de1828b80dc12ff16023a2aadf6dd9a6faff4 # v1.0.0
+        uses: Stirling-Tools/maven-r2-publish/mirror@137b6b342d035155657660adf93da370b518ed8d # main
         with:
           group: com.stirling
           artifact: jpdfium

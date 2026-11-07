@@ -961,8 +961,6 @@ jobs:
     outputs:
       version: ${{ steps.v.outputs.version }}
       staging-url: ${{ steps.stage.outputs.staging-url }}
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
@@ -994,13 +992,6 @@ jobs:
           path: .artifacts
           pattern: natives-*
 
-      - name: Download all CLI binaries
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.1
-        continue-on-error: true  # CLI legs can fail independently; natives still publish
-        with:
-          path: .artifacts
-          pattern: cli-*
-
       - name: Flatten into native/dist/<platform>/
         run: |
           mkdir -p native/dist
@@ -1023,8 +1014,8 @@ jobs:
             REF="${GITHUB_REF_NAME}"
             VERSION="${REF#v}"
           fi
-          if [ -z "$VERSION" ]; then
-            echo "ERROR: could not resolve version"
+          if ! [[ "$VERSION" =~ ^[0-9A-Za-z._-]+$ ]]; then
+            echo "ERROR: '$VERSION' is not a valid release version"
             exit 1
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
@@ -1034,11 +1025,12 @@ jobs:
         env:
           GPG_SIGNING_KEY: ${{ secrets.GPG_SIGNING_KEY }}
           GPG_SIGNING_PASSWORD: ${{ secrets.GPG_SIGNING_PASSWORD }}
-        run: ./gradlew publishAllToR2Staging -Pjpdfium.version=${{ steps.v.outputs.version }} --no-daemon --stacktrace
+          VERSION: ${{ steps.v.outputs.version }}
+        run: ./gradlew publishAllToR2Staging "-Pjpdfium.version=$VERSION" --no-daemon --stacktrace
 
       - name: Stage on the Stirling Maven repo
         id: stage
-        uses: Stirling-Tools/maven-r2-publish/release@0a5de1828b80dc12ff16023a2aadf6dd9a6faff4 # v1.0.0
+        uses: Stirling-Tools/maven-r2-publish/release@137b6b342d035155657660adf93da370b518ed8d # main
         with:
           step: stage
           repo-dir: build/r2-repo
@@ -1053,42 +1045,23 @@ jobs:
           VERSION: ${{ steps.v.outputs.version }}
         run: ./gradlew publishToMavenLocal "-Pjpdfium.version=$VERSION" --no-daemon --stacktrace
 
-      - name: Attach CLI binaries to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/') && inputs.dryRun != true
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          TAG="${GITHUB_REF_NAME}"
-          mkdir -p dist/cli
-          # Download-artifact nests each artifact under .artifacts/cli-<platform>/.
-          for d in .artifacts/cli-*; do
-            [ -d "$d" ] || continue
-            cp -v "$d"/jpdfium-* dist/cli/ 2>/dev/null || true
-          done
-          if ls dist/cli/* >/dev/null 2>&1; then
-            gh release view "$TAG" >/dev/null 2>&1 || \
-              gh release create "$TAG" --title "JPDFium ${TAG#v}" --generate-notes
-            gh release upload "$TAG" dist/cli/* --clobber
-            echo "Attached CLI binaries to release $TAG:" >> $GITHUB_STEP_SUMMARY
-            ls -la dist/cli/ >> $GITHUB_STEP_SUMMARY
-          else
-            echo "No CLI binaries built for this release." >> $GITHUB_STEP_SUMMARY
-          fi
-
       - name: Summary
         env:
           VERSION: ${{ steps.v.outputs.version }}
+          STAGING_URL: ${{ steps.stage.outputs.staging-url }}
         run: |
-          echo "### Staged com.stirling:*:${{ steps.v.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "${{ steps.stage.outputs.staging-url }} - released to the root once every platform verifies." >> $GITHUB_STEP_SUMMARY
+          {
+            echo "### Staged com.stirling:*:$VERSION"
+            echo ""
+            echo "$STAGING_URL - released to the root once every platform verifies."
+          } >> "$GITHUB_STEP_SUMMARY"
 
 
   # ── Pre-release verification: every artifact in the staged deployment ──
   verify-staging:
     name: Verify staged artifacts (${{ matrix.platform }})
     needs: publish
-    if: inputs.dryRun != true && (startsWith(github.ref, 'refs/tags/') || inputs.version != '')
+    if: startsWith(github.ref, 'refs/tags/') || inputs.version != ''
     strategy:
       fail-fast: false
       matrix:
@@ -1108,26 +1081,12 @@ jobs:
           distribution: ${{ matrix.platform == 'windows-arm64' && 'microsoft' || 'temurin' }}
           java-version: '25'
 
-      - name: Resolve version
-        id: v
-        shell: bash
-        env:
-          INPUT_VERSION: ${{ inputs.version }}
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "$INPUT_VERSION" ]; then
-            VERSION="$INPUT_VERSION"
-          else
-            REF="${GITHUB_REF_NAME}"
-            VERSION="${REF#v}"
-          fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
       - name: Verify every staged artifact and run the smoke
         shell: bash
         env:
           MODE: r2
           R2_REPO_URL: ${{ needs.publish.outputs.staging-url }}
-          VERSION: ${{ steps.v.outputs.version }}
+          VERSION: ${{ needs.publish.outputs.version }}
           PLATFORM: ${{ matrix.platform }}
         run: bash .github/scripts/verify-central.sh
 
@@ -1143,7 +1102,7 @@ jobs:
       cancel-in-progress: false
     steps:
       - name: Release the verified staging set
-        uses: Stirling-Tools/maven-r2-publish/release@0a5de1828b80dc12ff16023a2aadf6dd9a6faff4 # v1.0.0
+        uses: Stirling-Tools/maven-r2-publish/release@137b6b342d035155657660adf93da370b518ed8d # main
         with:
           step: promote
           endpoint: ${{ secrets.R2_ENDPOINT }}
@@ -1151,11 +1110,52 @@ jobs:
           secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           bucket: ${{ vars.R2_BUCKET || 'stirling-maven' }}
 
+  attach-cli:
+    name: Attach CLI binaries to the GitHub release
+    needs: [publish, promote]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+
+      - name: Download all CLI binaries
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.1
+        continue-on-error: true  # CLI legs can fail independently; the release still ships
+        with:
+          path: .artifacts
+          pattern: cli-*
+
+      - name: Attach CLI binaries to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          mkdir -p dist/cli
+          # Download-artifact nests each artifact under .artifacts/cli-<platform>/.
+          for d in .artifacts/cli-*; do
+            [ -d "$d" ] || continue
+            cp -v "$d"/jpdfium-* dist/cli/ 2>/dev/null || true
+          done
+          if ls dist/cli/* >/dev/null 2>&1; then
+            gh release view "$TAG" >/dev/null 2>&1 || \
+              gh release create "$TAG" --title "JPDFium ${TAG#v}" --generate-notes
+            gh release upload "$TAG" dist/cli/* --clobber
+            echo "Attached CLI binaries to release $TAG:" >> "$GITHUB_STEP_SUMMARY"
+            ls -la dist/cli/ >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No CLI binaries built for this release." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
   publish-central:
     name: Publish to Maven Central
     needs: [publish, promote]
     runs-on: ubuntu-latest
     continue-on-error: true
+    concurrency:
+      group: central-portal
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
@@ -1246,12 +1246,12 @@ jobs:
   cleanup-staging:
     name: Delete the staging copy
     needs: [publish, verify-staging, promote]
-    if: ${{ always() && needs.publish.result == 'success' }}
+    if: ${{ always() && needs.publish.result == 'success' && needs.verify-staging.result != 'failure' && needs.promote.result != 'failure' }}
     runs-on: ubuntu-latest
     environment: maven
     steps:
       - name: Delete this run's staging copy
-        uses: Stirling-Tools/maven-r2-publish/release@0a5de1828b80dc12ff16023a2aadf6dd9a6faff4 # v1.0.0
+        uses: Stirling-Tools/maven-r2-publish/release@137b6b342d035155657660adf93da370b518ed8d # main
         with:
           step: cleanup
           endpoint: ${{ secrets.R2_ENDPOINT }}
