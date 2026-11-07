@@ -8,7 +8,7 @@ on:
         required: true
         default: 'all'
       latest:
-        description: 'With all, copy only this many of the newest versions'
+        description: 'With all, copy only this many of the newest versions (smoke needs 1.1.0 or newer)'
         required: false
         default: '5'
       destination:
@@ -41,6 +41,18 @@ jobs:
       versions: ${{ steps.mirror.outputs.versions }}
       url: ${{ steps.mirror.outputs.url }}
     steps:
+      - name: Refuse smoke for releases older than its artifact set
+        if: ${{ inputs.smoke && inputs.versions != 'all' }}
+        env:
+          VERSIONS: ${{ inputs.versions }}
+        run: |
+          for v in $(echo "$VERSIONS" | tr -s ', ' '\n'); do
+            if [ "$(printf '%s\n1.1.0\n' "$v" | sort -V | head -1)" != 1.1.0 ]; then
+              echo "ERROR: smoke expects the jpdfium-vips modules added in 1.1.0; $v predates them. Copy it without smoke."
+              exit 1
+            fi
+          done
+
       - id: mirror
         uses: Stirling-Tools/maven-r2-publish/mirror@137b6b342d035155657660adf93da370b518ed8d # main
         with:
