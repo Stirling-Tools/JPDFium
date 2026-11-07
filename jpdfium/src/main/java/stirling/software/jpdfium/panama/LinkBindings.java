@@ -21,17 +21,13 @@ public final class LinkBindings {
         return Symbols.downcall(name, desc);
     }
 
-    private static MethodHandle downcallCritical(String name, FunctionDescriptor desc) {
-        return Symbols.downcallCritical(name, desc);
-    }
-
-    public static final MethodHandle FPDFLink_GetLinkAtPoint = downcallCritical("FPDFLink_GetLinkAtPoint",
+    public static final MethodHandle FPDFLink_GetLinkAtPoint = downcall("FPDFLink_GetLinkAtPoint",
             FunctionDescriptor.of(ADDRESS, ADDRESS, JAVA_DOUBLE, JAVA_DOUBLE));
 
-    public static final MethodHandle FPDFLink_GetDest = downcallCritical("FPDFLink_GetDest",
+    public static final MethodHandle FPDFLink_GetDest = downcall("FPDFLink_GetDest",
             FunctionDescriptor.of(ADDRESS, ADDRESS, ADDRESS));
 
-    public static final MethodHandle FPDFLink_GetAction = downcallCritical("FPDFLink_GetAction",
+    public static final MethodHandle FPDFLink_GetAction = downcall("FPDFLink_GetAction",
             FunctionDescriptor.of(ADDRESS, ADDRESS));
 
     public static final MethodHandle FPDFLink_Enumerate = downcall("FPDFLink_Enumerate",

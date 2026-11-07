@@ -8,7 +8,9 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import stirling.software.jpdfium.doc.Bookmark;
 import stirling.software.jpdfium.doc.PdfBookmarkEditor;
@@ -38,6 +40,29 @@ public final class PdfMerge {
 
     private PdfMerge() {}
 
+    private static final System.Logger LOG = System.getLogger(PdfMerge.class.getName());
+
+    /**
+     * Publish a staging file with the caller's durability policy. A non-durable
+     * publish is still an atomic rename; only the fsync barriers are skipped.
+     */
+    private static void publishStagedFile(Path staged, Path output, boolean durable)
+            throws IOException {
+        if (!durable) {
+            // Internal, caller-owned staging file: the bytes are already in the page cache
+            // and the caller reopens or deletes the result, so skip the fsync.
+            OutputTransaction.publishStaged(staged, output, false);
+            return;
+        }
+        if (OutputTransaction.publishStagedDurable(staged, output)
+                == OutputTransaction.Durability.UNCONFIRMED) {
+            LOG.log(System.Logger.Level.WARNING,
+                    "published {0}, but its directory entry could not be synchronised;"
+                            + " crash durability is not guaranteed on this platform",
+                    output);
+        }
+    }
+
     /**
      * Merge multiple open PDF documents into a new document.
      *
@@ -66,31 +91,60 @@ public final class PdfMerge {
         List<Bookmark> mergedBookmarks = new ArrayList<>();
         int pageOffset = 0;
         for (PdfDocument sourceDoc : documents) {
-            List<Bookmark> sourceBookmarks = sourceDoc.bookmarks();
-            if (!sourceBookmarks.isEmpty()) {
-                mergedBookmarks.addAll(offsetBookmarks(sourceBookmarks, pageOffset));
+            if (sourceDoc.hasBookmarks()) {
+                List<Bookmark> sourceBookmarks = sourceDoc.bookmarks();
+                if (!sourceBookmarks.isEmpty()) {
+                    mergedBookmarks.addAll(offsetBookmarks(sourceBookmarks, pageOffset));
+                }
             }
             pageOffset += sourceDoc.pageCount();
         }
 
         if (options.mode() != StorageOptions.Mode.MEMORY) {
             if (QpdfLib.isMergeFilesSupported()) {
-                List<Path> cleanup = new ArrayList<>();
+                Set<Path> cleanup = new HashSet<>();
                 try {
                     // A document opened from a path may have been edited in
                     // memory since; never merge the file behind its back.
-                    // Serialize each live document to a temp (native save, no
-                    // Java heap) and merge those.
+                    // If untouched, reuse the source path directly to avoid re-serialization.
                     List<Path> filePaths = new ArrayList<>(documents.size());
+                    boolean reusedSourceFile = false;
                     for (PdfDocument sourceDoc : documents) {
-                        Path materialized = options.createTempFile("jpdfium-merge-src", ".pdf");
-                        cleanup.add(materialized);
-                        sourceDoc.saveTo(materialized, SaveOptions.ephemeral());
-                        filePaths.add(materialized);
+                        Path src = sourceDoc.sourcePath();
+                        if (src != null
+                                && sourceDoc.isUntouchedSinceOpen()
+                                && sourceDoc.sourceFileUnchanged()
+                                && Files.isReadable(src)) {
+                            filePaths.add(src);
+                            reusedSourceFile = true;
+                        } else {
+                            Path materialized = options.createTempFile("jpdfium-merge-src", ".pdf");
+                            cleanup.add(materialized);
+                            sourceDoc.saveTo(materialized, SaveOptions.ephemeral());
+                            filePaths.add(materialized);
+                        }
                     }
                     Path tmp = options.createTempFile("jpdfium-merge", ".pdf");
                     cleanup.add(tmp);
-                    if (QpdfLib.mergeFiles(filePaths, tmp, false)) {
+                    boolean fileMergeOk = QpdfLib.mergeFiles(filePaths, tmp, false);
+                    if (!fileMergeOk && reusedSourceFile) {
+                        // A reused source path can disappear or change between the readability
+                        // check above and the native merge; serialize every source once and retry.
+                        List<Path> retryPaths = new ArrayList<>(documents.size());
+                        for (PdfDocument sourceDoc : documents) {
+                            Path materialized = options.createTempFile("jpdfium-merge-src", ".pdf");
+                            cleanup.add(materialized);
+                            sourceDoc.saveTo(materialized, SaveOptions.ephemeral());
+                            retryPaths.add(materialized);
+                        }
+                        Path retryTmp = options.createTempFile("jpdfium-merge", ".pdf");
+                        cleanup.add(retryTmp);
+                        if (QpdfLib.mergeFiles(retryPaths, retryTmp, false)) {
+                            tmp = retryTmp;
+                            fileMergeOk = true;
+                        }
+                    }
+                    if (fileMergeOk) {
                         Path result = tmp;
                         if (!mergedBookmarks.isEmpty()) {
                             Path tmpBookmarks = options.createTempFile("jpdfium-merge-bm", ".pdf");
@@ -100,11 +154,16 @@ public final class PdfMerge {
                             }
                             result = tmpBookmarks;
                         }
-                        try (PdfDocument verify = PdfDocument.open(result)) {
-                            if (verify.pageCount() == pageOffset) {
-                                cleanup.remove(result);
-                                return PdfDocument.openTemp(result);
-                            }
+                        PdfDocument owned = PdfDocument.openTemp(result);
+                        boolean keep = false;
+                        try {
+                            keep = owned.pageCount() == pageOffset;
+                        } finally {
+                            if (!keep) owned.close();
+                        }
+                        if (keep) {
+                            cleanup.remove(result);
+                            return owned;
                         }
                     }
                 } catch (Exception _) {
@@ -197,23 +256,24 @@ public final class PdfMerge {
                     boolean done = false;
                     try {
                         if (QpdfLib.mergeFiles(paths, tmp, false)) {
-                            try (PdfDocument verify = PdfDocument.open(tmp)) {
-                                if (verify.pageCount() == expectedPages) {
-                                    PdfDocument owned = PdfDocument.openTemp(tmp);
-                                    done = true;
-                                    return owned;
-                                }
+                            PdfDocument owned = PdfDocument.openTemp(tmp);
+                            boolean keep = false;
+                            try {
+                                keep = owned.pageCount() == expectedPages;
+                            } finally {
+                                if (!keep) owned.close();
+                            }
+                            if (keep) {
+                                done = true;
+                                return owned;
                             }
                         }
                     } finally {
                         if (!done) deleteQuietly(tmp);
                     }
                 }
-            // A native failure surfaces as JPDFiumException and openTemp() can throw
-            // runtime exceptions, so catch Exception: otherwise a file-backed
-            // failure escapes instead of falling through to the in-memory paths.
-        } catch (Exception _) {
-                // Fall through to the paths below
+            } catch (Exception _) {
+                // Fall through to the in-memory paths below
             }
         }
         if (options.mode() == StorageOptions.Mode.FILE) {
@@ -322,12 +382,20 @@ public final class PdfMerge {
      * Merge files straight to an output file with explicit storage control.
      * Existing output is replaced only after the merge succeeds. FILE mode
      * fails loudly when the native file-backed merge is unavailable or fails.
+     *
+     * <p>Use {@link StorageOptions.Builder#durable(boolean)} to choose the
+     * publish barrier. The default is durable (fsync of the staged file and
+     * directory); rebuildable outputs can opt out and keep the atomic rename.
+     *
+     * @param paths file paths to merge in order
+     * @param output destination PDF file path
+     * @param options storage and durability policy
      */
     public static void mergeFilesToFile(List<Path> paths, Path output, StorageOptions options) throws IOException {
         if (paths.isEmpty()) throw new IllegalArgumentException("At least one file path is required");
         if (output == null) throw new IllegalArgumentException("output must not be null");
         if (paths.size() == 1) {
-            // Use staging so the destination is replaced only on success and aliased
+            // Stage beside the destination so it is replaced only on success and aliased
             // inputs (src == output) are handled safely, matching the multi-input path.
             try (OutputTransaction tx = OutputTransaction.begin(output, options.durable())) {
                 try (OutputStream out = Files.newOutputStream(tx.staging(), StandardOpenOption.TRUNCATE_EXISTING)) {

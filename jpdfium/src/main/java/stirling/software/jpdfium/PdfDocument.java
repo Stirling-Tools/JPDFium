@@ -22,8 +22,9 @@ import stirling.software.jpdfium.model.ImageToPdfOptions;
 import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.model.SaveOptions;
 import stirling.software.jpdfium.panama.DocBindings;
+import stirling.software.jpdfium.panama.FfmHelper;
+import stirling.software.jpdfium.panama.FfmHelper.Scratch;
 import stirling.software.jpdfium.panama.EmbedPdfDocumentBindings;
-import stirling.software.jpdfium.panama.EmbedPdfTextBindings;
 import stirling.software.jpdfium.panama.JpdfiumLib;
 import stirling.software.jpdfium.panama.FfmHelper;
 import stirling.software.jpdfium.panama.NativeRuntime;
@@ -36,7 +37,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.lang.foreign.Arena;
-import java.lang.foreign.MemoryLayout;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
@@ -72,10 +72,30 @@ import java.util.function.ObjIntConsumer;
  */
 public final class PdfDocument implements AutoCloseable {
 
-    private final long handle;
+    private volatile long handle;
     private volatile MemorySegment rawDocSegment;
     private final AtomicBoolean closed = new AtomicBoolean();
     private final AtomicInteger structureEpoch = new AtomicInteger(0);
+
+    /**
+     * Known page count for a lazily opened temp document ({@code -1} when the
+     * count must be queried from PDFium). Lazy temp documents defer the native
+     * open until an operation actually needs the PDFium handle.
+     */
+    private final int knownPageCount;
+
+    /** Set once a page handle is opened; a lazy temp document must then be opened eagerly. */
+    private volatile boolean pageOpened;
+
+    /** Mirrors the QPDF sanitize-on-save flag so save reuse stays correct. */
+    private volatile boolean sanitizeOnSave;
+
+    /**
+     * True when the document was opened with a password. Its source file is
+     * encrypted, so it is not byte-compatible with the decrypted live document
+     * and must never be reused verbatim by a save or split.
+     */
+    private volatile boolean encryptedSource;
 
     /**
      * Bumped by every successful content mutation: annotation flattening, cropping,
@@ -105,6 +125,10 @@ public final class PdfDocument implements AutoCloseable {
      * (no structural mutation since open). Never deleted by this document.
      */
     private volatile Path sourcePath;
+    /** Size of {@link #sourcePath} when it was recorded, or -1 when unknown. */
+    private volatile long sourceSize = -1L;
+    /** Last-modified time of {@link #sourcePath} when it was recorded, or -1 when unknown. */
+    private volatile long sourceMtime = -1L;
     private volatile byte[] sourceBytes;
 
     PdfDocument(long handle) {
@@ -112,9 +136,14 @@ public final class PdfDocument implements AutoCloseable {
     }
 
     PdfDocument(long handle, Path ownedTempFile) {
+        this(handle, ownedTempFile, -1);
+    }
+
+    PdfDocument(long handle, Path ownedTempFile, int knownPageCount) {
         this.handle = handle;
-        this.rawDocSegment = JpdfiumLib.docRawHandle(handle);
+        this.rawDocSegment = handle != 0L ? JpdfiumLib.docRawHandle(handle) : MemorySegment.NULL;
         this.ownedTempFile = ownedTempFile;
+        this.knownPageCount = knownPageCount;
     }
 
     /**
@@ -126,6 +155,77 @@ public final class PdfDocument implements AutoCloseable {
     static PdfDocument openTemp(Path tmp) {
         Path abs = tmp.toAbsolutePath();
         return new PdfDocument(JpdfiumLib.docOpen(abs.toString()), abs);
+    }
+
+    /**
+     * Open a temp-owned document without opening it in PDFium yet.
+     *
+     * <p>The known page count answers {@link #pageCount()} and the open-time
+     * file answers {@link #saveTo(Path, SaveOptions)} while the document is
+     * untouched, so a split that produces thousands of bookmark-free parts does
+     * not pay one native parse per part. The native handle is opened lazily on
+     * the first operation that needs it.
+     *
+     * @param tmp             existing readable PDF file, deleted on close
+     * @param knownPageCount  page count to report before the first native open
+     */
+    static PdfDocument openTempLazy(Path tmp, int knownPageCount) {
+        Path abs = tmp.toAbsolutePath();
+        return new PdfDocument(0L, abs, knownPageCount);
+    }
+
+    /**
+     * True while the live document still matches its open-time bytes: no
+     * content edit, no page opened, no structural reload, and no sanitize pass
+     * requested. File-backed saves can then reuse the source file instead of
+     * re-serializing.
+     */
+    boolean isUntouchedSinceOpen() {
+        return !contentModified
+                && !pageOpened
+                && contentGeneration.get() == 0
+                && structureEpoch.get() == 0
+                && !sanitizeOnSave
+                && !encryptedSource;
+    }
+
+    /**
+     * Resolve the native document handle, opening a lazy temp document on
+     * first use. Double-checked so concurrent first accesses open exactly once.
+     */
+    private long ensureNativeHandle() {
+        ensureOpen();
+        long h = this.handle;
+        if (h != 0L) return h;
+        synchronized (this) {
+            ensureOpen();
+            h = this.handle;
+            if (h == 0L) {
+                Path tmp = this.ownedTempFile != null ? this.ownedTempFile : this.sourcePath;
+                if (tmp == null) {
+                    throw new IllegalStateException("document has no native handle");
+                }
+                h = JpdfiumLib.docOpen(tmp.toString());
+                this.rawDocSegment = JpdfiumLib.docRawHandle(h);
+                this.handle = h;
+            }
+            return h;
+        }
+    }
+
+    /** Resolve the raw FPDF_DOCUMENT segment, opening a lazy temp document if needed. */
+    private MemorySegment ensureRawDocSegment() {
+        long h = ensureNativeHandle();
+        MemorySegment raw = this.rawDocSegment;
+        if (raw != null && !raw.equals(MemorySegment.NULL)) return raw;
+        synchronized (this) {
+            raw = this.rawDocSegment;
+            if (raw == null || raw.equals(MemorySegment.NULL)) {
+                raw = JpdfiumLib.docRawHandle(h);
+                this.rawDocSegment = raw;
+            }
+            return raw;
+        }
     }
 
     /**
@@ -141,7 +241,7 @@ public final class PdfDocument implements AutoCloseable {
      * stale and fail loudly instead of touching freed memory.
      */
     public void refreshRawHandle() {
-        this.rawDocSegment = JpdfiumLib.docRawHandle(handle);
+        this.rawDocSegment = JpdfiumLib.docRawHandle(ensureNativeHandle());
         structureEpoch.incrementAndGet();
         contentGeneration.incrementAndGet();
     }
@@ -190,6 +290,10 @@ public final class PdfDocument implements AutoCloseable {
         Path abs = path.toAbsolutePath();
         PdfDocument doc = new PdfDocument(JpdfiumLib.docOpen(abs.toString()));
         doc.sourcePath = abs;
+        doc.recordSourceStamp(abs);
+        // A PDF can be encrypted with an empty user password; detecting that
+        // keeps the verbatim source-reuse fast path off such documents.
+        doc.encryptedSource = doc.securityHandlerRevision() > 0;
         return doc;
     }
 
@@ -227,6 +331,7 @@ public final class PdfDocument implements AutoCloseable {
                 ? new PdfDocument(JpdfiumLib.docOpenBytes(data))
                 : new PdfDocument(JpdfiumLib.docOpenBytesProtected(data, password));
         doc.sourceBytes = data;
+        doc.encryptedSource = !password.isEmpty();
         return doc;
     }
 
@@ -306,6 +411,7 @@ public final class PdfDocument implements AutoCloseable {
                     ? JpdfiumLib.docOpen(spooled.toAbsolutePath().toString())
                     : JpdfiumLib.docOpenProtected(spooled.toAbsolutePath().toString(), password);
             PdfDocument doc = new PdfDocument(handle, spooled);
+            doc.encryptedSource = password != null || doc.securityHandlerRevision() > 0;
             ok = true;
             return doc;
         } finally {
@@ -444,15 +550,50 @@ public final class PdfDocument implements AutoCloseable {
         if (path == null) throw new IllegalArgumentException("path must not be null");
         if (password == null) throw new IllegalArgumentException("password must not be null");
         if (password.isEmpty()) return open(path);
-        PdfDocument doc =
-                new PdfDocument(JpdfiumLib.docOpenProtected(path.toAbsolutePath().toString(), password));
-        doc.sourcePath = path.toAbsolutePath();
+        Path abs = path.toAbsolutePath();
+        PdfDocument doc = new PdfDocument(JpdfiumLib.docOpenProtected(abs.toString(), password));
+        doc.sourcePath = abs;
+        doc.recordSourceStamp(abs);
+        doc.encryptedSource = true;
         return doc;
     }
 
     /** Original open path, or null when not file-backed. Never deleted here. */
     public Path sourcePath() {
         return sourcePath;
+    }
+
+    /**
+     * Records the size and last-modified time of a path-backed source so callers can detect a file
+     * that was rewritten after it was opened.
+     */
+    private void recordSourceStamp(Path path) {
+        try {
+            sourceSize = Files.size(path);
+            sourceMtime = Files.getLastModifiedTime(path).toMillis();
+        } catch (IOException e) {
+            sourceSize = -1L;
+            sourceMtime = -1L;
+        }
+    }
+
+    /**
+     * Returns whether the file-backed source still matches the snapshot taken when this document was
+     * opened. Callers that reuse {@link #sourcePath()} instead of serialising the in-memory document
+     * must check this first: a file rewritten after open would otherwise be read from behind the
+     * document's back.
+     */
+    public boolean sourceFileUnchanged() {
+        Path path = sourcePath;
+        if (path == null) {
+            return false;
+        }
+        try {
+            return Files.size(path) == sourceSize
+                    && Files.getLastModifiedTime(path).toMillis() == sourceMtime;
+        } catch (IOException e) {
+            return false;
+        }
     }
 
     /**
@@ -679,14 +820,24 @@ public final class PdfDocument implements AutoCloseable {
      * Merge multiple PDF files into a single output file using the fast, lossless QPDF engine
      * with automatic fallback to safe PDFium page import if QPDF is unavailable.
      *
+     * <p>Delegates to {@link PdfMerge#mergeFilesToFile(List, Path)} so the inputs and the
+     * result stay on disk instead of being reopened in PDFium and re-saved. Bookmark trees
+     * are not merged on this path; use {@link PdfMerge#mergeFiles(List)} followed by a save,
+     * or apply the combined tree with {@code stirling.software.jpdfium.doc.PdfBookmarkEditor},
+     * when they must be preserved.
+     *
      * @param inputPaths  list of input PDF file paths
      * @param outputPath destination PDF file path
      * @throws IOException on I/O error
      */
     public static void merge(List<Path> inputPaths, Path outputPath) throws IOException {
-        try (PdfDocument merged = PdfMerge.mergeFiles(inputPaths)) {
-            merged.save(outputPath);
+        if (inputPaths == null || inputPaths.isEmpty()) {
+            throw new IllegalArgumentException("inputPaths must not be null or empty");
         }
+        if (outputPath == null) {
+            throw new IllegalArgumentException("outputPath must not be null");
+        }
+        PdfMerge.mergeFilesToFile(inputPaths, outputPath);
     }
 
     /**
@@ -754,7 +905,10 @@ public final class PdfDocument implements AutoCloseable {
      */
     public int pageCount() {
         ensureOpen();
-        return JpdfiumLib.docPageCount(handle);
+        if (handle == 0L && knownPageCount >= 0 && isUntouchedSinceOpen()) {
+            return knownPageCount;
+        }
+        return JpdfiumLib.docPageCount(ensureNativeHandle());
     }
 
     /**
@@ -767,7 +921,8 @@ public final class PdfDocument implements AutoCloseable {
      */
     public PdfPage page(int index) {
         ensureOpen();
-        return PdfPage.open(this, handle, index);
+        this.pageOpened = true;
+        return PdfPage.open(this, ensureNativeHandle(), index);
     }
 
     /**
@@ -775,7 +930,7 @@ public final class PdfDocument implements AutoCloseable {
      */
     public int namedPageCount(PdfNamedPages.Tree tree) {
         ensureOpen();
-        return PdfNamedPages.count(rawDocSegment, tree);
+        return PdfNamedPages.count(ensureRawDocSegment(), tree);
     }
 
     /**
@@ -783,7 +938,7 @@ public final class PdfDocument implements AutoCloseable {
      */
     public List<PdfNamedPages.NamedPageEntry> namedPages(PdfNamedPages.Tree tree) {
         ensureOpen();
-        return PdfNamedPages.list(rawDocSegment, tree);
+        return PdfNamedPages.list(ensureRawDocSegment(), tree);
     }
 
     /**
@@ -791,7 +946,7 @@ public final class PdfDocument implements AutoCloseable {
      */
     public boolean setNamedPage(String name, int pageObjectNumber) {
         ensureOpen();
-        boolean set = PdfNamedPages.setNamedPage(rawDocSegment, name, pageObjectNumber);
+        boolean set = PdfNamedPages.setNamedPage(ensureRawDocSegment(), name, pageObjectNumber);
         if (set) markContentModified();
         return set;
     }
@@ -801,7 +956,7 @@ public final class PdfDocument implements AutoCloseable {
      */
     public boolean removeNamedPage(String name) {
         ensureOpen();
-        boolean removed = PdfNamedPages.removeNamedPage(rawDocSegment, name);
+        boolean removed = PdfNamedPages.removeNamedPage(ensureRawDocSegment(), name);
         if (removed) markContentModified();
         return removed;
     }
@@ -812,7 +967,7 @@ public final class PdfDocument implements AutoCloseable {
      */
     public int getPageObjectNumber(int pageIndex) {
         ensureOpen();
-        return PdfNamedPages.getPageObjectNumber(rawDocSegment, pageIndex);
+        return PdfNamedPages.getPageObjectNumber(ensureRawDocSegment(), pageIndex);
     }
 
     /**
@@ -1009,7 +1164,7 @@ public final class PdfDocument implements AutoCloseable {
         if (mode == null) throw new IllegalArgumentException("mode must not be null");
         switch (mode) {
             case ANNOTATIONS -> {
-                long pageHandle = JpdfiumLib.pageOpen(handle, pageIndex);
+                long pageHandle = JpdfiumLib.pageOpen(ensureNativeHandle(), pageIndex);
                 try {
                     JpdfiumLib.pageFlatten(pageHandle);
                 } finally {
@@ -1058,7 +1213,7 @@ public final class PdfDocument implements AutoCloseable {
                 // Flatten rewrites page content in place and keeps every open page
                 // valid, so a partial pass only needs the content flag.
                 try {
-                    JpdfiumLib.docFlattenAnnotations(handle);
+                    JpdfiumLib.docFlattenAnnotations(ensureNativeHandle());
                 } finally {
                     // A failed pass can still have baked the pages before it.
                     markContentModified();
@@ -1074,7 +1229,7 @@ public final class PdfDocument implements AutoCloseable {
                 // CONTENT_MUTATED only once the replaced pages can no longer be restored.
                 boolean replacedPages = false;
                 try {
-                    JpdfiumLib.docFlattenToImages(handle, dpi);
+                    JpdfiumLib.docFlattenToImages(ensureNativeHandle(), dpi);
                     // An empty document leaves nothing replaced, so nothing is stale.
                     replacedPages = pageCount() > 0;
                 } catch (JPDFiumException e) {
@@ -1119,10 +1274,34 @@ public final class PdfDocument implements AutoCloseable {
         ensureOpen();
         if (destination == null) throw new IllegalArgumentException("destination must not be null");
         SaveOptions opts = options == null ? SaveOptions.fast() : options;
+        // An untouched temp-owned document still matches its open-time file, so
+        // publish that file directly instead of paying a native re-serialization
+        // (and, for a lazy temp document, a native open at all).
+        Path tmp = this.ownedTempFile;
+        if (tmp != null && isUntouchedSinceOpen() && !opts.verifyReopen()) {
+            if (this.handle == 0L) {
+                // Not open in PDFium yet: the temp file can be moved directly
+                // onto the destination instead of copied. The move transfers
+                // ownership, so clear ownedTempFile and remember where the
+                // bytes now live in case a later call needs a native open.
+                if (JpdfiumLib.moveOrCopyTempToDestination(tmp, destination, opts)) {
+                    this.sourcePath = destination.toAbsolutePath();
+                    this.ownedTempFile = null;
+                }
+                return;
+            }
+            JpdfiumLib.copyFileToDestination(tmp, destination, opts);
+            return;
+        }
+        if (tmp == null && this.handle == 0L && this.sourcePath != null
+                && isUntouchedSinceOpen() && !opts.verifyReopen()) {
+            JpdfiumLib.copyFileToDestination(this.sourcePath, destination, opts);
+            return;
+        }
         // Staging, reopen validation, and publish all live in docSaveToFile
         // (via OutputTransaction.publish); duplicating the probe here would
         // let the two paths drift.
-        JpdfiumLib.docSaveToFile(handle, destination, opts);
+        JpdfiumLib.docSaveToFile(ensureNativeHandle(), destination, opts);
     }
 
     /**
@@ -1161,7 +1340,7 @@ public final class PdfDocument implements AutoCloseable {
      */
     public void saveTo(WritableByteChannel channel, SaveOptions options) throws IOException {
         ensureOpen();
-        JpdfiumLib.docSaveTo(handle, channel, options == null ? SaveOptions.fast() : options);
+        JpdfiumLib.docSaveTo(ensureNativeHandle(), channel, options == null ? SaveOptions.fast() : options);
     }
 
     /**
@@ -1197,7 +1376,7 @@ public final class PdfDocument implements AutoCloseable {
         ensureOpen();
         if (out == null) throw new IllegalArgumentException("out must not be null");
         WritableByteChannel channel = Channels.newChannel(out);
-        JpdfiumLib.docSaveTo(handle, channel, options == null ? SaveOptions.fast() : options);
+        JpdfiumLib.docSaveTo(ensureNativeHandle(), channel, options == null ? SaveOptions.fast() : options);
     }
 
     /**
@@ -1206,7 +1385,7 @@ public final class PdfDocument implements AutoCloseable {
      */
     public Path saveToTempFile() {
         ensureOpen();
-        return JpdfiumLib.docSaveToTempFile(handle, SaveOptions.fast());
+        return JpdfiumLib.docSaveToTempFile(ensureNativeHandle(), SaveOptions.fast());
     }
 
     /**
@@ -1218,7 +1397,7 @@ public final class PdfDocument implements AutoCloseable {
      */
     public Path saveToTempFile(SaveOptions options) {
         ensureOpen();
-        return JpdfiumLib.docSaveToTempFile(handle, options == null ? SaveOptions.fast() : options);
+        return JpdfiumLib.docSaveToTempFile(ensureNativeHandle(), options == null ? SaveOptions.fast() : options);
     }
 
     /**
@@ -1228,7 +1407,7 @@ public final class PdfDocument implements AutoCloseable {
      */
     public byte[] saveBytes() {
         ensureOpen();
-        return JpdfiumLib.docSaveBytes(handle);
+        return JpdfiumLib.docSaveBytes(ensureNativeHandle());
     }
 
     /**
@@ -1241,8 +1420,9 @@ public final class PdfDocument implements AutoCloseable {
         ensureOpen();
         MethodHandle getBox = EmbedPdfDocumentBindings.EPDF_GetPageBoxByIndex;
         if (getBox != null) {
-            try (Arena arena = Arena.ofConfined()) {
-                MemorySegment rectBuf = arena.allocate(EmbedPdfTextBindings.FS_RECTF_LAYOUT);
+            Scratch scratch = FfmHelper.scratch();
+            try {
+                MemorySegment rectBuf = scratch.rect;
                 Rect mediaBox = queryBoxByIndex(getBox, pageIndex, 0, rectBuf)
                         .orElseGet(() -> {
                             try (PdfPage p = page(pageIndex)) {
@@ -1274,12 +1454,12 @@ public final class PdfDocument implements AutoCloseable {
 
     private Optional<Rect> queryBoxByIndex(MethodHandle getBox, int pageIndex, int boxType, MemorySegment rectBuf) {
         try {
-            int ok = (int) getBox.invokeExact(rawDocSegment, pageIndex, boxType, rectBuf);
+            int ok = (int) getBox.invokeExact(ensureRawDocSegment(), pageIndex, boxType, rectBuf);
             if (ok == 0) return Optional.empty();
-            float left = rectBuf.get(ValueLayout.JAVA_FLOAT, EmbedPdfTextBindings.FS_RECTF_LAYOUT.byteOffset(MemoryLayout.PathElement.groupElement("left")));
-            float bottom = rectBuf.get(ValueLayout.JAVA_FLOAT, EmbedPdfTextBindings.FS_RECTF_LAYOUT.byteOffset(MemoryLayout.PathElement.groupElement("bottom")));
-            float right = rectBuf.get(ValueLayout.JAVA_FLOAT, EmbedPdfTextBindings.FS_RECTF_LAYOUT.byteOffset(MemoryLayout.PathElement.groupElement("right")));
-            float top = rectBuf.get(ValueLayout.JAVA_FLOAT, EmbedPdfTextBindings.FS_RECTF_LAYOUT.byteOffset(MemoryLayout.PathElement.groupElement("top")));
+            float left = rectBuf.get(ValueLayout.JAVA_FLOAT, 0);
+            float top = rectBuf.get(ValueLayout.JAVA_FLOAT, 4);
+            float right = rectBuf.get(ValueLayout.JAVA_FLOAT, 8);
+            float bottom = rectBuf.get(ValueLayout.JAVA_FLOAT, 12);
             return Optional.of(new Rect(left, bottom, right - left, top - bottom));
         } catch (Throwable t) {
             return Optional.empty();
@@ -1298,7 +1478,7 @@ public final class PdfDocument implements AutoCloseable {
         if (getRot != null) {
             try (Arena arena = Arena.ofConfined()) {
                 MemorySegment rotSeg = arena.allocate(ValueLayout.JAVA_INT);
-                int ok = (int) getRot.invokeExact(rawDocSegment, pageIndex, rotSeg);
+                int ok = (int) getRot.invokeExact(ensureRawDocSegment(), pageIndex, rotSeg);
                 if (ok != 0) {
                     // The native returns /Rotate as written: normalize it and treat
                     // non-multiples of 90 as unusable so the fallback below applies.
@@ -1329,11 +1509,11 @@ public final class PdfDocument implements AutoCloseable {
         ensureOpen();
         MethodHandle getUnit = EmbedPdfDocumentBindings.EPDF_GetPageUserUnitByIndex;
         if (getUnit != null) {
-            try (Arena arena = Arena.ofConfined()) {
-                MemorySegment buf = arena.allocate(ValueLayout.JAVA_FLOAT);
-                int ok = (int) getUnit.invokeExact(rawDocSegment, pageIndex, buf);
+            Scratch scratch = FfmHelper.scratch();
+            try {
+                int ok = (int) getUnit.invokeExact(ensureRawDocSegment(), pageIndex, scratch.float0);
                 if (ok != 0) {
-                    return buf.get(ValueLayout.JAVA_FLOAT, 0);
+                    return scratch.float0.get(ValueLayout.JAVA_FLOAT, 0);
                 }
             } catch (Throwable t) {
                 NativeRuntime.rethrowFatal(t);
@@ -1381,7 +1561,7 @@ public final class PdfDocument implements AutoCloseable {
      */
     public byte[] saveBytesIncremental() {
         ensureOpen();
-        return JpdfiumLib.docSaveIncremental(handle);
+        return JpdfiumLib.docSaveIncremental(ensureNativeHandle());
     }
 
     /**
@@ -1398,7 +1578,7 @@ public final class PdfDocument implements AutoCloseable {
     public void convertPageToImage(int pageIndex, int dpi) {
         ensureOpen();
         if (dpi <= 0) throw new IllegalArgumentException("dpi must be > 0");
-        JpdfiumLib.pageToImage(handle, pageIndex, dpi);
+        JpdfiumLib.pageToImage(ensureNativeHandle(), pageIndex, dpi);
         // The page is replaced by an image, so the document no longer matches
         // the bytes it was opened with.
         invalidateOpenPages();
@@ -1415,7 +1595,7 @@ public final class PdfDocument implements AutoCloseable {
      */
     public String sanitizeReport() {
         ensureOpen();
-        return JpdfiumLib.docSanitizeReport(handle);
+        return JpdfiumLib.docSanitizeReport(ensureNativeHandle());
     }
 
     /**
@@ -1423,7 +1603,8 @@ public final class PdfDocument implements AutoCloseable {
      */
     public void setSanitizeOnSave(boolean enable) {
         ensureOpen();
-        JpdfiumLib.docSetSanitizeOnSave(handle, enable);
+        this.sanitizeOnSave = enable;
+        JpdfiumLib.docSetSanitizeOnSave(ensureNativeHandle(), enable);
     }
 
     /** Set a document information metadata value through the EmbedPDF extension. */
@@ -1499,8 +1680,9 @@ public final class PdfDocument implements AutoCloseable {
      */
     public MemorySegment rawHandle() {
         ensureOpen();
+        MemorySegment raw = ensureRawDocSegment();
         markContentModified();
-        return rawDocSegment;
+        return raw;
     }
 
     /**
@@ -1515,7 +1697,7 @@ public final class PdfDocument implements AutoCloseable {
      */
     public MemorySegment rawHandleForRead() {
         ensureOpen();
-        return rawDocSegment;
+        return ensureRawDocSegment();
     }
 
     /**
@@ -1544,7 +1726,7 @@ public final class PdfDocument implements AutoCloseable {
         ensureOpen();
         try {
             if (DocBindings.FPDF_GetDocPermissions != null) {
-                return (int) DocBindings.FPDF_GetDocPermissions.invokeExact(rawDocSegment);
+                return (int) DocBindings.FPDF_GetDocPermissions.invokeExact(ensureRawDocSegment());
             }
         } catch (Throwable t) {
             NativeRuntime.rethrowFatal(t);
@@ -1559,7 +1741,7 @@ public final class PdfDocument implements AutoCloseable {
         ensureOpen();
         try {
             if (DocBindings.FPDF_GetSecurityHandlerRevision != null) {
-                return (int) DocBindings.FPDF_GetSecurityHandlerRevision.invokeExact(rawDocSegment);
+                return (int) DocBindings.FPDF_GetSecurityHandlerRevision.invokeExact(ensureRawDocSegment());
             }
         } catch (Throwable t) {
             NativeRuntime.rethrowFatal(t);
@@ -1570,6 +1752,10 @@ public final class PdfDocument implements AutoCloseable {
     /**
      * Get the document's complete bookmark tree.
      */
+    public boolean hasBookmarks() {
+        return PdfBookmarks.hasBookmarks(rawHandleForRead());
+    }
+
     public List<Bookmark> bookmarks() {
         return PdfBookmarks.list(rawHandleForRead());
     }
@@ -1605,7 +1791,7 @@ public final class PdfDocument implements AutoCloseable {
      */
     public SignatureDetails signatureDetails(int index) {
         ensureOpen();
-        return PdfSignatures.details(handle, index);
+        return PdfSignatures.details(ensureNativeHandle(), index);
     }
 
     /**
@@ -1616,13 +1802,13 @@ public final class PdfDocument implements AutoCloseable {
      */
     public byte[] signatureDigest(int index, int algorithm) {
         ensureOpen();
-        return PdfSignatures.digest(handle, index, algorithm);
+        return PdfSignatures.digest(ensureNativeHandle(), index, algorithm);
     }
 
     /** Number of byte revisions in the loaded document (-1 when indeterminate). */
     public int signatureRevisionCount() {
         ensureOpen();
-        return PdfSignatures.revisionCount(handle);
+        return PdfSignatures.revisionCount(ensureNativeHandle());
     }
 
     /**
@@ -1714,8 +1900,9 @@ public final class PdfDocument implements AutoCloseable {
      */
     public long nativeHandle() {
         ensureOpen();
+        long h = ensureNativeHandle();
         markContentModified();
-        return handle;
+        return h;
     }
 
     private void ensureOpen() {
@@ -1732,7 +1919,10 @@ public final class PdfDocument implements AutoCloseable {
         // native document twice and corrupts the heap.
         if (!closed.compareAndSet(false, true)) return;
         try {
-            JpdfiumLib.docClose(handle);
+            long h = handle;
+            if (h != 0L) {
+                JpdfiumLib.docClose(h);
+            }
         } finally {
             // PDFium has released its handle on the temp file, so it can go now.
             // A still-locked file (Windows) falls back to delete-on-exit rather

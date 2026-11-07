@@ -5,6 +5,8 @@ import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.internal.ImageCodecs;
 import stirling.software.jpdfium.model.ImageFormat;
+import stirling.software.jpdfium.panama.FfmHelper;
+import stirling.software.jpdfium.panama.FfmHelper.Scratch;
 import stirling.software.jpdfium.panama.ImageObjBindings;
 import stirling.software.jpdfium.panama.JpdfiumH;
 import stirling.software.jpdfium.panama.NativeRuntime;
@@ -111,9 +113,11 @@ public final class PdfImageOptimizer {
     /** True if any page holds an image object; {@link #optimize} cannot change a document without one. */
     public static boolean hasImages(PdfDocument doc) {
         if (!isSupported()) return false;
-        for (int p = 0; p < doc.pageCount(); p++) {
+        int pageCount = doc.pageCount();
+        if (pageCount == 0) return false;
+        for (int p = 0; p < pageCount; p++) {
             try (PdfPage page = doc.page(p)) {
-                MemorySegment rawPage = page.rawHandle();
+                MemorySegment rawPage = page.rawHandleForRead();
                 int objCount;
                 try {
                     objCount = (int) PageEditBindings.FPDFPage_CountObjects.invokeExact(rawPage);
@@ -157,10 +161,12 @@ public final class PdfImageOptimizer {
      */
     public static int optimize(PdfDocument doc, int maxImageDpi, int jpegQuality) {
         if (!isSupported() || maxImageDpi <= 0) return 0;
+        int pageCount = doc.pageCount();
+        if (pageCount == 0) return 0;
         MemorySegment rawDoc = doc.rawHandle();
         int rewritten = 0;
 
-        for (int p = 0; p < doc.pageCount(); p++) {
+        for (int p = 0; p < pageCount; p++) {
             try (PdfPage page = doc.page(p)) {
                 MemorySegment rawPage = page.rawHandle();
                 int objCount;
@@ -244,8 +250,9 @@ public final class PdfImageOptimizer {
     // Reads width/height/bpp/colorspace/dpi without decoding pixels, so an
     // oversized or unsupported image is rejected before any native decode.
     private static ImageMeta readMeta(MemorySegment imgObj, MemorySegment rawPage) {
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment meta = arena.allocate(META_BYTES);
+        Scratch scratch = FfmHelper.scratch();
+        MemorySegment meta = scratch.ensureNativeBuffer(META_BYTES);
+        try {
             int ok = (int) ImageObjBindings.FPDFImageObj_GetImageMetadata.invokeExact(
                     imgObj, rawPage, meta);
             if (ok == 0) return null;
@@ -676,14 +683,19 @@ public final class PdfImageOptimizer {
                 || ImageObjBindings.FPDFImageObj_GetImageFilter == null) {
             return false;
         }
-        try (Arena arena = Arena.ofConfined()) {
+        try {
             int filters =
                     (int) ImageObjBindings.FPDFImageObj_GetImageFilterCount.invokeExact(imgObj);
+            if (filters <= 0) return false;
+            Scratch scratch = FfmHelper.scratch();
+            MemorySegment buf = scratch.ensureNativeBuffer(16);
             for (int i = 0; i < filters; i++) {
-                MemorySegment buf = arena.allocate(16);
                 long n = (long) ImageObjBindings.FPDFImageObj_GetImageFilter.invokeExact(
                         imgObj, i, buf, 16L);
-                if (n > 0 && "DCTDecode".equals(buf.getString(0))) return true;
+                // GetImageFilter returns the filter length including the NUL and
+                // leaves the buffer untouched on a partial write: only trust the
+                // buffer when the whole name (and terminator) was copied.
+                if (n >= 10 && n <= 16 && "DCTDecode".equals(buf.getString(0))) return true;
             }
             return false;
         } catch (Throwable t) {

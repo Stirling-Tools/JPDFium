@@ -15,6 +15,9 @@ import java.util.concurrent.CopyOnWriteArrayList;
 /**
  * Centralized FFM symbol lookup, downcall binding, and resolution tracking.
  *
+ * <p>Guarded downcalls bind the native {@code jpdf_guard_<name>} shim, so the native PDFium
+ * domain admits each call; see {@link NativeDomain}. PDFium symbols are never bound raw.
+ *
  * <p>All binding classes delegate downcall construction to {@link Symbols}.
  * In {@link NativeRuntime.NativeMode#FULL} mode, any missing symbol throws an
  * immediate {@link UnsatisfiedLinkError} at class-init time rather than returning
@@ -45,17 +48,45 @@ public final class Symbols {
      * @throws UnsatisfiedLinkError if symbol is absent in FULL mode
      */
     public static MethodHandle downcall(String name, FunctionDescriptor desc, Linker.Option... options) {
-        Optional<MemorySegment> symbolOpt = find(name);
-        if (symbolOpt.isEmpty()) {
+        MethodHandle handle = bindGuarded(name, desc, options);
+        if (handle == null) {
             MISSING_SYMBOLS.add(name);
             if (NativeRuntime.isFull()) {
                 throw new UnsatisfiedLinkError("Missing required native symbol in FULL mode: " + name);
             }
+        }
+        return handle;
+    }
+
+    /**
+     * Binds the guard shim for {@code name}, or the raw symbol for bridge entry points that are
+     * unguarded by design (QPDF, ABI probes). A PDFium symbol without a guard is treated as absent.
+     */
+    private static MethodHandle bindGuarded(String name, FunctionDescriptor desc, Linker.Option... options) {
+        Optional<MemorySegment> guard = NativeDomain.guard(name)
+                .or(() -> NativeDomain.guard("jpdfium_" + name));
+        if (guard.isPresent()) {
+            if (options.length > 0) {
+                // A guard can wait on the domain; critical downcalls must never block.
+                throw new IllegalStateException("guarded entry point " + name + " cannot use linker options");
+            }
+            RESOLVED_SYMBOLS.add(name);
+            return NativeDomain.checked(LINKER.downcallHandle(guard.get(), desc));
+        }
+        if (isPdfiumSymbol(name)) {
+            return null;
+        }
+        Optional<MemorySegment> symbolOpt = find(name);
+        if (symbolOpt.isEmpty()) {
             return null;
         }
         RESOLVED_SYMBOLS.add(name);
-        MethodHandle handle = LINKER.downcallHandle(symbolOpt.get(), desc, options);
-        return PdfiumRuntime.guarded(handle);
+        return LINKER.downcallHandle(symbolOpt.get(), desc, options);
+    }
+
+    private static boolean isPdfiumSymbol(String name) {
+        return name.startsWith("FPDF") || name.startsWith("EPDF")
+                || name.startsWith("FORM_") || name.startsWith("FSDK_");
     }
 
     /**
@@ -67,13 +98,7 @@ public final class Symbols {
      * symbols that fail to resolve, so {@link #auditMissing()} stays meaningful.
      */
     public static MethodHandle downcallOptional(String name, FunctionDescriptor desc, Linker.Option... options) {
-        Optional<MemorySegment> symbolOpt = find(name);
-        if (symbolOpt.isEmpty()) {
-            return null;
-        }
-        RESOLVED_SYMBOLS.add(name);
-        MethodHandle handle = LINKER.downcallHandle(symbolOpt.get(), desc, options);
-        return PdfiumRuntime.guarded(handle);
+        return bindGuarded(name, desc, options);
     }
 
     /**
@@ -83,7 +108,7 @@ public final class Symbols {
      * mutable state (in-process QPDF structural operations, each creating its
      * own {@code QPDF}/{@code QPDFWriter} instances with call-local FFM
      * argument storage). PDFium entry points must keep using
-     * {@link #downcall} so the domain serialization guarantee is preserved.
+     * {@link #downcall}, which binds their native guard.
      *
      * @throws UnsatisfiedLinkError if symbol is absent in FULL mode
      */
@@ -114,15 +139,13 @@ public final class Symbols {
     }
 
     /**
-     * Create a guarded downcall method handle for a required symbol.
+     * Historical alias of {@link #downcall}; the {@code Critical} suffix never promised
+     * {@link Linker.Option#critical(boolean)}. Kept for binary compatibility; new call sites should
+     * use {@link #downcall}.
      *
-     * <p>The {@code Critical} suffix is historical (required, not a promise of
-     * {@link Linker.Option#critical(boolean)}). Handles stay plain so GraalVM
-     * native-image needs no per signature leaf registration and heap segments
-     * keep working. FastLinks keeps strict critical for the hottest ten.
-     *
-     * @throws UnsatisfiedLinkError if symbol is absent in FULL mode
+     * @deprecated use {@link #downcall(String, FunctionDescriptor, Linker.Option...)}
      */
+    @Deprecated(forRemoval = true)
     public static MethodHandle downcallCritical(String name, FunctionDescriptor desc) {
         return downcall(name, desc);
     }

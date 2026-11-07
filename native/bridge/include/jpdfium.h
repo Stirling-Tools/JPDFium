@@ -51,6 +51,8 @@ extern "C" {
 // combinations handshake on JPDFIUM_ABI_VERSION and verify platform-sensitive
 // layout facts (pointer width, PDFium struct geometry) instead of trusting
 // handwritten FFM patches. Bump the version on any ABI-breaking change.
+// 2: Java binds PDFium only through jpdf_guard_* shims and starts the jpdf_* runtime.
+
 #define JPDFIUM_ABI_VERSION (2)
 
 // Query ids for jpdfium_abi_query. Unknown ids return -1.
@@ -98,6 +100,10 @@ JPDFIUM_EXPORT int64_t jpdfium_abi_query(int32_t query) JPDFIUM_NOEXCEPT;
 
 JPDFIUM_EXPORT int32_t jpdfium_init(void) JPDFIUM_NOEXCEPT;
 
+// File-backed repair (jpdfium_repair.cpp); returns a JPDFIUM_REPAIR_* status.
+JPDFIUM_EXPORT int32_t jpdfium_repair_pdf_file(const char* inputPath, const char* outputPath,
+                                               int32_t flags);
+
 // Renderer selection for jpdfium_init_ex().
 // AUTO prefers Skia when the build includes it, else AGG.
 #define JPDFIUM_RENDERER_AUTO (-1)
@@ -143,6 +149,10 @@ JPDFIUM_EXPORT int32_t jpdfium_doc_save_bytes(int64_t doc, uint8_t** data, int64
 // removes the partial file and never reports success.
 JPDFIUM_EXPORT int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_bytes,
                                                 int64_t* out_bytes);
+// Direct variant for a caller-owned private staging file: same alias, budget and
+// cleanup contract, without a second sibling file or a second rename.
+JPDFIUM_EXPORT int32_t jpdfium_doc_save_to_file_unstaged(int64_t doc, const char* path,
+                                                         int64_t max_bytes, int64_t* out_bytes);
 JPDFIUM_EXPORT int32_t jpdfium_doc_set_sanitize_on_save(int64_t doc,
                                                         int32_t enable) JPDFIUM_NOEXCEPT;
 JPDFIUM_EXPORT void jpdfium_doc_close(int64_t doc) JPDFIUM_NOEXCEPT;
@@ -684,6 +694,17 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_pages_file(const char* in_path,
                                                        const int32_t* pageIndices,
                                                        int32_t pageCount, const char* out_path);
 
+// Extract N page ranges from ONE source parse. pageIndices is a flat list;
+// rangeOffsets holds rangeCount+1 entries indexing into it. The source is kept
+// alive until the last range is written.
+//
+// Caller contract: rangeOffsets must be non-decreasing, rangeOffsets[rangeCount]
+// must equal the length of pageIndices, and outPaths must hold rangeCount
+// entries. The native side cannot bound pageIndices by itself.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_ranges_file(
+    const char* in_path, const int32_t* pageIndices, const int32_t* rangeOffsets,
+    int32_t rangeCount, const char* const* outPaths) JPDFIUM_NOEXCEPT;
+
 // QPDF In-Process Encryption & Decryption
 #define JPDFIUM_PERM_PRINT_LOW 0x0004
 #define JPDFIUM_PERM_MODIFY 0x0008
@@ -903,7 +924,8 @@ JPDFIUM_EXPORT int32_t jpdfium_color_pdfx_file(const char* in_path, const char* 
 // Caller must free *output with jpdfium_free_buffer.
 JPDFIUM_EXPORT int32_t jpdfium_import_n_pages_to_one(void* srcDoc, float outputWidth,
                                                      float outputHeight, int32_t cols, int32_t rows,
-                                                     uint8_t** output, int64_t* outputLen);
+                                                     uint8_t** output,
+                                                     int64_t* outputLen) JPDFIUM_NOEXCEPT;
 
 // Signatures (read-only inspection via the EmbedPDF signature model).
 

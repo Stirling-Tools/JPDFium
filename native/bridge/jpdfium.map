@@ -922,6 +922,8 @@
     EPDFAnnot_SetUnrotatedRect;
     EPDFAnnot_SetVerticalAlignment;
     jpdfium_*;
+    jpdf_*;
+    jpdf_guard_*;
   local:
     *;
 };

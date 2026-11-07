@@ -2,9 +2,9 @@ package stirling.software.jpdfium.text;
 
 import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.FfmHelper;
+import stirling.software.jpdfium.panama.FfmHelper.Scratch;
 import stirling.software.jpdfium.panama.TextPageBindings;
 
-import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 
 /**
@@ -14,6 +14,9 @@ import java.lang.foreign.MemorySegment;
  * a specified rectangular region of the page.
  */
 public final class PdfBoundedText {
+
+    /** Upper bound for growing the bounded-text buffer, in UTF-16 code units. */
+    private static final int MAX_BOUNDED_TEXT_CHARS = 1 << 20;
 
     private PdfBoundedText() {}
 
@@ -48,18 +51,23 @@ public final class PdfBoundedText {
      */
     public static String extractFromTextPage(MemorySegment textPage, double left, double top,
                                               double right, double bottom) {
-        try (Arena arena = Arena.ofConfined()) {
-            // First call: get required buffer size
-            int charCount = (int) TextPageBindings.FPDFText_GetBoundedText.invokeExact(
-                    textPage, left, top, right, bottom, MemorySegment.NULL, 0);
-            if (charCount <= 0) return "";
-
-            // Allocate buffer (charCount includes null terminator, each char is 2 bytes)
-            MemorySegment buf = arena.allocate((long) (charCount + 1) * 2);
+        Scratch scratch = FfmHelper.scratch();
+        int capChars = (int) (scratch.bufferSize() / 2);
+        try {
+            MemorySegment buf = scratch.buffer();
             int written = (int) TextPageBindings.FPDFText_GetBoundedText.invokeExact(
-                    textPage, left, top, right, bottom, buf, charCount + 1);
+                    textPage, left, top, right, bottom, buf, capChars);
             if (written <= 0) return "";
-            return FfmHelper.fromWideString(buf, (long) written * 2);
+            // With a buffer, GetBoundedText truncates to the buffer size, so a
+            // filled buffer means the text may be incomplete: grow and re-query.
+            while (written == capChars && capChars < MAX_BOUNDED_TEXT_CHARS) {
+                capChars = (int) Math.min((long) capChars * 2, MAX_BOUNDED_TEXT_CHARS);
+                buf = scratch.ensureNativeBuffer((long) capChars * 2);
+                written = (int) TextPageBindings.FPDFText_GetBoundedText.invokeExact(
+                        textPage, left, top, right, bottom, buf, capChars);
+                if (written <= 0) return "";
+            }
+            return scratch.decodeWideChars(buf, written);
         } catch (Throwable t) { return ""; }
     }
 
@@ -73,21 +81,25 @@ public final class PdfBoundedText {
         } catch (Throwable t) { return ""; }
         if (textPage.equals(MemorySegment.NULL)) return "";
 
-        try (Arena arena = Arena.ofConfined()) {
+        try {
             int charCount;
             try {
                 charCount = (int) TextPageBindings.FPDFText_CountChars.invokeExact(textPage);
             } catch (Throwable t) { return ""; }
             if (charCount <= 0) return "";
 
-            MemorySegment buf = arena.allocate((long) (charCount + 1) * 2);
+            Scratch scratch = FfmHelper.scratch();
+            long neededBytes = (long) (charCount + 1) * 2;
+            MemorySegment buf = scratch.ensureNativeBuffer(neededBytes);
             int written;
             try {
                 written = (int) TextPageBindings.FPDFText_GetText.invokeExact(
                         textPage, 0, charCount, buf);
             } catch (Throwable t) { return ""; }
             if (written <= 0) return "";
-            return FfmHelper.fromWideString(buf, (long) written * 2);
+            // GetText returns the count including the trailing NUL, which
+            // decodeWideChars already strips.
+            return scratch.decodeWideChars(buf, written);
         } finally {
             try { TextPageBindings.FPDFText_ClosePage.invokeExact(textPage); }
             catch (Throwable t) { NativeRuntime.rethrowFatal(t); }

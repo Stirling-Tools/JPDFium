@@ -1,5 +1,4 @@
 // jpdfium_image.cpp - Image to PDF conversion.
-//
 // Uses PDFium's native image APIs to embed images into PDF pages.
 // Supports JPEG, PNG, and raw bitmap embedding.
 
@@ -11,10 +10,44 @@
 #include <cstdlib>
 #include <cstring>
 
+#if defined(__ARM_NEON) || defined(__aarch64__)
+#include <arm_neon.h>
+#elif defined(__x86_64__) || defined(_M_X64)
+#include <immintrin.h>
+#endif
+
 #include "jpdfium.h"
 #include "jpdfium_internal.h"
+#include "runtime/domain.h"
 
-// Internal helpers
+// Swaps the R and B bytes of every four-byte RGBA/BGRA pixel group.
+static void swapRgbaBgra(uint8_t* __restrict dst, const uint8_t* __restrict src, int count) {
+    int i = 0;
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    for (; i + 16 <= count; i += 16) {
+        uint8x16x4_t px = vld4q_u8(src + static_cast<std::ptrdiff_t>(i) * 4);
+        uint8x16_t r = px.val[0];
+        px.val[0] = px.val[2];
+        px.val[2] = r;
+        vst4q_u8(dst + static_cast<std::ptrdiff_t>(i) * 4, px);
+    }
+#elif defined(__SSSE3__)
+    const __m128i mask = _mm_setr_epi8(2, 1, 0, 3, 6, 5, 4, 7, 10, 9, 8, 11, 14, 13, 12, 15);
+    for (; i + 4 <= count; i += 4) {
+        const __m128i p = _mm_loadu_si128(
+            reinterpret_cast<const __m128i*>(src + static_cast<std::ptrdiff_t>(i) * 4));
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(dst + static_cast<std::ptrdiff_t>(i) * 4),
+                         _mm_shuffle_epi8(p, mask));
+    }
+#endif
+    // Unaligned-safe: caller buffers only guarantee byte alignment.
+    for (; i < count; ++i) {
+        uint32_t px;
+        memcpy(&px, src + static_cast<std::ptrdiff_t>(i) * 4, sizeof(px));
+        px = (px & 0xFF00FF00u) | ((px & 0x00FF0000u) >> 16) | ((px & 0x000000FFu) << 16);
+        memcpy(dst + static_cast<std::ptrdiff_t>(i) * 4, &px, sizeof(px));
+    }
+}
 
 static uint8_t* decode_png(const uint8_t* png_data, size_t png_len, int* out_width,
                            int* out_height) {
@@ -54,10 +87,10 @@ static int32_t read_le_i32(const uint8_t* p) {
 
 // Create a new PDF page with an image embedded.
 // image_format: 0=auto-detect, 1=PNG, 2=JPEG, 3=raw RGBA
-//   For format 3, image_data must begin with an 8-byte header:
-//     bytes 0-3: image width  (int32, little-endian)
-//     bytes 4-7: image height (int32, little-endian)
-//   followed immediately by width*height*4 bytes of raw RGBA pixel data.
+// For format 3, image_data must begin with an 8-byte header:
+// bytes 0-3: image width (int32, little-endian)
+// bytes 4-7: image height (int32, little-endian)
+// followed immediately by width*height*4 bytes of raw RGBA pixel data.
 static int32_t create_page_with_image(int64_t docHandle, const uint8_t* image_data,
                                       size_t image_len, float page_width, float page_height,
                                       float margin, Position position, int32_t image_format,
@@ -76,8 +109,11 @@ static int32_t create_page_with_image(int64_t docHandle, const uint8_t* image_da
         img_width = read_le_i32(image_data);
         img_height = read_le_i32(image_data + 4);
         if (img_width <= 0 || img_height <= 0) return JPDFIUM_ERR_INVALID;
-        size_t pixel_bytes = (size_t)img_width * img_height * 4;
-        if (image_len < (size_t)(8 + (int64_t)pixel_bytes)) return JPDFIUM_ERR_INVALID;
+        // Sized unsigned: a large width/height pair would otherwise wrap the 32-bit product
+        // and defeat the length check below.
+        const auto pixel_bytes =
+            static_cast<uint64_t>(img_width) * static_cast<uint64_t>(img_height) * 4u;
+        if (static_cast<uint64_t>(image_len) < pixel_bytes + 8u) return JPDFIUM_ERR_INVALID;
         // Use the pixel data in-place (no copy needed here)
         pixels = const_cast<uint8_t*>(image_data + 8);
         pixels_owned = false;
@@ -115,17 +151,13 @@ static int32_t create_page_with_image(int64_t docHandle, const uint8_t* image_da
     void* bmp_buf = FPDFBitmap_GetBuffer(bmp);
     int stride = FPDFBitmap_GetStride(bmp);
 
-    int row_bytes = img_width * channels;
+    const std::size_t row_bytes =
+        static_cast<std::size_t>(img_width) * static_cast<std::size_t>(channels);
     for (int row = 0; row < img_height; ++row) {
         uint8_t* dst = static_cast<uint8_t*>(bmp_buf) + static_cast<std::ptrdiff_t>(row) * stride;
         const uint8_t* src = pixels + static_cast<std::ptrdiff_t>(row) * row_bytes;
         if (image_format == 3 && channels == 4) {
-            for (int x = 0; x < img_width; ++x) {
-                uint32_t px;
-                memcpy(&px, src + static_cast<std::ptrdiff_t>(x) * 4, sizeof(px));
-                px = (px & 0xFF00FF00u) | ((px & 0x00FF0000u) >> 16) | ((px & 0x000000FFu) << 16);
-                memcpy(dst + static_cast<std::ptrdiff_t>(x) * 4, &px, sizeof(px));
-            }
+            swapRgbaBgra(dst, src, img_width);
         } else {
             memcpy(dst, src, static_cast<std::size_t>(row_bytes));
         }
@@ -290,9 +322,13 @@ JPDFIUM_EXPORT int32_t jpdfium_image_to_pdf(const uint8_t* image_data, int64_t i
             return result;
         }
 
+        // Ownership of the wrapper moves to DocHandleRegistry; release() returns the same `raw`
+        // pointer already registered above, so it is deliberately discarded.
+        // NOLINTNEXTLINE(bugprone-unused-return-value)
         (void)dw.release();
         provisional = nullptr;
         *doc_handle = encodeHandle(raw);
+        jpdf::Domain::instance().document_opened(raw->core->doc);
         return JPDFIUM_OK;
 
     } catch (...) {
@@ -327,24 +363,28 @@ JPDFIUM_EXPORT int32_t jpdfium_doc_add_image_page(int64_t doc_handle, const uint
 JPDFIUM_EXPORT int32_t jpdfium_embed_jpeg_direct(int64_t doc_handle, const uint8_t* jpeg_data,
                                                  int64_t jpeg_len, float page_width,
                                                  float page_height, float margin, int32_t position,
-                                                 int32_t insert_at_index) {
-    DocWrapper* dw = decodeDoc(doc_handle);
-    if (!dw || !dw->core->doc) return JPDFIUM_ERR_INVALID;
+                                                 int32_t insert_at_index) JPDFIUM_NOEXCEPT {
+    try {
+        DocWrapper* dw = decodeDoc(doc_handle);
+        if (!dw || !dw->core->doc) return JPDFIUM_ERR_INVALID;
 
-    if (!is_jpeg(jpeg_data, static_cast<size_t>(jpeg_len))) {
-        return JPDFIUM_ERR_INVALID;
+        if (!jpeg_data || jpeg_len < 0 || !is_jpeg(jpeg_data, static_cast<size_t>(jpeg_len))) {
+            return JPDFIUM_ERR_INVALID;
+        }
+
+        // For direct JPEG embedding, we would use FPDFImageObj_LoadJpegFileInline
+        // This requires setting up a FPDF_FILEACCESS structure
+        // Implementation deferred - use decoded bitmap path for now
+        (void)page_width;
+        (void)page_height;
+        (void)margin;
+        (void)position;
+        (void)insert_at_index;
+
+        return JPDFIUM_ERR_NATIVE;
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
     }
-
-    // For direct JPEG embedding, we would use FPDFImageObj_LoadJpegFileInline
-    // This requires setting up a FPDF_FILEACCESS structure
-    // Implementation deferred - use decoded bitmap path for now
-    (void)page_width;
-    (void)page_height;
-    (void)margin;
-    (void)position;
-    (void)insert_at_index;
-
-    return JPDFIUM_ERR_NATIVE;
 }
 
 }  // extern "C"

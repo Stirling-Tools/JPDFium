@@ -21,10 +21,6 @@ public final class ImageObjBindings {
         return Symbols.downcall(name, desc);
     }
 
-    private static MethodHandle downcallCritical(String name, FunctionDescriptor desc) {
-        return Symbols.downcallCritical(name, desc);
-    }
-
     /**
      * Layout of FPDF_IMAGEOBJ_METADATA struct:
      * { unsigned int width, height, bits_per_pixel; int colorspace; int marked_content_id; }
@@ -67,7 +63,7 @@ public final class ImageObjBindings {
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
 
     /** Get the number of filters (compression) on an image. */
-    public static final MethodHandle FPDFImageObj_GetImageFilterCount = downcallCritical("FPDFImageObj_GetImageFilterCount",
+    public static final MethodHandle FPDFImageObj_GetImageFilterCount = downcall("FPDFImageObj_GetImageFilterCount",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
     /** Get a filter name by index. Returns chars written. */

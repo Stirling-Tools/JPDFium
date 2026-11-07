@@ -132,9 +132,7 @@ public class S95_RedactPipelinePerf {
         }
     }
 
-    // ------------------------------------------------------------------
     // Synthetic content
-    // ------------------------------------------------------------------
 
     private static byte[] generateReportPdf(int pages) throws Exception {
         try (PDDocument doc = new PDDocument()) {
@@ -190,9 +188,7 @@ public class S95_RedactPipelinePerf {
         return filler[(page * 7 + line) % filler.length];
     }
 
-    // ------------------------------------------------------------------
     // Harness (fresh document per iteration)
-    // ------------------------------------------------------------------
 
     private static final class Sample {
         private final byte[] pdf;

@@ -123,14 +123,44 @@ jobs:
             libpcre2-dev libfreetype6-dev libharfbuzz-dev libicu-dev \
             libqpdf-dev libpugixml-dev libunibreak-dev lld patchelf
 
+      # Pinned: the guard shims below are regenerated with clang-format, and an
+      # unpinned version would reformat them and fail the diff check.
+      - name: Install pinned clang-format
+        run: |
+          python3 -m venv "$RUNNER_TEMP/cf-venv"
+          "$RUNNER_TEMP/cf-venv/bin/pip" install clang-format==18.1.8
+          echo "$RUNNER_TEMP/cf-venv/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/cf-venv/bin/clang-format" --version
+
       - name: Fetch prebuilt PDFium (pinned)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: bash native/fetch-prebuilt-pdfium.sh linux-x64
 
+      # The optional OCR module: ONNX Runtime and the model profile, each pinned by digest.
+      - name: Fetch ONNX Runtime and the OCR profile (pinned)
+        run: |
+          bash native/ocr/fetch-onnxruntime.sh linux-x64
+          python3 native/ocr/tools/fetch_profile.py native/ocr/profiles/pp-ocrv6-small.profile \
+            "$RUNNER_TEMP/ocr-profile"
+
+      # The guard shims are generated from the pinned PDFium headers; a pin bump must regenerate them.
+      - name: Guard shims match the pinned PDFium
+        run: |
+          nm -D --defined-only native/pdfium/lib/libpdfium.so | awk '{print $3}' > "$RUNNER_TEMP/pdfium.exports"
+          python3 native/tools/gen_guards.py --pdfium-include native/pdfium/include \
+            --pdfium-exports "$RUNNER_TEMP/pdfium.exports"
+          git diff --exit-code native/bridge/src/legacy
+
       - name: Build real bridge
         run: bash native/build-real.sh
+
+      # The only CI job with real PDFium: run the native suites, including the safe jpdf_* API.
+      - name: Native tests (real PDFium)
+        env:
+          JPDFIUM_OCR_PROFILE: ${{ runner.temp }}/ocr-profile
+        run: ctest --test-dir native/build-real --output-on-failure
 
       - name: Stage natives
         run: |

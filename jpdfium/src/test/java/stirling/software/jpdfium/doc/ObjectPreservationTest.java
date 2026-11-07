@@ -260,7 +260,7 @@ class ObjectPreservationTest {
         }
     }
 
-    // --- Helpers to build test PDFs ---
+    // Helpers to build test PDFs
 
     private static byte[] createNestedBookmarkPdf(String prefix, int pages) throws Exception {
         try (PDDocument document = new PDDocument()) {

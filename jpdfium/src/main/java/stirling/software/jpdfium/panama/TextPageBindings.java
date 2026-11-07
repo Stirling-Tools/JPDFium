@@ -18,10 +18,6 @@ public final class TextPageBindings {
         return Symbols.downcall(name, desc);
     }
 
-    private static MethodHandle downcallCritical(String name, FunctionDescriptor desc) {
-        return Symbols.downcallCritical(name, desc);
-    }
-
     /** Load a text page from a page handle. Returns FPDF_TEXTPAGE. */
     public static final MethodHandle FPDFText_LoadPage = downcall("FPDFText_LoadPage",
             FunctionDescriptor.of(ADDRESS, ADDRESS));
@@ -31,7 +27,7 @@ public final class TextPageBindings {
             FunctionDescriptor.ofVoid(ADDRESS));
 
     /** Count characters on the text page. */
-    public static final MethodHandle FPDFText_CountChars = downcallCritical("FPDFText_CountChars",
+    public static final MethodHandle FPDFText_CountChars = downcall("FPDFText_CountChars",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
     /** Get bounded text within a rectangle. Returns char count written. */
@@ -43,7 +39,7 @@ public final class TextPageBindings {
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, JAVA_INT, ADDRESS));
 
     /** Count text rects in a range. */
-    public static final MethodHandle FPDFText_CountRects = downcallCritical("FPDFText_CountRects",
+    public static final MethodHandle FPDFText_CountRects = downcall("FPDFText_CountRects",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, JAVA_INT));
 
     /** Get a text rect. */
@@ -59,7 +55,7 @@ public final class TextPageBindings {
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, ADDRESS, ADDRESS));
 
     /** Get unicode of a character by index. */
-    public static final MethodHandle FPDFText_GetUnicode = downcallCritical("FPDFText_GetUnicode",
+    public static final MethodHandle FPDFText_GetUnicode = downcall("FPDFText_GetUnicode",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
 
     /** Start a text search. Returns FPDF_SCHHANDLE. */
@@ -67,19 +63,19 @@ public final class TextPageBindings {
             FunctionDescriptor.of(ADDRESS, ADDRESS, ADDRESS, JAVA_INT, JAVA_INT));
 
     /** Find the next match. Returns 1 if found. */
-    public static final MethodHandle FPDFText_FindNext = downcallCritical("FPDFText_FindNext",
+    public static final MethodHandle FPDFText_FindNext = downcall("FPDFText_FindNext",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
     /** Find the previous match. Returns 1 if found. */
-    public static final MethodHandle FPDFText_FindPrev = downcallCritical("FPDFText_FindPrev",
+    public static final MethodHandle FPDFText_FindPrev = downcall("FPDFText_FindPrev",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
     /** Get the start character index of the current match. */
-    public static final MethodHandle FPDFText_GetSchResultIndex = downcallCritical("FPDFText_GetSchResultIndex",
+    public static final MethodHandle FPDFText_GetSchResultIndex = downcall("FPDFText_GetSchResultIndex",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
     /** Get the character count of the current match. */
-    public static final MethodHandle FPDFText_GetSchCount = downcallCritical("FPDFText_GetSchCount",
+    public static final MethodHandle FPDFText_GetSchCount = downcall("FPDFText_GetSchCount",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
     /** Close a search handle. */

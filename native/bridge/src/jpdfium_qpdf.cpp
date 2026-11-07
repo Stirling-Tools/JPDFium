@@ -53,6 +53,8 @@
 
 namespace {
 
+static constexpr std::size_t kQpdfIoBufferBytes = static_cast<std::size_t>(256) * 1024;
+
 // Create the output with owner-only permissions on POSIX (CodeQL
 // cpp/world-writable-file-creation); Windows has no mode argument here.
 //
@@ -63,14 +65,21 @@ static FILE* createOutputFile(const char* path) {
 #ifdef _WIN32
     const auto* utf8 = reinterpret_cast<const char8_t*>(path);
     std::filesystem::path p{std::u8string(utf8)};
-    return ::_wfopen(p.c_str(), L"wb");
+    FILE* file = ::_wfopen(p.c_str(), L"wb");
 #else
     int fd = ::open(path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
     if (fd < 0) return nullptr;
     FILE* file = ::fdopen(fd, "wb");
-    if (!file) ::close(fd);
-    return file;
+    if (!file) {
+        ::close(fd);
+        return nullptr;
+    }
 #endif
+    // Every writer streams its output exactly once, so the default 4 KiB stdio
+    // buffer would turn large saves into thousands of small write(2) calls. One
+    // buffer is set here so no call site can forget it.
+    if (file) setvbuf(file, nullptr, _IOFBF, kQpdfIoBufferBytes);
+    return file;
 }
 
 struct QpdfResult {
@@ -213,6 +222,18 @@ void applyDocumentOptions(QPDF& pdf, const OptimizeOptions& options) {
     }
 }
 
+bool inWriterModeDomain(int32_t value, int32_t highest) {
+    // -1 leaves qpdf's default in place.
+    return value >= -1 && value <= highest;
+}
+
+// Validate caller-supplied qpdf enums before they reach qpdf's switches.
+bool validWriterOptions(const OptimizeOptions& options) {
+    return inWriterModeDomain(options.objectStreamMode, 2) &&
+           inWriterModeDomain(options.streamDataMode, 2) &&
+           inWriterModeDomain(options.decodeLevel, 3);
+}
+
 // Shared writer setup; QDF defaults are applied before explicit flags.
 void configureWriter(QPDFWriter& w, const OptimizeOptions& options) {
     if (options.flags & JPDFIUM_QPDF_QDF) {
@@ -248,6 +269,10 @@ int writeToFile(const std::shared_ptr<QPDF>& qpdf, const char* out_path,
                      options.compressionLevel);
         return -1;
     }
+    if (!validWriterOptions(options)) {
+        std::fprintf(stderr, "jpdfium qpdf file: invalid writer mode\n");
+        return -1;
+    }
     applyDocumentOptions(*qpdf, options);
     FILE* out = createOutputFile(out_path);
     if (!out) return -1;
@@ -280,6 +305,9 @@ int writeToFile(const std::shared_ptr<QPDF>& qpdf, const char* out_path,
 QpdfResult optimize(std::span<const uint8_t> input, const OptimizeOptions& options) {
     if (!validCompressionLevel(options.compressionLevel)) {
         return {nullptr, "invalid compression level"};
+    }
+    if (!validWriterOptions(options)) {
+        return {nullptr, "invalid writer mode"};
     }
     try {
         auto qpdf = QPDF::create();
@@ -1417,9 +1445,6 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_merge_files(const char* const* paths, int32_
             std::fprintf(stderr, "jpdfium qpdf file: cannot open output %s\n", out_path);
             return -1;
         }
-        // QPDFWriter assumes ownership of the FILE* only once setOutputFile
-        // returns; if the constructor or setOutputFile throws first, close it
-        // here so a failed write does not leak the descriptor.
         bool writerOwnsFile = false;
         try {
             QPDFWriter w{*dest};
@@ -1458,9 +1483,6 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_pages_file(const char* in_path,
             std::fprintf(stderr, "jpdfium qpdf file: cannot open output %s\n", out_path);
             return -1;
         }
-        // QPDFWriter assumes ownership of the FILE* only once setOutputFile
-        // returns; if the constructor or setOutputFile throws first, close it
-        // here so a failed write does not leak the descriptor.
         bool writerOwnsFile = false;
         try {
             QPDFWriter w{*dest};
@@ -1480,6 +1502,74 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_pages_file(const char* in_path,
     } catch (...) {
         // Never let a non-std exception escape an extern "C" boundary.
         std::fprintf(stderr, "jpdfium qpdf extract file: unknown error\n");
+        return -1;
+    }
+}
+
+// Extract N ranges from ONE source parse. The source (and its page objects,
+// which the destinations reference as foreign objects) stays alive until the
+// final range has been written.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_ranges_file(
+    const char* in_path, const int32_t* pageIndices, const int32_t* rangeOffsets,
+    int32_t rangeCount, const char* const* outPaths) JPDFIUM_NOEXCEPT {
+    if (!in_path || !pageIndices || !rangeOffsets || rangeCount <= 0 || !outPaths) return -1;
+    try {
+        auto src = QPDF::create();
+        src->processFile(in_path);
+        QPDFPageDocumentHelper src_pdh{*src};
+        auto allPages = src_pdh.getAllPages();
+        const int32_t totalPages = static_cast<int32_t>(allPages.size());
+        // Validate every range before writing anything: a malformed offset array
+        // must fail here, while no output file exists yet, rather than after some
+        // ranges are already on disk. Native code cannot bound pageIndices, so the
+        // caller must guarantee rangeOffsets[rangeCount] == the flat array length.
+        for (int32_t r = 0; r < rangeCount; ++r) {
+            if (rangeOffsets[r] < 0 || rangeOffsets[r + 1] < rangeOffsets[r]) return -1;
+            // Validate every page index before any output file is opened: a
+            // bad index must fail here, not after earlier ranges are on disk.
+            for (int32_t i = rangeOffsets[r]; i < rangeOffsets[r + 1]; ++i) {
+                const int32_t idx = pageIndices[i];
+                if (idx < 0 || idx >= totalPages) return -1;
+            }
+        }
+        // One IO buffer for every output instead of letting libc malloc/free a
+        // 256 KiB buffer per range (thousands of times on large splits).
+        std::vector<char> ioBuf(kQpdfIoBufferBytes);
+        for (int32_t r = 0; r < rangeCount; ++r) {
+            const int32_t begin = rangeOffsets[r];
+            const int32_t end = rangeOffsets[r + 1];
+            if (begin < 0 || end < begin) return -1;
+            auto dest = QPDF::create();
+            dest->emptyPDF();
+            QPDFPageDocumentHelper dest_pdh{*dest};
+            for (int32_t i = begin; i < end; ++i) {
+                const int32_t idx = pageIndices[i];
+                if (idx >= 0 && idx < totalPages) dest_pdh.addPage(allPages[idx], false);
+            }
+            FILE* out = createOutputFile(outPaths[r]);
+            if (!out) {
+                std::fprintf(stderr, "jpdfium qpdf ranges: cannot open output %s\n", outPaths[r]);
+                return -1;
+            }
+            setvbuf(out, ioBuf.data(), _IOFBF, ioBuf.size());
+            bool writerOwnsFile = false;
+            try {
+                QPDFWriter w{*dest};
+                w.setOutputFile("jpdfium-out", out, true);
+                writerOwnsFile = true;
+                configureAssembledWriter(w);
+                w.write();
+            } catch (...) {
+                if (!writerOwnsFile) std::fclose(out);
+                throw;
+            }
+        }
+        return 0;
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "jpdfium qpdf ranges file: %s\n", e.what());
+        return -1;
+    } catch (...) {
+        std::fprintf(stderr, "jpdfium qpdf ranges file: unknown error\n");
         return -1;
     }
 }
@@ -1685,16 +1775,13 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_copy_encryption_file(const char* in_path, co
         return -1;
     }
     try {
-        // Open the encrypted source with whichever password the caller knows.
-        // The source document is only read for its encryption dictionary, so it
-        // never has to be written back out.
-        //
-        // Pre-256-bit encryption imposes single-byte PDFDocEncoding passwords
-        // while our caller hands us UTF-8, and QPDF::processFile performs no
-        // conversion, so walk the same alternative encodings that QPDFJob tries
-        // for the command line. Without this an AES-128 source protected with a
-        // password that needs a second encoding would refuse a password that
-        // the equivalent qpdf command line accepts.
+        // Open the encrypted source with whichever password the caller knows; it is
+        // only read for its encryption dictionary. Pre-256-bit encryption imposes
+        // single-byte PDFDocEncoding passwords while our caller hands us UTF-8 and
+        // QPDF::processFile performs no conversion, so walk the same alternative
+        // encodings QPDFJob tries for the command line - otherwise an AES-128 source
+        // needing a second encoding rejects a password the equivalent qpdf command
+        // line accepts.
         std::vector<std::string> candidates = QUtil::possible_repaired_encodings(password);
         if (candidates.size() > 1) {
             // Report the supplied password's own failure if every form fails.
@@ -1714,7 +1801,7 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_copy_encryption_file(const char* in_path, co
         // A plaintext source carries no protection to copy. Refusing here keeps
         // a caller from publishing an unprotected file and believing it is
         // protected.
-        if (!source->isEncrypted()) return -1;
+        if (!source || !source->isEncrypted()) return -1;
 
         auto dest = QPDF::create();
         dest->processFile(in_path);
@@ -1862,7 +1949,9 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_decrypt(const uint8_t*, int64_t, const char*
     return -1;
 }
 
-JPDFIUM_EXPORT int32_t jpdfium_qpdf_sanitize_file(const char*, const char*, int32_t) {
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_ranges_file(const char*, const int32_t*, const int32_t*,
+                                                        int32_t,
+                                                        const char* const*) JPDFIUM_NOEXCEPT {
     return -1;
 }
 

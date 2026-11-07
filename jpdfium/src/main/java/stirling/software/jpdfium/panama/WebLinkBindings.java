@@ -17,16 +17,12 @@ public final class WebLinkBindings {
         return Symbols.downcall(name, desc);
     }
 
-    private static MethodHandle downcallCritical(String name, FunctionDescriptor desc) {
-        return Symbols.downcallCritical(name, desc);
-    }
-
     /** Load web links from a text page handle. Returns FPDF_PAGELINK handle. */
     public static final MethodHandle FPDFLink_LoadWebLinks = downcall("FPDFLink_LoadWebLinks",
             FunctionDescriptor.of(ADDRESS, ADDRESS));
 
     /** Count detected web links. */
-    public static final MethodHandle FPDFLink_CountWebLinks = downcallCritical("FPDFLink_CountWebLinks",
+    public static final MethodHandle FPDFLink_CountWebLinks = downcall("FPDFLink_CountWebLinks",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
     /** Get URL string (UTF-16LE). Returns chars written including null. */
@@ -38,7 +34,7 @@ public final class WebLinkBindings {
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, ADDRESS, ADDRESS));
 
     /** Count the number of rects for a web link. */
-    public static final MethodHandle FPDFLink_CountRects = downcallCritical("FPDFLink_CountRects",
+    public static final MethodHandle FPDFLink_CountRects = downcall("FPDFLink_CountRects",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
 
     /** Get a rect for a web link. */

@@ -18,12 +18,8 @@ public final class JavaScriptBindings {
         return Symbols.downcall(name, desc);
     }
 
-    private static MethodHandle downcallCritical(String name, FunctionDescriptor desc) {
-        return Symbols.downcallCritical(name, desc);
-    }
-
     /** Count document-level JavaScript actions. */
-    public static final MethodHandle FPDFDoc_GetJavaScriptActionCount = downcallCritical("FPDFDoc_GetJavaScriptActionCount",
+    public static final MethodHandle FPDFDoc_GetJavaScriptActionCount = downcall("FPDFDoc_GetJavaScriptActionCount",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
     /** Get a JavaScript action handle by index. */

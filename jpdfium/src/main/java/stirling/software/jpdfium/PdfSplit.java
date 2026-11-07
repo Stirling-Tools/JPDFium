@@ -3,10 +3,16 @@ package stirling.software.jpdfium;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.PosixFilePermission;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicLong;
@@ -41,6 +47,28 @@ import stirling.software.jpdfium.panama.QpdfLib;
 public final class PdfSplit {
 
     private PdfSplit() {}
+
+    private static final System.Logger LOG = System.getLogger(PdfSplit.class.getName());
+
+    /**
+     * Publish a staging file this class owns, reporting a publication that
+     * landed without a confirmed directory sync instead of assuming durability.
+     */
+    private static void publishStagedFile(Path staged, Path output, boolean durable)
+            throws IOException {
+        if (!durable) {
+            // Non-durable internal publication: the caller reopens or deletes the file.
+            OutputTransaction.publishStaged(staged, output, false);
+            return;
+        }
+        if (OutputTransaction.publishStagedDurable(staged, output)
+                == OutputTransaction.Durability.UNCONFIRMED) {
+            LOG.log(System.Logger.Level.WARNING,
+                    "published {0}, but its directory entry could not be synchronised;"
+                            + " crash durability is not guaranteed on this platform",
+                    output);
+        }
+    }
 
     /** Operation counters for split source reuse (reset per test/benchmark). */
     public static final SplitCounters COUNTERS = new SplitCounters();
@@ -83,6 +111,331 @@ public final class PdfSplit {
     }
 
     /**
+     * Split a file directly into part files, avoiding a temp document per part
+     * on the native batch path.
+     *
+     * <p>Each part is staged beside its destination and atomically replaced
+     * only after every part has been extracted and (when enabled) verified. A
+     * failed split therefore leaves existing destinations untouched. When the
+     * source has bookmarks or the native batch extractor is unavailable, this
+     * falls back to {@link #split(PdfDocument, SplitStrategy, StorageOptions)}
+     * plus per-part saves through the same staging/publish transaction.
+     *
+     * <p>The default is durable publication. Pass
+     * {@code StorageOptions.builder().file().durable(false).build()} for derived
+     * artifacts: it keeps atomic renames but skips per-part fsync.
+     */
+    public static List<Path> splitToFiles(Path input, SplitStrategy strategy, Path outputDir)
+            throws IOException {
+        return splitToFiles(input, strategy, outputDir, StorageOptions.defaults());
+    }
+
+    /**
+     * Fast split to files for disposable/derived outputs.
+     *
+     * <p>When the source has no bookmarks, no output {@code part-NNN.pdf} is a
+     * symbolic link, and the native batch extractor is available, this writes
+     * directly to the final paths. It skips staging, atomic rename, reopen
+     * verification and {@code fsync}; on failure, earlier parts may remain on
+     * disk and existing destinations may already have been overwritten. Use
+     * {@link #splitToFiles(Path, SplitStrategy, Path, StorageOptions)} when
+     * atomic replacement, verification, durability or bookmark preservation is
+     * required.
+     *
+     * <p>In every other case (bookmarked source, symlink destination, or no
+     * native batch extractor) this falls back to the staged non-durable
+     * {@link #splitToFiles} path.
+     *
+     * @param input     source PDF file
+     * @param strategy  split strategy
+     * @param outputDir directory for {@code part-NNN.pdf} outputs
+     * @return written part paths in order
+     */
+    public static List<Path> splitToFilesFast(Path input, SplitStrategy strategy, Path outputDir)
+            throws IOException {
+        if (input == null) throw new IllegalArgumentException("input must not be null");
+        if (strategy == null) throw new IllegalArgumentException("strategy must not be null");
+        if (outputDir == null) throw new IllegalArgumentException("outputDir must not be null");
+        Files.createDirectories(outputDir);
+
+        try (PdfDocument doc = PdfDocument.open(input)) {
+            List<int[]> ranges = strategy.computeRanges(doc);
+            if (ranges.isEmpty()) return List.of();
+            List<Path> targets = partTargets(outputDir, ranges.size());
+            Set<Path> existingEntries = listEntries(outputDir);
+            rejectInputAlias(input, targets, existingEntries);
+            boolean anyTargetIsSymlink = false;
+            for (Path target : targets) {
+                boolean mayExist = existingEntries == null
+                        ? Files.exists(target, LinkOption.NOFOLLOW_LINKS)
+                        : existingEntries.contains(target.toAbsolutePath().normalize());
+                if (mayExist && Files.isSymbolicLink(target)) {
+                    anyTargetIsSymlink = true;
+                    break;
+                }
+            }
+            if (!doc.hasBookmarks() && QpdfLib.isExtractRangesSupported()
+                    && !anyTargetIsSymlink) {
+                List<int[]> indexRanges = indexRanges(ranges);
+                Set<Path> existed = new HashSet<>();
+                Map<Path, Set<PosixFilePermission>> previousPermissions = new HashMap<>();
+                for (Path target : targets) {
+                    boolean mayExist = existingEntries == null
+                            ? Files.exists(target, LinkOption.NOFOLLOW_LINKS)
+                            : existingEntries.contains(target.toAbsolutePath().normalize());
+                    if (mayExist) {
+                        existed.add(target);
+                        Set<PosixFilePermission> permissions = readPosixPermissions(target);
+                        if (permissions != null) previousPermissions.put(target, permissions);
+                    }
+                }
+                boolean extracted;
+                try {
+                    extracted = QpdfLib.extractRangesInto(input, indexRanges, targets);
+                } catch (JPDFiumException _) {
+                    // Fall back exactly like a false return so AUTO mode still
+                    // recovers from a native or alias failure.
+                    extracted = false;
+                }
+                if (extracted) {
+                    for (Path target : targets) {
+                        if (!OutputTransaction.isPublishableStaging(target)) {
+                            for (Path created : targets) {
+                                if (!existed.contains(created)) deleteQuietly(created);
+                            }
+                            throw new JPDFiumException(
+                                    "split produced an empty or oversized part: " + target);
+                        }
+                    }
+                    for (Path target : targets) {
+                        Set<PosixFilePermission> previous = previousPermissions.get(target);
+                        if (previous != null) {
+                            restorePosixPermissions(target, previous);
+                        } else {
+                            OutputTransaction.applyDefaultCreatePermissions(target);
+                        }
+                    }
+                    return List.copyOf(targets);
+                }
+                for (Path target : targets) {
+                    if (!existed.contains(target)) deleteQuietly(target);
+                }
+            }
+        }
+        return splitToFiles(input, strategy, outputDir,
+                StorageOptions.builder().durable(false).build(), false);
+    }
+
+    /**
+     * Split a file directly into part files with explicit storage control.
+     * Existing destinations are replaced only after the full batch succeeds.
+     *
+     * @param input     source PDF file
+     * @param strategy  split strategy
+     * @param outputDir directory for {@code part-NNN.pdf} outputs
+     * @param options   storage and durability policy
+     * @return written part paths in order
+     * @throws IOException on I/O error, extraction failure, or a native part
+     *                     whose page count does not match the requested range
+     */
+    public static List<Path> splitToFiles(Path input, SplitStrategy strategy,
+                                          Path outputDir, StorageOptions options) throws IOException {
+        return splitToFiles(input, strategy, outputDir, options, true);
+    }
+
+    /**
+     * Split a file directly into part files with explicit storage control and
+     * optional native-output verification. Each part is staged and atomically
+     * replaced only after all parts have been extracted and (when enabled)
+     * verified.
+     *
+     * @param verify when true, reopen every native part and check its page count
+     *               before publishing. Disable for derived outputs where the
+     *               native batch writer's success is sufficient.
+     */
+    public static List<Path> splitToFiles(Path input, SplitStrategy strategy,
+                                          Path outputDir, StorageOptions options, boolean verify)
+            throws IOException {
+        if (input == null) throw new IllegalArgumentException("input must not be null");
+        if (strategy == null) throw new IllegalArgumentException("strategy must not be null");
+        if (outputDir == null) throw new IllegalArgumentException("outputDir must not be null");
+        Files.createDirectories(outputDir);
+
+        try (PdfDocument doc = PdfDocument.open(input)) {
+            List<int[]> ranges = strategy.computeRanges(doc);
+            if (ranges.isEmpty()) return List.of();
+            List<Path> targets = partTargets(outputDir, ranges.size());
+            rejectInputAlias(input, targets);
+            List<Bookmark> sourceBookmarks = doc.hasBookmarks() ? doc.bookmarks() : List.of();
+            if (sourceBookmarks.isEmpty() && options.mode() != StorageOptions.Mode.MEMORY
+                    && QpdfLib.isExtractRangesSupported()) {
+                List<int[]> indexRanges = indexRanges(ranges);
+                List<Path> stagings = new ArrayList<>(ranges.size());
+                try {
+                    for (Path target : targets) {
+                        stagings.add(OutputTransaction.stagingFile(options, target));
+                    }
+                    boolean extracted;
+                    try {
+                        extracted = QpdfLib.extractRangesInto(input, indexRanges, stagings);
+                    } catch (JPDFiumException _) {
+                        // No native part was produced; AUTO may still fall back
+                        // to the document-returning split below.
+                        extracted = false;
+                    }
+                    if (extracted) {
+                        // Verify every native part before publishing: a short
+                        // output must not silently replace a user destination.
+                        if (verify) {
+                            for (int i = 0; i < stagings.size(); i++) {
+                                verifySplitFile(stagings.get(i), indexRanges.get(i).length, i + 1);
+                            }
+                        }
+                        publishSplitParts(stagings, targets, options);
+                        return List.copyOf(targets);
+                    }
+                    if (options.mode() == StorageOptions.Mode.FILE) {
+                        throw new JPDFiumException("file-backed split unavailable");
+                    }
+                } catch (IOException | RuntimeException e) {
+                    if (options.mode() == StorageOptions.Mode.FILE) throw e;
+                } finally {
+                    for (Path staging : stagings) deleteQuietly(staging);
+                }
+            }
+            // Bookmarks, MEMORY mode, or a missing native extractor: produce
+            // every part into staging first, then publish the whole batch.
+            List<PdfDocument> parts = split(doc, strategy, options);
+            List<Path> stagings = new ArrayList<>(parts.size());
+            try {
+                for (int i = 0; i < parts.size(); i++) {
+                    Path staging = OutputTransaction.stagingFile(options, targets.get(i));
+                    stagings.add(staging);
+                    parts.get(i).saveTo(staging, SaveOptions.ephemeral());
+                    if (verify) {
+                        verifySplitFile(staging, ranges.get(i)[1] - ranges.get(i)[0] + 1, i + 1);
+                    }
+                }
+                publishSplitParts(stagings, targets, options);
+                return List.copyOf(targets);
+            } finally {
+                closeAll(parts);
+                for (Path staging : stagings) deleteQuietly(staging);
+            }
+        }
+    }
+
+    private static void publishSplitParts(List<Path> stagings, List<Path> targets,
+                                          StorageOptions options) throws IOException {
+        OutputTransaction.Durability durability = OutputTransaction.publishStagedBatch(
+                stagings, targets, options.durable());
+        if (options.durable() && durability == OutputTransaction.Durability.UNCONFIRMED) {
+            LOG.log(System.Logger.Level.WARNING,
+                    "split parts published, but the output directory entry could not be"
+                            + " synchronised; crash durability is not guaranteed on this platform");
+        }
+    }
+
+    private static void verifySplitFile(Path staging, int expectedPages, int partNumber)
+            throws IOException {
+        try (PdfDocument check = PdfDocument.open(staging)) {
+            if (check.pageCount() != expectedPages) {
+                throw new IOException("split wrote the wrong page count for part " + partNumber);
+            }
+        }
+    }
+
+    private static List<Path> partTargets(Path outputDir, int count) {
+        List<Path> targets = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            targets.add(outputDir.resolve(String.format("part-%03d.pdf", i + 1)));
+        }
+        return targets;
+    }
+
+    private static List<int[]> indexRanges(List<int[]> ranges) {
+        List<int[]> indexRanges = new ArrayList<>(ranges.size());
+        for (int[] range : ranges) {
+            int count = range[1] - range[0] + 1;
+            int[] idx = new int[count];
+            for (int i = 0; i < count; i++) idx[i] = range[0] + i;
+            indexRanges.add(idx);
+        }
+        return indexRanges;
+    }
+
+    /**
+     * Reject a split whose input is also one of its output paths (directly or
+     * through a symlink). The input must stay readable for the whole split, so
+     * an aliased destination could truncate it before extraction finishes.
+     */
+    private static void rejectInputAlias(Path input, List<Path> targets) throws IOException {
+        rejectInputAlias(input, targets, null);
+    }
+
+    /**
+     * Alias check that can use a pre-listed output directory: when the target
+     * directory was listed once, only targets that actually exist need a
+     * {@code isSameFile} stat. An empty output directory costs zero per-target
+     * syscalls.
+     */
+    private static void rejectInputAlias(Path input, List<Path> targets,
+                                         Set<Path> existingEntries) throws IOException {
+        Path absInput = input.toAbsolutePath().normalize();
+        for (Path target : targets) {
+            Path absTarget = target.toAbsolutePath().normalize();
+            if (absInput.equals(absTarget)) {
+                throw new JPDFiumException("split input and output must differ: " + target);
+            }
+            if (existingEntries != null && !existingEntries.contains(absTarget)) {
+                continue;
+            }
+            try {
+                if (Files.isSameFile(absInput, absTarget)) {
+                    throw new JPDFiumException("split input and output must differ: " + target);
+                }
+            } catch (java.nio.file.NoSuchFileException _) {
+                // The target does not exist yet, so it cannot alias the input.
+            }
+        }
+    }
+
+    /** Normalized absolute paths of every entry currently in {@code dir}. */
+    private static Set<Path> listEntries(Path dir) throws IOException {
+        Set<Path> entries = new HashSet<>();
+        try (var stream = Files.list(dir)) {
+            var iterator = stream.iterator();
+            while (iterator.hasNext()) {
+                if (entries.size() >= MAX_ENTRY_LIST_SIZE) return null;
+                entries.add(iterator.next().toAbsolutePath().normalize());
+            }
+        }
+        return entries;
+    }
+
+    /**
+     * Above this many entries the listing costs more than the per-target
+     * existence checks it replaces. {@code null} means "unknown; check each".
+     */
+    private static final int MAX_ENTRY_LIST_SIZE = 4096;
+
+    private static Set<PosixFilePermission> readPosixPermissions(Path path) {
+        try {
+            return Files.getPosixFilePermissions(path);
+        } catch (UnsupportedOperationException | IOException _) {
+            return null;
+        }
+    }
+
+    private static void restorePosixPermissions(Path target, Set<PosixFilePermission> permissions) {
+        try {
+            Files.setPosixFilePermissions(target, permissions);
+        } catch (UnsupportedOperationException | IOException _) {
+            // Best effort: the output bytes are already correct.
+        }
+    }
+
+    /**
      * Split with explicit storage control. The live document is materialized
      * once and reused for every range: per-range saves would serialize the full
      * source N times.
@@ -107,6 +460,9 @@ public final class PdfSplit {
     public static List<PdfDocument> split(PdfDocument doc, SplitStrategy strategy,
             StorageOptions options) {
         List<int[]> ranges = strategy.computeRanges(doc);
+        if (ranges.isEmpty()) {
+            return List.of();
+        }
         if (ranges.size() > 1 && options.mode() != StorageOptions.Mode.MEMORY
                 && QpdfLib.isExtractFileSupported()) {
             // Snapshot unless the caller vouched for the source file. Source
@@ -114,6 +470,7 @@ public final class PdfSplit {
             // bytes from the original until writing finishes.
             // https://qpdf.readthedocs.io/en/stable/design.html
             int epoch = doc.structureEpoch();
+            Path src = doc.sourcePath();
             // Snapshot first, in its own try: only a snapshot-step failure
             // falls through to the per-range path below. Extraction-loop
             // failures are RuntimeExceptions and propagate after cleanup.
@@ -123,7 +480,14 @@ public final class PdfSplit {
                 if (reusable == null) {
                     reusable = options.createTempFile("jpdfium-split-src", ".pdf");
                     ownsReusable = true;
-                    doc.saveTo(reusable, SaveOptions.ephemeral());
+                    // An untouched source file is byte-identical to what the
+                    // live document would serialize; copy it instead of paying
+                    // a full PDFium serialization.
+                    if (src != null && doc.isUntouchedSinceOpen() && Files.isReadable(src)) {
+                        Files.copy(src, reusable, StandardCopyOption.REPLACE_EXISTING);
+                    } else {
+                        doc.saveTo(reusable, SaveOptions.ephemeral());
+                    }
                     COUNTERS.sourceSerializations.incrementAndGet();
                 }
             } catch (RuntimeException e) {
@@ -142,10 +506,18 @@ public final class PdfSplit {
                 return fallback;
             }
             List<PdfDocument> results = new ArrayList<>(ranges.size());
+            // Batch outcomes live outside the try so the failure path can close any
+            // part that was produced but never transferred into `results`.
+            List<FileExtract> batched = null;
+            int batchedIndex = 0;
             try {
-                List<Bookmark> sourceBookmarks = doc.bookmarks();
+                List<Bookmark> sourceBookmarks =
+                        doc.hasBookmarks() ? doc.bookmarks() : List.of();
                 boolean snapshotRefused = false;
-                for (int[] range : ranges) {
+                // E1: when the native symbol exists, one source parse serves every
+                // range. Each outcome is aligned with `ranges`, so the existing
+                // part/rejected/fallback handling below is unchanged.
+                if (QpdfLib.isExtractRangesSupported()) {
                     if (doc.structureEpoch() != epoch) {
                         throw new JPDFiumException(
                                 "document mutated during split; outputs would mix snapshots");
@@ -153,15 +525,33 @@ public final class PdfSplit {
                     if (Thread.currentThread().isInterrupted()) {
                         throw new JPDFiumException("split cancelled between outputs");
                     }
-                    int count = range[1] - range[0] + 1;
-                    int[] idx = new int[count];
-                    for (int i = 0; i < count; i++) idx[i] = range[0] + i;
+                    batched = extractAllToTemp(reusable, ranges, sourceBookmarks, options);
+                }
+                for (int[] range : ranges) {
+                    // Recheck per outcome: the batch can span a document that changed
+                    // after the pre-batch check, and a rejected outcome falls back to
+                    // the live document, so the state must still hold here.
+                    if (doc.structureEpoch() != epoch) {
+                        throw new JPDFiumException(
+                                "document mutated during split; outputs would mix snapshots");
+                    }
+                    if (Thread.currentThread().isInterrupted()) {
+                        throw new JPDFiumException("split cancelled between outputs");
+                    }
                     List<Bookmark> remapped = sourceBookmarks.isEmpty() ? List.of()
                             : filterBookmarksForRange(sourceBookmarks, range[0], range[1]);
                     COUNTERS.sourceLoads.incrementAndGet();
-                    FileExtract extracted = snapshotRefused
-                            ? FileExtract.REFUSED
-                            : extractToTemp(reusable, idx, remapped, options);
+                    FileExtract extracted;
+                    if (batched != null) {
+                        extracted = batched.get(batchedIndex++);
+                    } else if (snapshotRefused) {
+                        extracted = FileExtract.REFUSED;
+                    } else {
+                        int count = range[1] - range[0] + 1;
+                        int[] idx = new int[count];
+                        for (int i = 0; i < count; i++) idx[i] = range[0] + i;
+                        extracted = extractToTemp(reusable, idx, remapped, options);
+                    }
                     COUNTERS.outputWrites.incrementAndGet();
                     if (extracted.part() != null) {
                         results.add(extracted.part());
@@ -183,13 +573,19 @@ public final class PdfSplit {
                 }
                 return results;
             } catch (RuntimeException e) {
+                if (batched != null) {
+                    for (int i = batchedIndex; i < batched.size(); i++) {
+                        PdfDocument part = batched.get(i).part();
+                        if (part != null) part.close();
+                    }
+                }
                 closeAll(results);
                 throw e;
             } finally {
                 if (ownsReusable) deleteQuietly(reusable);
             }
         }
-        List<PdfDocument> results = new ArrayList<>();
+        List<PdfDocument> results = new ArrayList<>(ranges.size());
         for (int[] range : ranges) {
             results.add(extractPageRange(doc, range[0], range[1], options));
         }
@@ -238,7 +634,7 @@ public final class PdfSplit {
         Collections.sort(sortedIndices);
         int[] pageIndices = sortedIndices.stream().mapToInt(Integer::intValue).toArray();
 
-        List<Bookmark> sourceBookmarks = doc.bookmarks();
+        List<Bookmark> sourceBookmarks = doc.hasBookmarks() ? doc.bookmarks() : List.of();
         List<Bookmark> remappedBookmarks = sourceBookmarks.isEmpty() ? List.of() : filterBookmarksForIndices(sourceBookmarks, sortedIndices);
 
         boolean rejected = false;
@@ -246,16 +642,15 @@ public final class PdfSplit {
             Path materialized = null;
             try {
                 // The source file behind an open document may be stale after
-                // in-memory edits, so it is only read directly when the caller
-                // vouches for it; otherwise serialize the live document first.
-                Path extractFrom = reusableSource(doc, options);
-                if (extractFrom == null) {
-                    materialized = options.createTempFile("jpdfium-split-src", ".pdf");
-                    doc.saveTo(materialized, SaveOptions.ephemeral());
+                // in-memory edits; serialize the live document first. An
+                // untouched document is still byte-identical to its source
+                // file, so copy that instead of re-serializing when the caller
+                // vouches for the file with {@code reuseSourceFile}.
+                materialized = options.createTempFile("jpdfium-split-src", ".pdf");
+                if (copyOrSave(doc, materialized, options)) {
                     COUNTERS.extractSerializations.incrementAndGet();
-                    extractFrom = materialized;
                 }
-                FileExtract extracted = extractToTemp(extractFrom, pageIndices, remappedBookmarks, options);
+                FileExtract extracted = extractToTemp(materialized, pageIndices, remappedBookmarks, options);
                 if (extracted.part() != null) return extracted.part();
                 rejected = extracted.rejected();
             } catch (Exception _) {
@@ -326,7 +721,7 @@ public final class PdfSplit {
                             .formatted(fromPage, toPage, doc.pageCount()));
         }
 
-        List<Bookmark> sourceBookmarks = doc.bookmarks();
+        List<Bookmark> sourceBookmarks = doc.hasBookmarks() ? doc.bookmarks() : List.of();
         List<Bookmark> remappedBookmarks = sourceBookmarks.isEmpty() ? List.of() : filterBookmarksForRange(sourceBookmarks, fromPage, toPage);
 
         int count = toPage - fromPage + 1;
@@ -340,16 +735,15 @@ public final class PdfSplit {
             Path materialized = null;
             try {
                 // The source file behind an open document may be stale after
-                // in-memory edits, so it is only read directly when the caller
-                // vouches for it; otherwise serialize the live document first.
-                Path extractFrom = reusableSource(doc, options);
-                if (extractFrom == null) {
-                    materialized = options.createTempFile("jpdfium-split-src", ".pdf");
-                    doc.saveTo(materialized, SaveOptions.ephemeral());
+                // in-memory edits; serialize the live document first. An
+                // untouched document is still byte-identical to its source
+                // file, so copy that instead of re-serializing when the caller
+                // vouches for the file with {@code reuseSourceFile}.
+                materialized = options.createTempFile("jpdfium-split-src", ".pdf");
+                if (copyOrSave(doc, materialized, options)) {
                     COUNTERS.extractSerializations.incrementAndGet();
-                    extractFrom = materialized;
                 }
-                FileExtract extracted = extractToTemp(extractFrom, pageIndices, remappedBookmarks, options);
+                FileExtract extracted = extractToTemp(materialized, pageIndices, remappedBookmarks, options);
                 if (extracted.part() != null) return extracted.part();
                 rejected = extracted.rejected();
             } catch (Exception _) {
@@ -495,6 +889,28 @@ public final class PdfSplit {
         }
     }
 
+    /**
+     * Materialize a document snapshot at {@code target}. An untouched,
+     * file-backed document is copied straight from its source file when the
+     * caller opted into source reuse, so no PDFium serialization (or lazy
+     * native open) is needed.
+     *
+     * @return {@code true} when the live document had to be serialized
+     */
+    private static boolean copyOrSave(PdfDocument doc, Path target, StorageOptions options) {
+        Path source = reusableSource(doc, options);
+        if (source != null && doc.isUntouchedSinceOpen()) {
+            try {
+                Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING);
+                return false;
+            } catch (IOException _) {
+                // Fall back to the native save below.
+            }
+        }
+        doc.saveTo(target, SaveOptions.ephemeral());
+        return true;
+    }
+
     private static Path reusableSource(PdfDocument doc, StorageOptions options) {
         Path src = doc.sourcePath();
         return src != null && options.reuseSourceFile() && Files.isReadable(src) ? src : null;
@@ -506,6 +922,103 @@ public final class PdfSplit {
             try {
                 Files.deleteIfExists(path);
             } catch (IOException _) {}
+        }
+    }
+
+    /**
+     * E1 experiment: extract every range in one native source parse, then apply the
+     * same per-part tail {@link #extractToTemp} applies (bookmark pass, page-count
+     * verify, temp-owned open). Returns one outcome per range, positionally aligned
+     * with {@code ranges}. A batch the native layer refuses degrades to
+     * {@link FileExtract#REFUSED} for every range, which the caller already handles.
+     */
+    private static List<FileExtract> extractAllToTemp(Path input, List<int[]> ranges,
+                                                      List<Bookmark> sourceBookmarks,
+                                                      StorageOptions options) {
+        int n = ranges.size();
+        List<int[]> indexRanges = new ArrayList<>(n);
+        for (int[] range : ranges) {
+            int count = range[1] - range[0] + 1;
+            int[] idx = new int[count];
+            for (int i = 0; i < count; i++) idx[i] = range[0] + i;
+            indexRanges.add(idx);
+        }
+        Set<Path> cleanup = new HashSet<>();
+        List<Path> stagings = new ArrayList<>(n);
+        try {
+            try {
+                for (int i = 0; i < n; i++) {
+                    Path staging = options.createTempFile("jpdfium-split", ".pdf");
+                    cleanup.add(staging);
+                    stagings.add(staging);
+                }
+            } catch (Exception _) {
+                List<FileExtract> refused = new ArrayList<>(n);
+                for (int i = 0; i < n; i++) refused.add(FileExtract.REFUSED);
+                return refused;
+            }
+            // A thrown JPDFiumException (native failure, rejected alias) must fall
+            // back exactly like a false return, so AUTO mode still recovers per range.
+            boolean extracted;
+            try {
+                extracted = QpdfLib.extractRangesInto(input, indexRanges, stagings);
+            } catch (JPDFiumException _) {
+                extracted = false;
+            }
+            if (!extracted) {
+                List<FileExtract> refused = new ArrayList<>(n);
+                for (int i = 0; i < n; i++) refused.add(FileExtract.REFUSED);
+                return refused;
+            }
+            List<FileExtract> out = new ArrayList<>(n);
+            for (int i = 0; i < n; i++) {
+                int[] idx = indexRanges.get(i);
+                Path staging = stagings.get(i);
+                List<Bookmark> remapped = sourceBookmarks.isEmpty() ? List.of()
+                        : filterBookmarksForRange(sourceBookmarks, idx[0], idx[idx.length - 1]);
+                Path result = staging;
+                try {
+                    if (!remapped.isEmpty()) {
+                        Path tmpBookmarks = options.createTempFile("jpdfium-split-bm", ".pdf");
+                        cleanup.add(tmpBookmarks);
+                        try (PdfDocument part = PdfDocument.open(staging)) {
+                            PdfBookmarkEditor.setBookmarks(part, remapped, tmpBookmarks, false);
+                        }
+                        result = tmpBookmarks;
+                    }
+                    if (remapped.isEmpty()) {
+                        if (!OutputTransaction.isPublishableStaging(result)) {
+                            out.add(FileExtract.REJECTED);
+                            continue;
+                        }
+                        // Bookmark-free parts stay lazy: the page count is
+                        // known from the requested index range and the file is
+                        // byte-identical until the part is touched.
+                        PdfDocument part = PdfDocument.openTempLazy(result, idx.length);
+                        cleanup.remove(result);
+                        out.add(new FileExtract(part, false, false));
+                        continue;
+                    }
+                    PdfDocument part = PdfDocument.openTemp(result);
+                    boolean keep = false;
+                    try {
+                        if (part.pageCount() != idx.length) {
+                            out.add(FileExtract.REJECTED);
+                            continue;
+                        }
+                        keep = true;
+                    } finally {
+                        if (!keep) part.close();
+                    }
+                    cleanup.remove(result);
+                    out.add(new FileExtract(part, false, false));
+                } catch (Exception _) {
+                    out.add(FileExtract.FAILED);
+                }
+            }
+            return out;
+        } finally {
+            for (Path leftover : cleanup) deleteQuietly(leftover);
         }
     }
 
@@ -541,10 +1054,16 @@ public final class PdfSplit {
                 }
                 result = tmpBookmarks;
             }
-            try (PdfDocument verify = PdfDocument.open(result)) {
-                if (verify.pageCount() != pageIndices.length) return FileExtract.REJECTED;
-            }
             PdfDocument part = PdfDocument.openTemp(result);
+            boolean keep = false;
+            try {
+                if (part.pageCount() != pageIndices.length) {
+                    return FileExtract.REJECTED;
+                }
+                keep = true;
+            } finally {
+                if (!keep) part.close();
+            }
             cleanup.remove(result);
             return new FileExtract(part, false, false);
         } catch (Exception _) {
@@ -571,14 +1090,29 @@ public final class PdfSplit {
         return result;
     }
 
+    /**
+     * Keep only bookmarks whose page is selected, remapping each kept page to its
+     * position in the output. The source-page-to-output-page mapping is built once
+     * and reused for every bookmark (and its children) instead of scanning the
+     * index list once per bookmark.
+     */
     private static List<Bookmark> filterBookmarksForIndices(List<Bookmark> bookmarks, List<Integer> sortedIndices) {
+        Map<Integer, Integer> outputIndexBySourcePage = new HashMap<>(Math.max(1, sortedIndices.size() * 2));
+        for (int i = 0; i < sortedIndices.size(); i++) {
+            outputIndexBySourcePage.putIfAbsent(sortedIndices.get(i), i);
+        }
+        return filterBookmarksWithMap(bookmarks, outputIndexBySourcePage);
+    }
+
+    private static List<Bookmark> filterBookmarksWithMap(List<Bookmark> bookmarks,
+                                                         Map<Integer, Integer> outputIndexBySourcePage) {
         List<Bookmark> result = new ArrayList<>();
         for (Bookmark bookmark : bookmarks) {
             List<Bookmark> filteredChildren = bookmark.hasChildren()
-                    ? filterBookmarksForIndices(bookmark.children(), sortedIndices)
+                    ? filterBookmarksWithMap(bookmark.children(), outputIndexBySourcePage)
                     : Collections.emptyList();
-            int matchingIndex = sortedIndices.indexOf(bookmark.pageIndex());
-            boolean inSet = matchingIndex >= 0;
+            Integer matchingIndex = outputIndexBySourcePage.get(bookmark.pageIndex());
+            boolean inSet = matchingIndex != null;
             if (inSet || !filteredChildren.isEmpty()) {
                 int newPageIndex = inSet ? matchingIndex : (!filteredChildren.isEmpty() ? filteredChildren.getFirst().pageIndex() : 0);
                 result.add(new Bookmark(bookmark.title(), newPageIndex, filteredChildren, bookmark.actionType(), bookmark.uri(), bookmark.filePath()));

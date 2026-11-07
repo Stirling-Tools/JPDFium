@@ -18,20 +18,16 @@ public final class StructureBindings {
         return Symbols.downcall(name, desc);
     }
 
-    private static MethodHandle downcallCritical(String name, FunctionDescriptor desc) {
-        return Symbols.downcallCritical(name, desc);
-    }
-
     public static final MethodHandle FPDF_StructTree_GetForPage = downcall("FPDF_StructTree_GetForPage",
             FunctionDescriptor.of(ADDRESS, ADDRESS));
 
     public static final MethodHandle FPDF_StructTree_Close = downcall("FPDF_StructTree_Close",
             FunctionDescriptor.ofVoid(ADDRESS));
 
-    public static final MethodHandle FPDF_StructTree_CountChildren = downcallCritical("FPDF_StructTree_CountChildren",
+    public static final MethodHandle FPDF_StructTree_CountChildren = downcall("FPDF_StructTree_CountChildren",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
-    public static final MethodHandle FPDF_StructTree_GetChildAtIndex = downcallCritical("FPDF_StructTree_GetChildAtIndex",
+    public static final MethodHandle FPDF_StructTree_GetChildAtIndex = downcall("FPDF_StructTree_GetChildAtIndex",
             FunctionDescriptor.of(ADDRESS, ADDRESS, JAVA_INT));
 
     public static final MethodHandle FPDF_StructElement_GetType = downcall("FPDF_StructElement_GetType",
@@ -49,9 +45,9 @@ public final class StructureBindings {
     public static final MethodHandle FPDF_StructElement_GetLang = downcall("FPDF_StructElement_GetLang",
             FunctionDescriptor.of(JAVA_LONG, ADDRESS, ADDRESS, JAVA_LONG));
 
-    public static final MethodHandle FPDF_StructElement_CountChildren = downcallCritical("FPDF_StructElement_CountChildren",
+    public static final MethodHandle FPDF_StructElement_CountChildren = downcall("FPDF_StructElement_CountChildren",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
-    public static final MethodHandle FPDF_StructElement_GetChildAtIndex = downcallCritical("FPDF_StructElement_GetChildAtIndex",
+    public static final MethodHandle FPDF_StructElement_GetChildAtIndex = downcall("FPDF_StructElement_GetChildAtIndex",
             FunctionDescriptor.of(ADDRESS, ADDRESS, JAVA_INT));
 }

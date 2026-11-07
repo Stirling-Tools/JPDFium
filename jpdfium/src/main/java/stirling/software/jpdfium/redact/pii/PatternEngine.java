@@ -100,14 +100,15 @@ public final class PatternEngine implements AutoCloseable {
             String json = Pcre2Lib.matchAll(cp.handle, text);
             List<Match> parsed = parseMatchesJson(json, cp.category);
 
-            if (PiiCategory.CREDIT_CARD == cp.category) {
-                parsed = parsed.stream()
-                        .filter(m -> validateCreditCard(m.text))
-                        .toList();
+            if (PiiCategory.CREDIT_CARD == cp.category && !parsed.isEmpty()) {
+                parsed.removeIf(m -> !validateCreditCard(m.text));
             }
 
             allMatches.addAll(parsed);
         }
+
+        if (allMatches.isEmpty()) return List.of();
+        if (allMatches.size() == 1) return List.of(allMatches.get(0));
 
         allMatches.sort((a, b) -> {
             int cmp = Integer.compare(a.start, b.start);
@@ -160,6 +161,7 @@ public final class PatternEngine implements AutoCloseable {
     private record CompiledPattern(long handle, PiiCategory category, String regex) {}
 
     static List<Match> parseMatchesJson(String json, PiiCategory category) {
+        if (json == null || json.isEmpty() || "[]".equals(json)) return List.of();
         List<Match> matches = new ArrayList<>();
         for (Map<String, String> fields : NativeJsonParser.parseArray(json)) {
             int start = Integer.parseInt(fields.getOrDefault("start", "0"));

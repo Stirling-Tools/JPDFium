@@ -45,13 +45,6 @@ publishing workflows, not library releases, so they are not listed here.
   staging file without fsync and flush once when they publish the output, which
   now gets the destination's permissions as other saves do. They previously
   flushed the staging file and then renamed it without flushing the rename.
-- `PdfSplit.extractPageRange` and `PdfSplit.extractPages` honour
-  `StorageOptions.reuseSourceFile`: an untouched file-backed document is read
-  from its file instead of being saved through PDFium before every extract.
-  `SplitCounters.extractSerializations` counts the snapshots they still take.
-- `PdfRedactor.redact` with fewer than eight literal words no longer reads every
-  page's text in Java before the native redaction reads it again; the native
-  redaction already skips pages without a match.
 - qpdf merge, page extract and encryption copy (`PdfMerge.mergeFilesToFile`,
   `PdfSplit.extractPageRangeToFile`, the qpdf byte-array merge and extract, and
   `PdfSecurity.copyEncryption`) keep every stream's existing encoding instead of
@@ -59,7 +52,13 @@ publishing workflows, not library releases, so they are not listed here.
   times faster; such outputs are as large as their inputs rather than compressed.
   The PDFium fallback, used when qpdf is unavailable or rejects an input, still
   compresses unfiltered streams, and `PdfOptimizer` still compresses on request.
-
+- `PdfSplit.extractPageRange` and `PdfSplit.extractPages` honour
+  `StorageOptions.reuseSourceFile`: an untouched file-backed document is read
+  from its file instead of being saved through PDFium before every extract.
+  `SplitCounters.extractSerializations` counts the snapshots they still take.
+- `PdfRedactor.redact` with fewer than eight literal words no longer reads every
+  page's text in Java before the native redaction reads it again; the native
+  redaction already skips pages without a match.
 - Word and regex redaction, and committing redaction marks, apply a page's
   boxes to PDFium in groups of 16 instead of one call per box, so the page is
   rewritten once per group rather than once per match. A 200-page document with
@@ -67,6 +66,8 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Fixed
 
+- `PdfTextExtractor` no longer drops the sign of negative coordinates between -1 and 0,
+  or misreads coordinates the native JSON writes in exponent notation.
 - Word and regex redaction finds words PDFium reports hyphenated across a line
   break (`Trace-` / `Monkey`), and removes the hyphen with them; it previously
   missed them, and with eight or more words the keyword prefilter skipped such
@@ -212,6 +213,27 @@ publishing workflows, not library releases, so they are not listed here.
   `jpdfium-natives-linux-x64` dependency. Add the native module for your target
   platform explicitly; this keeps unrelated platform binaries out of the
   dependency graph and image.
+
+- `RedactResult.save(Path)` and `RedactResult.saveBytes()` now refuse to publish a
+  result whose analysis did not complete on every page, and `saveBytes()` also
+  throws when the result was produced with `incrementalSave`. An incremental save
+  appends, so it can leave the pre-redaction object versions physically present,
+  and an incomplete analysis can leave the target content in place; both previously
+  produced output that looked like a finished redaction. Callers that relied on
+  receiving those bytes must request a full rewrite and run the analysis to
+  completion.
+
+- The configured global save-size limit (`-Djpdfium.maxSaveResultBytes`) is now
+  enforced on the file-backed merge and split outputs, which previously passed an
+  explicit "unbounded" budget and so ignored it. `OutputTransaction.publish` already
+  enforced the limit; a run with a small cap but no per-call budget can now fail
+  where it previously succeeded.
+
+### Fixed
+
+- A `jpdfium_doc_save_bytes` call whose document was handed to the native writer in
+  one large block reallocated the growing output buffer once per size step, copying
+  the accumulated prefix each time. It now reallocates once per write.
 
 ### Removed
 

@@ -20,14 +20,10 @@ public final class ActionBindings {
         return Symbols.downcall(name, desc);
     }
 
-    private static MethodHandle downcallCritical(String name, FunctionDescriptor desc) {
-        return Symbols.downcallCritical(name, desc);
-    }
-
-    public static final MethodHandle FPDFAction_GetType = downcallCritical("FPDFAction_GetType",
+    public static final MethodHandle FPDFAction_GetType = downcall("FPDFAction_GetType",
             FunctionDescriptor.of(JAVA_LONG, ADDRESS));
 
-    public static final MethodHandle FPDFAction_GetDest = downcallCritical("FPDFAction_GetDest",
+    public static final MethodHandle FPDFAction_GetDest = downcall("FPDFAction_GetDest",
             FunctionDescriptor.of(ADDRESS, ADDRESS, ADDRESS));
 
     public static final MethodHandle FPDFAction_GetFilePath = downcall("FPDFAction_GetFilePath",
@@ -36,7 +32,7 @@ public final class ActionBindings {
     public static final MethodHandle FPDFAction_GetURIPath = downcall("FPDFAction_GetURIPath",
             FunctionDescriptor.of(JAVA_LONG, ADDRESS, ADDRESS, ADDRESS, JAVA_LONG));
 
-    public static final MethodHandle FPDFDest_GetDestPageIndex = downcallCritical("FPDFDest_GetDestPageIndex",
+    public static final MethodHandle FPDFDest_GetDestPageIndex = downcall("FPDFDest_GetDestPageIndex",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
 
     public static final MethodHandle FPDFDest_GetLocationInPage = downcall("FPDFDest_GetLocationInPage",

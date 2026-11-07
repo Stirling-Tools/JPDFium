@@ -89,7 +89,6 @@ public final class PathologicalPdfFactory {
         map.put(name, new Specimen(name, category, bytes, expectedOpenable));
     }
 
-    // Generator helpers
 
     public static byte[] createValidBasePdf() {
         try (PDDocument doc = new PDDocument()) {

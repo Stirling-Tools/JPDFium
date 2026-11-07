@@ -4,7 +4,6 @@ import stirling.software.jpdfium.PdfDocument;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -62,8 +61,10 @@ public final class PdfTableExtractor {
      * @return map of page index to list of tables on that page
      */
     public static Map<Integer, List<Table>> extractAll(PdfDocument doc) {
+        int count = doc.pageCount();
+        if (count == 0) return Map.of();
         Map<Integer, List<Table>> results = new LinkedHashMap<>();
-        for (int i = 0; i < doc.pageCount(); i++) {
+        for (int i = 0; i < count; i++) {
             List<Table> tables = extract(doc, i);
             if (!tables.isEmpty()) {
                 results.put(i, tables);
@@ -142,36 +143,36 @@ public final class PdfTableExtractor {
      * Returns a list of [leftX, rightX] for each column.
      */
     private static List<float[]> detectColumns(List<WordRow> rows) {
-        // Collect all word X-positions (left edges and right edges)
-        List<Float> leftEdges = new ArrayList<>();
+        int totalWords = 0;
+        float totalWidth = 0;
         for (WordRow row : rows) {
+            totalWords += row.words.size();
             for (TextWord w : row.words) {
-                leftEdges.add(w.x());
+                totalWidth += w.width();
             }
         }
-        Collections.sort(leftEdges);
+        if (totalWords == 0) return List.of();
 
-        if (leftEdges.isEmpty()) return List.of();
-
-        // Cluster left edges to find column starts
-        float typicalWidth = 0;
-        int count = 0;
+        // Collect all word X-positions without Float boxing
+        float[] leftEdges = new float[totalWords];
+        int edgeIdx = 0;
         for (WordRow row : rows) {
             for (TextWord w : row.words) {
-                typicalWidth += w.width();
-                count++;
+                leftEdges[edgeIdx++] = w.x();
             }
         }
-        typicalWidth = count > 0 ? typicalWidth / count : 10;
+        Arrays.sort(leftEdges);
+
+        float typicalWidth = totalWidth / totalWords;
         float colGap = typicalWidth * COL_GAP_FACTOR;
 
         // Find clusters in the left-edge positions
         List<Float> columnStarts = new ArrayList<>();
-        float prevX = leftEdges.getFirst();
+        float prevX = leftEdges[0];
         columnStarts.add(prevX);
 
-        for (int i = 1; i < leftEdges.size(); i++) {
-            float x = leftEdges.get(i);
+        for (int i = 1; i < leftEdges.length; i++) {
+            float x = leftEdges[i];
             if (x - prevX > colGap) {
                 columnStarts.add(x);
             }
@@ -213,22 +214,33 @@ public final class PdfTableExtractor {
         float maxY = Float.MIN_VALUE;
 
         for (WordRow row : wordRows) {
-            String[] cells = new String[numCols];
-            Arrays.fill(cells, "");
+            StringBuilder[] cellBuilders = new StringBuilder[numCols];
 
             for (TextWord w : row.words) {
                 float wordCenter = w.x() + w.width() / 2f;
                 int col = findColumn(columns, wordCenter);
                 if (col >= 0 && col < numCols) {
-                    if (!cells[col].isEmpty()) cells[col] += " ";
-                    cells[col] += w.text();
+                    StringBuilder sb = cellBuilders[col];
+                    if (sb == null) {
+                        sb = new StringBuilder(w.text().length() + 8);
+                        cellBuilders[col] = sb;
+                    } else {
+                        sb.append(' ');
+                    }
+                    sb.append(w.text());
                 }
             }
 
             // Only include rows that have content in multiple columns
             int filledCols = 0;
-            for (String cell : cells) {
-                if (!cell.isEmpty()) filledCols++;
+            String[] cells = new String[numCols];
+            for (int c = 0; c < numCols; c++) {
+                if (cellBuilders[c] != null && !cellBuilders[c].isEmpty()) {
+                    cells[c] = cellBuilders[c].toString();
+                    filledCols++;
+                } else {
+                    cells[c] = "";
+                }
             }
 
             if (filledCols >= 2) {

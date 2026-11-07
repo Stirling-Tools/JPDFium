@@ -13,8 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Shutdown preflight against real PDFium: refusal names live resources and
- * leaves them closeable-but-unusable, never destroyed under load. Lives in
- * the runtime package for the test-only lifecycle hook.
+ * leaves them closeable-but-unusable, never destroyed under load.
  *
  * <p>Isolated: the QUIESCING window rejects other tests' admissions, so this
  * class must never run concurrently with them.
@@ -25,7 +24,7 @@ class RuntimeShutdownTest {
     @AfterEach
     void restoreRunning() {
         if (PdfiumRuntime.state() != PdfiumRuntime.State.RUNNING) {
-            PdfiumRuntime.restoreRunningForTests();
+            PdfiumRuntime.resume();
         }
     }
 

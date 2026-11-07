@@ -34,17 +34,22 @@ EXPECTED=(
 MISSING=0
 symbol_exported() {
   local sym="$1"
-  local attempt
+  local attempt dynamic global
   # nm intermittently returns short output on macOS runners; retry a few times
   # before declaring an export missing.
   for attempt in 1 2 3; do
-    # grep without -q drains the whole symbol table: with `set -o pipefail`,
-    # grep -q can close the pipe early and turn a successful nm into SIGPIPE 141.
-    if nm -D "$LIB" 2>/dev/null | grep -E " T ${sym}\$" >/dev/null; then
-      return 0
+    # Read the tables whole: under pipefail, grep -q closing a pipe early fails
+    # nm with SIGPIPE.
+    dynamic=$(nm -D "$LIB" 2>/dev/null || true)
+    # Only macOS lacks the dynamic (-D) table; elsewhere the global table is not
+    # proof of a dynamic export, so the fallback is restricted to that platform.
+    global=""
+    if [[ "$PLATFORM" == darwin* ]]; then
+      global=$(nm -g "$LIB" 2>/dev/null || true)
     fi
-    # Also try without -D for macOS
-    if nm -g "$LIB" 2>/dev/null | grep -E " T _?${sym}\$" >/dev/null; then
+    # Anchor the end so a longer name (jpdfium_init_library for jpdfium_init)
+    # cannot satisfy it.
+    if grep -qE " T _?${sym}$" <<<"$dynamic" || grep -qE " T _?${sym}$" <<<"$global"; then
       return 0
     fi
     if [ "$attempt" -lt 3 ]; then

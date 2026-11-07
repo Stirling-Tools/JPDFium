@@ -1,6 +1,9 @@
 // jpdfium_repair.cpp - PDF structural repair pipeline.
 
 #if !defined(_WIN32) && !defined(_FILE_OFFSET_BITS)
+// glibc's feature-test macro selects the 64-bit off_t; the leading underscore is part of its
+// required spelling.
+// NOLINTNEXTLINE(bugprone-reserved-identifier)
 #define _FILE_OFFSET_BITS 64
 #endif
 

@@ -3,8 +3,8 @@ package stirling.software.jpdfium.doc;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.panama.DocBindings;
 import stirling.software.jpdfium.panama.FfmHelper;
+import stirling.software.jpdfium.panama.FfmHelper.Scratch;
 
-import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -37,28 +37,36 @@ public final class PdfPageLabels {
      * @return the page label, or empty if no label is defined
      */
     public static Optional<String> get(PdfDocument doc, int pageIndex) {
-        MemorySegment rawDoc = doc.rawHandle();
-        try (Arena arena = Arena.ofConfined()) {
-            // First call: get required buffer size
-            long needed;
+        MemorySegment rawDoc = doc.rawHandleForRead();
+        if (rawDoc == null || rawDoc.equals(MemorySegment.NULL) || rawDoc.address() == 0) {
+            return Optional.empty();
+        }
+        Scratch scratch = FfmHelper.scratch();
+        MemorySegment buf = scratch.buffer();
+        long cap = scratch.bufferSize();
+        long needed;
+        try {
+            needed = (long) DocBindings.FPDF_GetPageLabel.invokeExact(
+                    rawDoc, pageIndex, buf, cap);
+        } catch (Throwable t) { return Optional.empty(); }
+
+        if (needed <= 2) return Optional.empty();
+
+        if (needed > cap) {
+            MemorySegment largeBuf = scratch.ensureNativeBuffer(needed);
+            long actual;
             try {
-                needed = (long) DocBindings.FPDF_GetPageLabel.invokeExact(
-                        rawDoc, pageIndex, MemorySegment.NULL, 0L);
+                // Two-call contract: decode the bytes reported by the retry, not the probe.
+                actual = (long) DocBindings.FPDF_GetPageLabel.invokeExact(
+                        rawDoc, pageIndex, largeBuf, needed);
             } catch (Throwable t) { return Optional.empty(); }
-
-            if (needed <= 2) return Optional.empty(); // 2 = just the null terminator
-
-            // Second call: get the label
-            MemorySegment buf = arena.allocate(needed);
-            try {
-                long actual = (long) DocBindings.FPDF_GetPageLabel.invokeExact(
-                        rawDoc, pageIndex, buf, needed);
-                if (actual <= 2) return Optional.empty();
-            } catch (Throwable t) { return Optional.empty(); }
-
-            String label = FfmHelper.fromWideString(buf, needed);
+            if (actual <= 2) return Optional.empty();
+            String label = scratch.decodeWideString(largeBuf, actual);
             return label.isEmpty() ? Optional.empty() : Optional.of(label);
         }
+
+        String label = scratch.decodeWideString(needed);
+        return label.isEmpty() ? Optional.empty() : Optional.of(label);
     }
 
     /**

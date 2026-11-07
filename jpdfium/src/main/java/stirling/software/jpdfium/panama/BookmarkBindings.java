@@ -20,28 +20,24 @@ public final class BookmarkBindings {
         return Symbols.downcall(name, desc);
     }
 
-    private static MethodHandle downcallCritical(String name, FunctionDescriptor desc) {
-        return Symbols.downcallCritical(name, desc);
-    }
-
-    public static final MethodHandle FPDFBookmark_GetFirstChild = downcallCritical("FPDFBookmark_GetFirstChild",
+    public static final MethodHandle FPDFBookmark_GetFirstChild = downcall("FPDFBookmark_GetFirstChild",
             FunctionDescriptor.of(ADDRESS, ADDRESS, ADDRESS));
 
-    public static final MethodHandle FPDFBookmark_GetNextSibling = downcallCritical("FPDFBookmark_GetNextSibling",
+    public static final MethodHandle FPDFBookmark_GetNextSibling = downcall("FPDFBookmark_GetNextSibling",
             FunctionDescriptor.of(ADDRESS, ADDRESS, ADDRESS));
 
     public static final MethodHandle FPDFBookmark_GetTitle = downcall("FPDFBookmark_GetTitle",
             FunctionDescriptor.of(JAVA_LONG, ADDRESS, ADDRESS, JAVA_LONG));
 
-    public static final MethodHandle FPDFBookmark_GetCount = downcallCritical("FPDFBookmark_GetCount",
+    public static final MethodHandle FPDFBookmark_GetCount = downcall("FPDFBookmark_GetCount",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
     public static final MethodHandle FPDFBookmark_Find = downcall("FPDFBookmark_Find",
             FunctionDescriptor.of(ADDRESS, ADDRESS, ADDRESS));
 
-    public static final MethodHandle FPDFBookmark_GetDest = downcallCritical("FPDFBookmark_GetDest",
+    public static final MethodHandle FPDFBookmark_GetDest = downcall("FPDFBookmark_GetDest",
             FunctionDescriptor.of(ADDRESS, ADDRESS, ADDRESS));
 
-    public static final MethodHandle FPDFBookmark_GetAction = downcallCritical("FPDFBookmark_GetAction",
+    public static final MethodHandle FPDFBookmark_GetAction = downcall("FPDFBookmark_GetAction",
             FunctionDescriptor.of(ADDRESS, ADDRESS));
 }

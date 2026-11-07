@@ -148,8 +148,11 @@ bool rectsOverlap(float al, float ab, float ar, float at, float bl, float bb, fl
 void markTouchedByRects(FPDF_TEXTPAGE textPage, int count, const std::vector<FS_RECTF>& rects,
                         std::vector<char>& out);
 float overlapRatio(float al, float ab, float ar, float at, float bl, float bb, float br, float bt);
+// `unicodeSeq`, when non-null, is filled with FPDFText_GetUnicode(i) for every
+// character in the same pass, so callers that also need the raw code points do
+// not walk the text page a second time.
 void buildNormalizedText(FPDF_TEXTPAGE textPage, int count, std::vector<int>& normIdxMap,
-                         std::u32string& norm);
+                         std::u32string& norm, std::vector<uint32_t>* unicodeSeq = nullptr);
 std::u32string buildNormalizedText(FPDF_TEXTPAGE textPage, int count, std::vector<int>& normIdxMap);
 std::u32string survivingFingerprint(FPDF_TEXTPAGE textPage, int count,
                                     const std::u32string& normalizedText,

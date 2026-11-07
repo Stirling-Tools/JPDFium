@@ -13,8 +13,9 @@ import static java.lang.foreign.ValueLayout.*;
 import static java.lang.foreign.MemoryLayout.PathElement.*;
 
 /**
- * Raw jextract bindings to the native bridge: no execution-domain admission,
- * no lifecycle accounting, no argument validation.
+ * jextract bindings to the native bridge. PDFium entry points bind their
+ * jpdf_guard_* shim through {@link NativeDomain}, so the native domain admits
+ * every call; there is no lifecycle accounting or argument validation here.
  *
  * <p>Ownership boundary: handles created through these raw entry points bypass
  * {@link PdfiumRuntime} tracking, so they must never be passed to the managed
@@ -40,9 +41,9 @@ public class JpdfiumH extends JpdfiumH$shared {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT    );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_abi_version");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_abi_version");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -100,9 +101,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_INT
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_abi_query");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_abi_query");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -158,9 +159,9 @@ public class JpdfiumH extends JpdfiumH$shared {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT    );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_init");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_init");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -218,9 +219,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_INT
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_init_ex");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_init_ex");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -276,9 +277,9 @@ public class JpdfiumH extends JpdfiumH$shared {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT    );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_active_renderer");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_active_renderer");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -333,9 +334,9 @@ public class JpdfiumH extends JpdfiumH$shared {
     private static class jpdfium_destroy {
         public static final FunctionDescriptor DESC = FunctionDescriptor.ofVoid(    );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_destroy");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_destroy");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -393,9 +394,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_LONG
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_doc_raw_handle");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_doc_raw_handle");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -453,9 +454,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_LONG
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_page_raw_handle");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_page_raw_handle");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -513,9 +514,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_LONG
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_page_doc_raw_handle");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_page_doc_raw_handle");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -573,9 +574,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_doc_create");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_doc_create");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -634,9 +635,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_doc_open");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_doc_open");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -696,9 +697,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_doc_open_bytes");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_doc_open_bytes");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -759,9 +760,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_doc_open_bytes_protected");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_doc_open_bytes_protected");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -821,9 +822,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_doc_open_protected");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_doc_open_protected");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -882,9 +883,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_doc_page_count");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_doc_page_count");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -943,9 +944,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_doc_save");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_doc_save");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -1005,9 +1006,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_doc_save_bytes");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_doc_save_bytes");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -1068,9 +1069,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_doc_save_to_file");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_doc_save_to_file");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -1129,9 +1130,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_INT
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_doc_set_sanitize_on_save");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_doc_set_sanitize_on_save");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -1188,9 +1189,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_LONG
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_doc_close");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_doc_close");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -1250,9 +1251,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_page_open");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_page_open");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -1311,9 +1312,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_page_width");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_page_width");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -1372,9 +1373,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_page_height");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_page_height");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -1434,9 +1435,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_page_info");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_page_info");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -1493,9 +1494,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_LONG
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_page_close");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_page_close");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -1557,9 +1558,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_render_page");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_render_page");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -1622,9 +1623,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_render_page_flags");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_render_page_flags");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -1688,9 +1689,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_INT
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_render_page_into");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_render_page_into");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -1755,9 +1756,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_INT
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_render_page_form_into");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_render_page_form_into");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -1822,9 +1823,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_render_page_progressive_start");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_render_page_progressive_start");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -1883,9 +1884,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_render_page_progressive_continue");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_render_page_progressive_continue");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -1942,9 +1943,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_render_page_progressive_close");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_render_page_progressive_close");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -2001,9 +2002,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_free_buffer");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_free_buffer");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -2062,9 +2063,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_text_get_chars");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_text_get_chars");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -2124,9 +2125,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_text_find");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_text_find");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -2183,9 +2184,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_free_string");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_free_string");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -2249,9 +2250,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_INT
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_redact_region");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_redact_region");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -2313,9 +2314,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_FLOAT
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_crop_remove_content");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_crop_remove_content");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -2378,9 +2379,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_FLOAT
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_crop_remove_content_ex");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_crop_remove_content_ex");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -2441,9 +2442,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_INT
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_redact_pattern");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_redact_pattern");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -2508,9 +2509,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_INT
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_redact_words");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_redact_words");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -2577,9 +2578,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_redact_words_ex");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_redact_words_ex");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -2637,9 +2638,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_LONG
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_page_flatten");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_page_flatten");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -2699,9 +2700,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_INT
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_page_to_image");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_page_to_image");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -2759,9 +2760,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_LONG
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_doc_flatten_annotations");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_doc_flatten_annotations");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -2820,9 +2821,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_INT
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_doc_flatten_to_images");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_doc_flatten_to_images");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -2881,9 +2882,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_text_get_char_positions");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_text_get_char_positions");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -2947,9 +2948,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_annot_create_redact");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_annot_create_redact");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -3015,9 +3016,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_redact_mark_words");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_redact_mark_words");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -3076,9 +3077,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_annot_count_redacts");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_annot_count_redacts");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -3137,9 +3138,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_annot_get_redacts_json");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_annot_get_redacts_json");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -3198,9 +3199,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_INT
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_annot_remove_redact");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_annot_remove_redact");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -3258,9 +3259,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_LONG
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_annot_clear_redacts");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_annot_clear_redacts");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -3321,9 +3322,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_redact_commit");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_redact_commit");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -3382,9 +3383,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_doc_sanitize_report");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_doc_sanitize_report");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -3444,9 +3445,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_doc_save_incremental");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_doc_save_incremental");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -3506,9 +3507,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_pcre2_compile");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_pcre2_compile");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -3568,9 +3569,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_pcre2_match_all");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_pcre2_match_all");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -3627,9 +3628,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_LONG
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_pcre2_free");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_pcre2_free");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -3687,9 +3688,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_luhn_validate");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_luhn_validate");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -3747,9 +3748,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_flashtext_create");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_flashtext_create");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -3809,9 +3810,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_flashtext_add_keyword");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_flashtext_add_keyword");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -3870,9 +3871,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_flashtext_add_keywords_json");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_flashtext_add_keywords_json");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -3932,9 +3933,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_flashtext_find");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_flashtext_find");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -3991,9 +3992,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_LONG
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_flashtext_free");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_flashtext_free");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -4054,9 +4055,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_font_get_data");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_font_get_data");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -4116,9 +4117,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_font_classify");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_font_classify");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -4180,9 +4181,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_font_covers_text");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_font_covers_text");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -4244,9 +4245,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_text_shape");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_text_shape");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -4306,9 +4307,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_font_fix_tounicode");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_font_fix_tounicode");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -4368,9 +4369,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_font_repair_widths");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_font_repair_widths");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -4430,9 +4431,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_font_normalize_page");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_font_normalize_page");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -4496,9 +4497,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_font_subset");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_font_subset");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -4563,9 +4564,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_redact_glyph_aware");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_redact_glyph_aware");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -4626,9 +4627,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_xmp_redact_patterns");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_xmp_redact_patterns");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -4688,9 +4689,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_INT
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_metadata_strip");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_metadata_strip");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -4748,9 +4749,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_LONG
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_metadata_strip_all");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_metadata_strip_all");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -4809,9 +4810,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_icu_normalize_nfc");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_icu_normalize_nfc");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -4870,9 +4871,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_icu_break_sentences");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_icu_break_sentences");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -4931,9 +4932,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_icu_bidi_reorder");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_icu_bidi_reorder");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -4995,9 +4996,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_INT
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_repair_pdf");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_repair_pdf");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -5057,9 +5058,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_repair_inspect");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_repair_inspect");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -5125,9 +5126,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_INT
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.find("jpdfium_qpdf_optimize").orElse(null);
+        public static final MemorySegment ADDR = NativeDomain.optionalSymbol("jpdfium_qpdf_optimize");
 
-        public static final MethodHandle HANDLE = ADDR != null ? Linker.nativeLinker().downcallHandle(ADDR, DESC) : null;
+        public static final MethodHandle HANDLE = ADDR != null ? NativeDomain.downcall(ADDR, DESC) : null;
     }
 
     /**
@@ -5190,9 +5191,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_INT
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.find("jpdfium_qpdf_optimize_file").orElse(null);
+        public static final MemorySegment ADDR = NativeDomain.optionalSymbol("jpdfium_qpdf_optimize_file");
 
-        public static final MethodHandle HANDLE = ADDR != null ? Linker.nativeLinker().downcallHandle(ADDR, DESC) : null;
+        public static final MethodHandle HANDLE = ADDR != null ? NativeDomain.downcall(ADDR, DESC) : null;
     }
 
     /**
@@ -5259,9 +5260,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_INT
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.find("jpdfium_qpdf_optimize_ex").orElse(null);
+        public static final MemorySegment ADDR = NativeDomain.optionalSymbol("jpdfium_qpdf_optimize_ex");
 
-        public static final MethodHandle HANDLE = ADDR != null ? Linker.nativeLinker().downcallHandle(ADDR, DESC) : null;
+        public static final MethodHandle HANDLE = ADDR != null ? NativeDomain.downcall(ADDR, DESC) : null;
     }
 
     /**
@@ -5326,9 +5327,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_INT
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.find("jpdfium_qpdf_optimize_ex_file").orElse(null);
+        public static final MemorySegment ADDR = NativeDomain.optionalSymbol("jpdfium_qpdf_optimize_ex_file");
 
-        public static final MethodHandle HANDLE = ADDR != null ? Linker.nativeLinker().downcallHandle(ADDR, DESC) : null;
+        public static final MethodHandle HANDLE = ADDR != null ? NativeDomain.downcall(ADDR, DESC) : null;
     }
 
     /**
@@ -5389,9 +5390,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.find("jpdfium_qpdf_inspect").orElse(null);
+        public static final MemorySegment ADDR = NativeDomain.optionalSymbol("jpdfium_qpdf_inspect");
 
-        public static final MethodHandle HANDLE = ADDR != null ? Linker.nativeLinker().downcallHandle(ADDR, DESC) : null;
+        public static final MethodHandle HANDLE = ADDR != null ? NativeDomain.downcall(ADDR, DESC) : null;
     }
 
     /**
@@ -5451,9 +5452,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.find("jpdfium_qpdf_inspect_file").orElse(null);
+        public static final MemorySegment ADDR = NativeDomain.optionalSymbol("jpdfium_qpdf_inspect_file");
 
-        public static final MethodHandle HANDLE = ADDR != null ? Linker.nativeLinker().downcallHandle(ADDR, DESC) : null;
+        public static final MethodHandle HANDLE = ADDR != null ? NativeDomain.downcall(ADDR, DESC) : null;
     }
 
     /**
@@ -5518,9 +5519,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.find("jpdfium_qpdf_set_docinfo").orElse(null);
+        public static final MemorySegment ADDR = NativeDomain.optionalSymbol("jpdfium_qpdf_set_docinfo");
 
-        public static final MethodHandle HANDLE = ADDR != null ? Linker.nativeLinker().downcallHandle(ADDR, DESC) : null;
+        public static final MethodHandle HANDLE = ADDR != null ? NativeDomain.downcall(ADDR, DESC) : null;
     }
 
     /**
@@ -5583,9 +5584,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.find("jpdfium_qpdf_set_docinfo_file").orElse(null);
+        public static final MemorySegment ADDR = NativeDomain.optionalSymbol("jpdfium_qpdf_set_docinfo_file");
 
-        public static final MethodHandle HANDLE = ADDR != null ? Linker.nativeLinker().downcallHandle(ADDR, DESC) : null;
+        public static final MethodHandle HANDLE = ADDR != null ? NativeDomain.downcall(ADDR, DESC) : null;
     }
 
     /**
@@ -5647,9 +5648,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_INT
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.find("jpdfium_qpdf_sanitize").orElse(null);
+        public static final MemorySegment ADDR = NativeDomain.optionalSymbol("jpdfium_qpdf_sanitize");
 
-        public static final MethodHandle HANDLE = ADDR != null ? Linker.nativeLinker().downcallHandle(ADDR, DESC) : null;
+        public static final MethodHandle HANDLE = ADDR != null ? NativeDomain.downcall(ADDR, DESC) : null;
     }
 
     /**
@@ -5709,9 +5710,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_INT
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_qpdf_sanitize_file");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_qpdf_sanitize_file");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -5773,9 +5774,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.find("jpdfium_qpdf_merge").orElse(null);
+        public static final MemorySegment ADDR = NativeDomain.optionalSymbol("jpdfium_qpdf_merge");
 
-        public static final MethodHandle HANDLE = ADDR != null ? Linker.nativeLinker().downcallHandle(ADDR, DESC) : null;
+        public static final MethodHandle HANDLE = ADDR != null ? NativeDomain.downcall(ADDR, DESC) : null;
     }
 
     /**
@@ -5835,9 +5836,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_qpdf_merge_files");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_qpdf_merge_files");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -5900,9 +5901,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.find("jpdfium_qpdf_extract_pages").orElse(null);
+        public static final MemorySegment ADDR = NativeDomain.optionalSymbol("jpdfium_qpdf_extract_pages");
 
-        public static final MethodHandle HANDLE = ADDR != null ? Linker.nativeLinker().downcallHandle(ADDR, DESC) : null;
+        public static final MethodHandle HANDLE = ADDR != null ? NativeDomain.downcall(ADDR, DESC) : null;
     }
 
     /**
@@ -5963,9 +5964,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_qpdf_extract_pages_file");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_qpdf_extract_pages_file");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -6030,9 +6031,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.find("jpdfium_qpdf_encrypt").orElse(null);
+        public static final MemorySegment ADDR = NativeDomain.optionalSymbol("jpdfium_qpdf_encrypt");
 
-        public static final MethodHandle HANDLE = ADDR != null ? Linker.nativeLinker().downcallHandle(ADDR, DESC) : null;
+        public static final MethodHandle HANDLE = ADDR != null ? NativeDomain.downcall(ADDR, DESC) : null;
     }
 
     /**
@@ -6094,9 +6095,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.find("jpdfium_qpdf_decrypt").orElse(null);
+        public static final MemorySegment ADDR = NativeDomain.optionalSymbol("jpdfium_qpdf_decrypt");
 
-        public static final MethodHandle HANDLE = ADDR != null ? Linker.nativeLinker().downcallHandle(ADDR, DESC) : null;
+        public static final MethodHandle HANDLE = ADDR != null ? NativeDomain.downcall(ADDR, DESC) : null;
     }
 
     /**
@@ -6159,9 +6160,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_INT
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_qpdf_encrypt_file");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_qpdf_encrypt_file");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -6221,9 +6222,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_qpdf_decrypt_file");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_qpdf_decrypt_file");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -6284,9 +6285,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_brotli_decode");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_brotli_decode");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -6347,9 +6348,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_brotli_to_flate");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_brotli_to_flate");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -6411,9 +6412,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_pdfio_try_repair");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_pdfio_try_repair");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -6474,9 +6475,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_validate_icc_profile");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_validate_icc_profile");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -6536,9 +6537,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_generate_replacement_icc");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_generate_replacement_icc");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -6598,9 +6599,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_validate_jpx_stream");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_validate_jpx_stream");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -6664,9 +6665,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_jpx_to_raw");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_jpx_to_raw");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -6731,9 +6732,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_image_to_pdf");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_image_to_pdf");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -6799,9 +6800,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_INT
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_doc_add_image_page");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_doc_add_image_page");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -6865,9 +6866,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_import_n_pages_to_one");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_import_n_pages_to_one");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -6926,9 +6927,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_signature_count");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_signature_count");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -6987,9 +6988,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_signature_revision_count");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_signature_revision_count");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -7049,9 +7050,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_signature_info");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_signature_info");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -7113,9 +7114,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_signature_digest");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_signature_digest");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -7177,9 +7178,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_INT
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_rust_compress_pdf");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_rust_compress_pdf");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -7240,9 +7241,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_rust_repair_lopdf");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_rust_repair_lopdf");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -7308,9 +7309,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_rust_resize_pixels");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_rust_resize_pixels");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -7374,9 +7375,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_LONG
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_rust_unpack_pixels");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_rust_unpack_pixels");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC, Linker.Option.critical(true));
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC, Linker.Option.critical(true));
     }
 
     /**
@@ -7441,9 +7442,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_rust_svg_to_rgba");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_rust_svg_to_rgba");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**
@@ -7500,9 +7501,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_rust_free");
+        public static final MemorySegment ADDR = NativeDomain.symbol("jpdfium_rust_free");
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC);
     }
 
     /**

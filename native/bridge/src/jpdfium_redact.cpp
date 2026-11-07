@@ -183,14 +183,6 @@ static void paintCover(FPDF_PAGE page, const RedactArea& area, uint32_t argb) {
     }
 }
 
-namespace {
-// A REDACT annotation a commit applies, with the area it covers.
-struct CommitMark {
-    FPDF_ANNOTATION annot = nullptr;
-    RedactArea area;
-};
-}  // namespace
-
 // FS_QUADPOINTSF slot order: (x1,y1)-(x2,y2) is the top edge and (x3,y3)-(x4,y4)
 // the bottom one, so the polygon runs 1-2-4-3. A point on an edge counts as inside;
 // a quad whose corners coincide contains nothing.
@@ -291,11 +283,35 @@ static void appendRedactorAreas(const RedactArea& mark, std::vector<RedactArea>&
 // PDFium generates (separators it inserts between runs) have no content to
 // remove, and an outline-less glyph is judged by the cell a cover for it spans.
 static bool textLeftIn(FPDF_TEXTPAGE audit, const std::vector<RedactArea>& areas) {
+    if (areas.empty()) return false;
+    // Union of every area (rect plus quad bounds): a char outside it cannot be
+    // half-inside any rect or centred in any quad, so the per-area scan is only
+    // entered for the neighbourhood the redaction actually covered.
+    float unionL = areas.front().rect.left;
+    float unionB = areas.front().rect.bottom;
+    float unionR = areas.front().rect.right;
+    float unionT = areas.front().rect.top;
+    for (const RedactArea& area : areas) {
+        unionL = std::min(unionL, area.rect.left);
+        unionB = std::min(unionB, area.rect.bottom);
+        unionR = std::max(unionR, area.rect.right);
+        unionT = std::max(unionT, area.rect.top);
+        for (const FS_QUADPOINTSF& q : area.quads) {
+            unionL = std::min({unionL, q.x1, q.x2, q.x3, q.x4});
+            unionB = std::min({unionB, q.y1, q.y2, q.y3, q.y4});
+            unionR = std::max({unionR, q.x1, q.x2, q.x3, q.x4});
+            unionT = std::max({unionT, q.y1, q.y2, q.y3, q.y4});
+        }
+    }
     int n = FPDFText_CountChars(audit);
     for (int ci = 0; ci < n; ++ci) {
         if (FPDFText_IsGenerated(audit, ci) == 1) continue;
         double l, r, b, t;
         if (!outlineAwareCharBox(audit, ci, &l, &r, &b, &t)) continue;
+        if (!rectsOverlap(static_cast<float>(l), static_cast<float>(b), static_cast<float>(r),
+                          static_cast<float>(t), unionL, unionB, unionR, unionT)) {
+            continue;
+        }
         for (const RedactArea& area : areas) {
             if (area.quads.empty()) {
                 if (charInRect(l, b, r, t, area.rect.left, area.rect.bottom, area.rect.right,
@@ -347,10 +363,10 @@ int32_t jpdfium_redact_region(int64_t page, float x, float y, float w, float h, 
         // text page cannot be built there is no way to verify what survived:
         // a geometric bbox fallback for text is the banned degrade path, so
         // this is a loud unverifiable error instead.
-        FPDF_TEXTPAGE tp = FPDFText_LoadPage(pw->page);
+        UniqueTextPage tp(FPDFText_LoadPage(pw->page));
         if (!tp) return JPDFIUM_ERR_REDACT_UNVERIFIABLE;
 
-        int charCount = FPDFText_CountChars(tp);
+        int charCount = FPDFText_CountChars(tp.get());
 
         // One match per region: its bbox IS the region rect (so the
         // painted cover matches the requested area exactly), plus
@@ -362,7 +378,7 @@ int32_t jpdfium_redact_region(int64_t page, float x, float y, float w, float h, 
         tm.bboxT = y + h;
         for (int ci = 0; ci < charCount; ++ci) {
             double l, r, b, t;
-            if (!FPDFText_GetCharBox(tp, ci, &l, &r, &b, &t)) continue;
+            if (!FPDFText_GetCharBox(tp.get(), ci, &l, &r, &b, &t)) continue;
             if (charInRect(l, b, r, t, x, y, x + w, y + h)) {
                 tm.charIndices.push_back(ci);
             }
@@ -372,9 +388,8 @@ int32_t jpdfium_redact_region(int64_t page, float x, float y, float w, float h, 
 
         std::vector<FPDF_PAGEOBJECT> paintedCovers;
         bool refusedUnmodified = false;
-        int32_t rc = objectFissionRedact(pw->doc, pw->page, tp, matches, argb, pw->core,
+        int32_t rc = objectFissionRedact(pw->doc, pw->page, tp.get(), matches, argb, pw->core,
                                          &paintedCovers, nullptr, false, &refusedUnmodified);
-        FPDFText_ClosePage(tp);
         if (rc != JPDFIUM_OK) {
             // objectFissionRedact mutates the page before it audits, so a
             // half-finished region redaction has already destroyed content. A
@@ -388,7 +403,7 @@ int32_t jpdfium_redact_region(int64_t page, float x, float y, float w, float h, 
         // Audit 1 (text): reload the text page and confirm no glyph box
         // still intersects the redaction region. An audit that cannot even
         // run is a loud unverifiable error - never a silent pass.
-        FPDF_TEXTPAGE audit = FPDFText_LoadPage(pw->page);
+        UniqueTextPage audit(FPDFText_LoadPage(pw->page));
         if (!audit) return JPDFIUM_ERR_REDACT_UNVERIFIABLE;
         std::vector<FS_RECTF> regions;
         FS_RECTF r;
@@ -399,16 +414,15 @@ int32_t jpdfium_redact_region(int64_t page, float x, float y, float w, float h, 
         regions.push_back(r);
 
         bool remaining = false;
-        int n = FPDFText_CountChars(audit);
+        int n = FPDFText_CountChars(audit.get());
         for (int ci = 0; ci < n; ++ci) {
             double l, r2, b, t;
-            if (!FPDFText_GetCharBox(audit, ci, &l, &r2, &b, &t)) continue;
+            if (!FPDFText_GetCharBox(audit.get(), ci, &l, &r2, &b, &t)) continue;
             if (charInRect(l, b, r2, t, x, y, x + w, y + h)) {
                 remaining = true;
                 break;
             }
         }
-        FPDFText_ClosePage(audit);
         if (remaining) {
             // The fission engine already removed content in this region while
             // glyphs that must be gone are still extractable, so record the page
@@ -445,16 +459,18 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
 
     try {
         ScopedCoverPage coverPage(pw->page);
-        FPDF_TEXTPAGE tp = FPDFText_LoadPage(pw->page);
+        UniqueTextPage tp(FPDFText_LoadPage(pw->page));
         if (!tp) return JPDFIUM_ERR_REDACT_UNVERIFIABLE;
 
-        int count = FPDFText_CountChars(tp);
+        int count = FPDFText_CountChars(tp.get());
 
         // Build the search buffer: NFKC-normalized text (ligature and
         // compatibility characters decomposed) with an index map back to the
         // original character indices.
         std::vector<int> idxMap;
-        std::u32string wtext = buildNormalizedText(tp, count, idxMap);
+        std::u32string wtext;
+        std::vector<uint32_t> unicodeSeq;
+        buildNormalizedText(tp.get(), count, idxMap, wtext, &unicodeSeq);
 
         // Compile the pattern (PCRE2 UTF/UCP, JIT, hardened limits).
         // Sanitize-stage bookkeeping: metadata/outlines/form values containing
@@ -464,12 +480,10 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
         Pcre2Pattern pc;
         std::string compileErr;
         if (!pattern || !compilePcre2(utf8_to_u32(pattern), false, pc, compileErr)) {
-            FPDFText_ClosePage(tp);
             return JPDFIUM_ERR_INVALID;
         }
 #else
         if (!pattern) {
-            FPDFText_ClosePage(tp);
             return JPDFIUM_ERR_INVALID;
         }
 #endif
@@ -477,37 +491,31 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
         // Collect matches with character-level indices
         std::vector<TextMatch> matches;
 #ifdef JPDFIUM_HAS_PCRE2
-        collectPcre2Matches(tp, wtext, idxMap, pc, 0.0f, matches);
+        collectPcre2Matches(tp.get(), wtext, idxMap, pc, 0.0f, matches);
 #else
         (void)wtext;
 #endif
 
         if (matches.empty()) {
-            FPDFText_ClosePage(tp);
             return JPDFIUM_OK;
         }
 
-        // Grapheme alignment needs the raw char sequence. Build it only when
-        // matches exist; zero-match pages skip this second per-char pass.
-        std::vector<uint32_t> unicodeSeq;
-        unicodeSeq.reserve(static_cast<size_t>(count));
-        for (int i = 0; i < count; ++i) {
-            unicodeSeq.push_back(FPDFText_GetUnicode(tp, i));
-        }
-        alignMatchesToGraphemes(tp, unicodeSeq, matches);
+        // Grapheme alignment works on the raw char sequence captured above in
+        // the same per-char pass that built the normalized text.
+        alignMatchesToGraphemes(tp.get(), unicodeSeq, matches);
 #ifdef JPDFIUM_HAS_HARFBUZZ
         // Snap every span to shaped-cluster boundaries (ligature safety):
         // a cut inside a shaped cluster would leave the survivor
         // unrenderable, so the span grows to the whole cluster.
-        alignMatchesToShapedClusters(tp, matches);
+        alignMatchesToShapedClusters(tp.get(), matches);
 #endif
-        orientMatchQuads(tp, matches);
+        orientMatchQuads(tp.get(), matches);
 
         // Expected surviving-text fingerprint (pre-redaction).
         std::vector<char> redactSet(count, 0);
         for (auto& m : matches)
             for (int ci : m.charIndices) redactSet[ci] = 1;
-        std::u32string expectedFp = survivingFingerprint(tp, count, wtext, idxMap, redactSet);
+        std::u32string expectedFp = survivingFingerprint(tp.get(), count, wtext, idxMap, redactSet);
 
         // Best case scenario: Wrap EmbedPDF core engine (EPDFPage_ApplyRedactions)
         // High-fidelity native in-place redaction via EmbedPDF core engine.
@@ -522,36 +530,52 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
 
         std::vector<FS_RECTF> appliedRects;
         appliedRects.reserve(sortedMatches.size());
+        // Apply marks in bounded batches. One mark per call makes the engine
+        // re-walk all page objects per match; an unbounded batch makes it
+        // intersect every text object with every region. 16 measured as the
+        // balance point on dense pages.
+        constexpr size_t batch = 16;
+        std::vector<FPDF_ANNOTATION> annots;
+        std::vector<FS_RECTF> pendingRects;
+        annots.reserve(std::min(batch, sortedMatches.size()));
+        pendingRects.reserve(std::min(batch, sortedMatches.size()));
         bool epdfOk = true;
-        for (const auto& m : sortedMatches) {
-            FPDF_ANNOTATION annot = FPDFPage_CreateAnnot(pw->page, FPDF_ANNOT_REDACT);
-            if (!annot) {
-                epdfOk = false;
-                break;
+        for (size_t start = 0; start < sortedMatches.size() && epdfOk; start += batch) {
+            const size_t end = std::min(start + batch, sortedMatches.size());
+            annots.clear();
+            pendingRects.clear();
+            for (size_t i = start; i < end; ++i) {
+                const TextMatch& m = sortedMatches[i];
+                FPDF_ANNOTATION annot = FPDFPage_CreateAnnot(pw->page, FPDF_ANNOT_REDACT);
+                if (!annot) {
+                    epdfOk = false;
+                    break;
+                }
+                FS_RECTF rect;
+                rect.left = m.bboxL;
+                rect.bottom = m.bboxB;
+                rect.right = m.bboxR;
+                rect.top = m.bboxT;
+                FPDFAnnot_SetRect(annot, &rect);
+                if (m.hasQuad) FPDFAnnot_AppendAttachmentPoints(annot, &m.quad);
+                annots.push_back(annot);
+                pendingRects.push_back(rect);
             }
-            FS_RECTF rect;
-            rect.left = m.bboxL;
-            rect.bottom = m.bboxB;
-            rect.right = m.bboxR;
-            rect.top = m.bboxT;
-            FPDFAnnot_SetRect(annot, &rect);
-            if (m.hasQuad) FPDFAnnot_AppendAttachmentPoints(annot, &m.quad);
-
-            uint32_t rem = 0;
-            FPDF_BOOL ok = EPDFPage_ApplyRedactions(pw->page, &annot, 1, &rem);
-            FPDFPage_CloseAnnot(annot);
-            if (!ok) {
-                epdfOk = false;
-                break;
+            if (epdfOk && !annots.empty()) {
+                uint32_t rem = 0;
+                epdfOk = EPDFPage_ApplyRedactions(pw->page, annots.data(),
+                                                  static_cast<int>(annots.size()), &rem) != 0;
             }
-            appliedRects.push_back(rect);
+            for (FPDF_ANNOTATION annot : annots) FPDFPage_CloseAnnot(annot);
+            if (epdfOk) {
+                appliedRects.insert(appliedRects.end(), pendingRects.begin(), pendingRects.end());
+            }
         }
         // Once one box is applied, tp indexes objects that redaction freed, so the
         // fission fallback cannot finish the page. The post-redaction check cannot
         // stand in for the unapplied boxes either: it re-matches whole patterns, and
         // a match split across lines no longer matches once one piece is gone.
         if (!epdfOk && !appliedRects.empty()) {
-            FPDFText_ClosePage(tp);
             // The applied boxes already removed content while the surviving half
             // of the match is still extractable: a full save would ship a
             // half-redacted document, so keep the redacted-save guards (no
@@ -561,8 +585,9 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
             return JPDFIUM_ERR_REDACT_INCOMPLETE;
         }
         if (epdfOk) {
-            FPDFText_ClosePage(tp);
-            tp = nullptr;
+            // The EPDF engine already released the objects the text page
+            // indexes; release the page before inserting the cover objects.
+            tp.reset();
 
             for (const TextMatch& m : sortedMatches) paintCover(pw->page, areaOf(m), argb);
             FPDFPage_GenerateContent(pw->page);
@@ -575,9 +600,8 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
             }
         } else {
             // Fallback: Object Fission engine if EPDFPage_ApplyRedactions is unavailable
-            int32_t rc = objectFissionRedact(pw->doc, pw->page, tp, matches, argb, pw->core);
-            FPDFText_ClosePage(tp);
-            tp = nullptr;
+            int32_t rc = objectFissionRedact(pw->doc, pw->page, tp.get(), matches, argb, pw->core);
+            tp.reset();
             if (rc != JPDFIUM_OK) {
                 // The fission engine mutates the page before it audits, and the
                 // failed EPDF pass may have left its REDACT annotations behind:
@@ -590,19 +614,18 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
         // Audit loop: re-extract the page text and verify the pattern no
         // longer matches and the surviving fingerprint is bit-identical.
         // An audit that cannot run is a loud unverifiable error.
-        FPDF_TEXTPAGE audit = FPDFText_LoadPage(pw->page);
+        UniqueTextPage audit(FPDFText_LoadPage(pw->page));
         if (!audit) return JPDFIUM_ERR_REDACT_UNVERIFIABLE;
         std::vector<int> idxMap2;
-        int n2 = FPDFText_CountChars(audit);
-        std::u32string wtext2 = buildNormalizedText(audit, n2, idxMap2);
+        int n2 = FPDFText_CountChars(audit.get());
+        std::u32string wtext2 = buildNormalizedText(audit.get(), n2, idxMap2);
         std::vector<TextMatch> remaining;
         // Padding 0: the audit re-matches the RAW pattern (the pre-redaction
         // padded bboxes were only for cover painting / geometric rules).
 #ifdef JPDFIUM_HAS_PCRE2
-        collectPcre2Matches(audit, wtext2, idxMap2, pc, 0.0f, remaining);
+        collectPcre2Matches(audit.get(), wtext2, idxMap2, pc, 0.0f, remaining);
 #endif
-        std::u32string actualFp = survivingFingerprint(audit, n2, wtext2, idxMap2, {});
-        FPDFText_ClosePage(audit);
+        std::u32string actualFp = survivingFingerprint(audit.get(), n2, wtext2, idxMap2, {});
         if (!remaining.empty() || actualFp != expectedFp) {
             // Content was removed but the audit still finds survivors: the page is
             // half-redacted, so no save may serialize it until a commit resolves it.
@@ -624,6 +647,10 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
 int32_t jpdfium_page_flatten(int64_t page) noexcept {
     PageWrapper* pw = decodePage(page);
     if (!pw || !pw->page) return JPDFIUM_ERR_INVALID;
+    // FPDFPage_Flatten only bakes annotation/widget appearances into the content
+    // stream. With no annotations there is nothing eligible, so skip the call
+    // (it would still walk the page and report FLATTEN_NOTHINGTODO).
+    if (FPDFPage_GetAnnotCount(pw->page) == 0) return JPDFIUM_OK;
     int rc = FPDFPage_Flatten(pw->page, FLAT_NORMALDISPLAY);
     return (rc == FLATTEN_SUCCESS || rc == FLATTEN_NOTHINGTODO) ? JPDFIUM_OK : JPDFIUM_ERR_NATIVE;
 }
@@ -637,6 +664,11 @@ int32_t jpdfium_doc_flatten_annotations(int64_t docHandle) noexcept {
         for (int i = 0; i < count; ++i) {
             UniquePage page(FPDF_LoadPage(dw->core->doc, i));
             if (!page) return mutated ? JPDFIUM_ERR_CONTENT_MUTATED : JPDFIUM_ERR_NOT_FOUND;
+            // Only annotation/widget appearances are eligible. Skipping a page
+            // with none avoids a content-generation pass that can only report
+            // FLATTEN_NOTHINGTODO, which matters on an ANNOTATIONS pass over a
+            // document where most pages are plain text.
+            if (FPDFPage_GetAnnotCount(page.get()) == 0) continue;
             const int rc = FPDFPage_Flatten(page.get(), FLAT_NORMALDISPLAY);
             if (rc != FLATTEN_SUCCESS && rc != FLATTEN_NOTHINGTODO) {
                 return mutated ? JPDFIUM_ERR_CONTENT_MUTATED : JPDFIUM_ERR_NATIVE;
@@ -746,53 +778,48 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
     try {
         ScratchGuard scratchGuard;
         ScopedCoverPage coverPage(pw->page);
-        FPDF_TEXTPAGE tp = FPDFText_LoadPage(pw->page);
+        UniqueTextPage tp(FPDFText_LoadPage(pw->page));
         if (!tp) return JPDFIUM_ERR_REDACT_UNVERIFIABLE;
 
-        int count = FPDFText_CountChars(tp);
+        int count = FPDFText_CountChars(tp.get());
 
         t_redactScratch.clear();
         std::vector<int>& idxMap = t_redactScratch.idxMap;
         std::u32string& wtext = t_redactScratch.wtext;
-        buildNormalizedText(tp, count, idxMap, wtext);
+        std::vector<uint32_t>& unicodeSeq = t_redactScratch.unicodeSeq;
+        // One FPDFText_GetUnicode pass fills both the normalized text and the
+        // raw code-point sequence the grapheme alignment needs.
+        buildNormalizedText(tp.get(), count, idxMap, wtext, &unicodeSeq);
 
         std::vector<TextMatch>& matches = t_redactScratch.matches;
-#ifdef JPDFIUM_HAS_PCRE2
-        std::vector<Pcre2Pattern> compiledPatterns;
-#endif
-        int rejectedPatterns = 0;
-        int compiledCount = 0;
-
         for (int32_t wi = 0; wi < wordCount; ++wi) {
             if (words[wi] && pw->core) pw->core->addRedactLiteral(words[wi]);
         }
 #ifdef JPDFIUM_HAS_PCRE2
-        scanPagePatterns(pw->core.get(), tp, wtext, idxMap, words, wordCount, wholeWord != 0,
+        std::vector<Pcre2Pattern> compiledPatterns;
+        int rejectedPatterns = 0;
+        int compiledCount = 0;
+        scanPagePatterns(pw->core.get(), tp.get(), wtext, idxMap, words, wordCount, wholeWord != 0,
                          caseSensitive != 0, useRegex != 0, padding, matches, &compiledPatterns,
                          rejectedPatterns, compiledCount);
+        if (rejectedPatterns > 0 && compiledCount == 0) {
+            // Nothing was applied, so report a definite zero rather than leaving the
+            // caller's counter untouched.
+            if (matchCount) *matchCount = 0;
+            return JPDFIUM_ERR_INVALID;
+        }
 #endif
         if (matchCount) *matchCount = logicalMatchCount(matches);
 
-        if (rejectedPatterns > 0 && compiledCount == 0) {
-            FPDFText_ClosePage(tp);
-            return JPDFIUM_ERR_INVALID;
-        }
-
         if (matches.empty()) {
-            FPDFText_ClosePage(tp);
             return JPDFIUM_OK;
         }
 
-        std::vector<uint32_t>& unicodeSeq = t_redactScratch.unicodeSeq;
-        unicodeSeq.reserve(static_cast<size_t>(count));
-        for (int i = 0; i < count; ++i) {
-            unicodeSeq.push_back(FPDFText_GetUnicode(tp, i));
-        }
-        alignMatchesToGraphemes(tp, unicodeSeq, matches);
+        alignMatchesToGraphemes(tp.get(), unicodeSeq, matches);
 #ifdef JPDFIUM_HAS_HARFBUZZ
-        alignMatchesToShapedClusters(tp, matches);
+        alignMatchesToShapedClusters(tp.get(), matches);
 #endif
-        orientMatchQuads(tp, matches);
+        orientMatchQuads(tp.get(), matches);
         std::vector<char>& redactSet = t_redactScratch.redactSet;
         redactSet.assign(count, 0);
         for (auto& m : matches)
@@ -816,8 +843,8 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
         // from both sides of the comparison. Text outside every box must
         // survive untouched, so fission damage there is still detected.
         std::vector<char>& touched = t_redactScratch.auditTouched;
-        markTouchedByRects(tp, count, auditRects, touched);
-        std::u32string expectedFp = survivingFingerprint(tp, count, wtext, idxMap, touched);
+        markTouchedByRects(tp.get(), count, auditRects, touched);
+        std::u32string expectedFp = survivingFingerprint(tp.get(), count, wtext, idxMap, touched);
 
         std::vector<TextMatch>& sortedMatches = t_redactScratch.sortedMatches;
         sortedMatches = matches;
@@ -836,7 +863,6 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
             case BatchApply::Applied:
                 break;
             case BatchApply::Partial:
-                FPDFText_ClosePage(tp);
                 markRedactionIncomplete(pw, sortedMatches);
                 return JPDFIUM_ERR_REDACT_INCOMPLETE;
             case BatchApply::NothingApplied:
@@ -866,7 +892,6 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
         // stand in for the unapplied boxes either: it re-matches whole patterns, and
         // a match split across lines no longer matches once one piece is gone.
         if (!epdfOk && !appliedRects.empty()) {
-            FPDFText_ClosePage(tp);
             // The applied boxes already removed content while the surviving half
             // of the match is still extractable: a full save would ship a
             // half-redacted document, so keep the redacted-save guards (no
@@ -876,8 +901,9 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
             return JPDFIUM_ERR_REDACT_INCOMPLETE;
         }
         if (epdfOk) {
-            FPDFText_ClosePage(tp);
-            tp = nullptr;
+            // The EPDF engine already released the objects the text page
+            // indexes; release the page before inserting the cover objects.
+            tp.reset();
 
             for (const TextMatch& m : sortedMatches) paintCover(pw->page, areaOf(m), argb);
             FPDFPage_GenerateContent(pw->page);
@@ -889,9 +915,8 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
                 }
             }
         } else {
-            int32_t rc = objectFissionRedact(pw->doc, pw->page, tp, matches, argb, pw->core);
-            FPDFText_ClosePage(tp);
-            tp = nullptr;
+            int32_t rc = objectFissionRedact(pw->doc, pw->page, tp.get(), matches, argb, pw->core);
+            tp.reset();
             if (rc != JPDFIUM_OK) {
                 // Same contract as jpdfium_redact_pattern: the engine already
                 // mutated the page, so a half-finished redaction is not savable.
@@ -900,24 +925,20 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
             }
         }
 
-        FPDF_TEXTPAGE audit = FPDFText_LoadPage(pw->page);
+        UniqueTextPage audit(FPDFText_LoadPage(pw->page));
         if (!audit) return JPDFIUM_ERR_REDACT_UNVERIFIABLE;
         std::vector<int>& idxMap2 = t_redactScratch.auditIdxMap;
-        int n2 = FPDFText_CountChars(audit);
+        int n2 = FPDFText_CountChars(audit.get());
         std::u32string& wtext2 = t_redactScratch.auditWtext;
-        buildNormalizedText(audit, n2, idxMap2, wtext2);
-        // Survivor audit. Two orthogonal checks, each exactly as strong as it
-        // can be without false alarms:
-        //   1. (below) no redaction pattern still matches the extracted text -
-        //      checks that no target pattern remains in the audited extraction;
-        //      it does not prove absence from every representation in the file;
-        //   2. text outside every redaction box is unchanged - catches fission
-        //      damage to surviving fragments, which is silent data loss.
+        buildNormalizedText(audit.get(), n2, idxMap2, wtext2);
+        // Survivor audit, two independent checks: no redaction pattern still
+        // matches the extracted text (not proof of absence from every
+        // representation), and text outside every redaction box is unchanged,
+        // which catches silent fission damage to surviving fragments.
         std::vector<char>& touched2 = t_redactScratch.auditTouched2;
-        markTouchedByRects(audit, n2, auditRects, touched2);
-        std::u32string actualFp = survivingFingerprint(audit, n2, wtext2, idxMap2, touched2);
+        markTouchedByRects(audit.get(), n2, auditRects, touched2);
+        std::u32string actualFp = survivingFingerprint(audit.get(), n2, wtext2, idxMap2, touched2);
         if (actualFp != expectedFp) {
-            FPDFText_ClosePage(audit);
             // Survivors after a mutation: fail every save until a commit resolves
             // this page (same contract as jpdfium_redact_pattern).
             if (epdfOk) {
@@ -931,9 +952,8 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
         std::vector<TextMatch>& remaining = t_redactScratch.auditRemaining;
         for (const auto& pc : compiledPatterns) {
             remaining.clear();
-            collectPcre2Matches(audit, wtext2, idxMap2, pc, 0.0f, remaining);
+            collectPcre2Matches(audit.get(), wtext2, idxMap2, pc, 0.0f, remaining);
             if (!remaining.empty()) {
-                FPDFText_ClosePage(audit);
                 if (epdfOk) {
                     markRedactionIncomplete(pw, sortedMatches);
                 } else {
@@ -943,7 +963,6 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
             }
         }
 #endif
-        FPDFText_ClosePage(audit);
         return JPDFIUM_OK;
     } catch (...) {
         return JPDFIUM_ERR_NATIVE;  // never let exceptions cross the FFI boundary
@@ -1005,35 +1024,38 @@ int32_t jpdfium_annot_get_redacts_json(int64_t page, char** json) noexcept {
     PageWrapper* pw = decodePage(page);
     if (!pw || !pw->page || !json) return JPDFIUM_ERR_INVALID;
 
-    int total = FPDFPage_GetAnnotCount(pw->page);
-    std::ostringstream os;
-    os << '[';
-    bool first = true;
+    try {
+        int total = FPDFPage_GetAnnotCount(pw->page);
+        std::ostringstream os;
+        os << '[';
+        bool first = true;
 
-    for (int i = 0; i < total; ++i) {
-        FPDF_ANNOTATION a = FPDFPage_GetAnnot(pw->page, i);
-        if (!a) continue;
+        for (int i = 0; i < total; ++i) {
+            UniqueAnnot a(FPDFPage_GetAnnot(pw->page, i));
+            if (!a) continue;
 
-        if (FPDFAnnot_GetSubtype(a) == FPDF_ANNOT_REDACT) {
-            FS_RECTF rect;
-            if (FPDFAnnot_GetRect(a, &rect)) {
-                if (!first) os << ',';
-                first = false;
-                os << "{\"idx\":" << i << ",\"x\":" << rect.left << ",\"y\":" << rect.bottom
-                   << ",\"w\":" << (rect.right - rect.left) << ",\"h\":" << (rect.top - rect.bottom)
-                   << '}';
+            if (FPDFAnnot_GetSubtype(a.get()) == FPDF_ANNOT_REDACT) {
+                FS_RECTF rect;
+                if (FPDFAnnot_GetRect(a.get(), &rect)) {
+                    if (!first) os << ',';
+                    first = false;
+                    os << "{\"idx\":" << i << ",\"x\":" << rect.left << ",\"y\":" << rect.bottom
+                       << ",\"w\":" << (rect.right - rect.left)
+                       << ",\"h\":" << (rect.top - rect.bottom) << '}';
+                }
             }
         }
-        FPDFPage_CloseAnnot(a);
-    }
-    os << ']';
+        os << ']';
 
-    std::string s = os.str();
-    char* out = static_cast<char*>(malloc(s.size() + 1));
-    if (!out) return JPDFIUM_ERR_NATIVE;
-    memcpy(out, s.c_str(), s.size() + 1);
-    *json = out;
-    return JPDFIUM_OK;
+        std::string s = os.str();
+        char* out = static_cast<char*>(malloc(s.size() + 1));
+        if (!out) return JPDFIUM_ERR_NATIVE;
+        memcpy(out, s.c_str(), s.size() + 1);
+        *json = out;
+        return JPDFIUM_OK;
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
+    }
 }
 
 int32_t jpdfium_annot_remove_redact(int64_t page, int32_t annot_index) noexcept {
@@ -1097,21 +1119,16 @@ int32_t jpdfium_redact_mark_words(int64_t page, const char** words, int32_t word
     try {
         ScratchGuard scratchGuard;
         ScopedCoverPage coverPage(pw->page);
-        FPDF_TEXTPAGE tp = FPDFText_LoadPage(pw->page);
+        UniqueTextPage tp(FPDFText_LoadPage(pw->page));
         if (!tp) return JPDFIUM_ERR_NATIVE;
 
-        int count = FPDFText_CountChars(tp);
+        int count = FPDFText_CountChars(tp.get());
 
         t_redactScratch.clear();
         std::vector<int>& idxMap = t_redactScratch.idxMap;
         std::u32string& wtext = t_redactScratch.wtext;
-        buildNormalizedText(tp, count, idxMap, wtext);
-
         std::vector<uint32_t>& unicodeSeq = t_redactScratch.unicodeSeq;
-        unicodeSeq.reserve(static_cast<size_t>(count));
-        for (int i = 0; i < count; ++i) {
-            unicodeSeq.push_back(FPDFText_GetUnicode(tp, i));
-        }
+        buildNormalizedText(tp.get(), count, idxMap, wtext, &unicodeSeq);
 
         std::vector<TextMatch>& matches = t_redactScratch.matches;
         for (int32_t wi = 0; wi < wordCount; ++wi) {
@@ -1120,18 +1137,18 @@ int32_t jpdfium_redact_mark_words(int64_t page, const char** words, int32_t word
 #ifdef JPDFIUM_HAS_PCRE2
         int rejectedPatterns = 0;
         int compiledCount = 0;
-        scanPagePatterns(pw->core.get(), tp, wtext, idxMap, words, wordCount, wholeWord != 0,
+        scanPagePatterns(pw->core.get(), tp.get(), wtext, idxMap, words, wordCount, wholeWord != 0,
                          caseSensitive != 0, useRegex != 0, padding, matches, nullptr,
                          rejectedPatterns, compiledCount);
 #endif
-        alignMatchesToGraphemes(tp, unicodeSeq, matches);
+        alignMatchesToGraphemes(tp.get(), unicodeSeq, matches);
 #ifdef JPDFIUM_HAS_HARFBUZZ
         // Snap every span to shaped-cluster boundaries (ligature safety):
         // a cut inside a shaped cluster would leave the survivor
         // unrenderable, so the span grows to the whole cluster.
-        alignMatchesToShapedClusters(tp, matches);
+        alignMatchesToShapedClusters(tp.get(), matches);
 #endif
-        orientMatchQuads(tp, matches);
+        orientMatchQuads(tp.get(), matches);
 
         // Create REDACT annotations from matches (zero content mutation)
         unsigned int r = (argb >> 16) & 0xFF;
@@ -1154,8 +1171,6 @@ int32_t jpdfium_redact_mark_words(int64_t page, const char** words, int32_t word
             FPDFPage_CloseAnnot(annot);
             createdCount++;
         }
-
-        FPDFText_ClosePage(tp);
 
         // The documented contract of this entry point is the number of REDACT
         // annotations created, and a match wrapped across lines or columns creates
@@ -1184,33 +1199,37 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
     }
 
     try {
-        // Collect all REDACT annotations and rects
+        // Collect all REDACT annotations and rects. AnnotItem owns its handle
+        // (UniqueAnnot) so a throw while filling the vectors below, or the EPDF
+        // loop breaking on failure, cannot leak the remaining handles.
         int total = FPDFPage_GetAnnotCount(pw->page);
-        std::vector<CommitMark> redactAnnots;
+        struct AnnotItem {
+            UniqueAnnot annot;
+            RedactArea area;
+        };
+        std::vector<AnnotItem> redactAnnots;
         std::vector<int> redactIndices;
 
         for (int i = 0; i < total; ++i) {
-            FPDF_ANNOTATION a = FPDFPage_GetAnnot(pw->page, i);
+            UniqueAnnot a(FPDFPage_GetAnnot(pw->page, i));
             if (!a) continue;
-            if (FPDFAnnot_GetSubtype(a) == FPDF_ANNOT_REDACT) {
+            if (FPDFAnnot_GetSubtype(a.get()) == FPDF_ANNOT_REDACT) {
                 FS_RECTF rect;
-                if (FPDFAnnot_GetRect(a, &rect)) {
-                    CommitMark item;
-                    item.annot = a;
+                if (FPDFAnnot_GetRect(a.get(), &rect)) {
+                    AnnotItem item;
+                    item.annot = std::move(a);
                     item.area.rect = rect;
-                    size_t qc = FPDFAnnot_CountAttachmentPoints(a);
+                    size_t qc = FPDFAnnot_CountAttachmentPoints(item.annot.get());
                     for (size_t qi = 0; qi < qc; ++qi) {
                         FS_QUADPOINTSF qp;
-                        if (FPDFAnnot_GetAttachmentPoints(a, qi, &qp)) {
+                        if (FPDFAnnot_GetAttachmentPoints(item.annot.get(), qi, &qp)) {
                             item.area.quads.push_back(qp);
                         }
                     }
                     redactAnnots.push_back(std::move(item));
                     redactIndices.push_back(i);
-                    continue;
                 }
             }
-            FPDFPage_CloseAnnot(a);
         }
 
         if (commitCount) *commitCount = static_cast<int32_t>(redactAnnots.size());
@@ -1222,7 +1241,7 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
         // Apply in reverse reading order (bottom-to-top, right-to-left) to avoid
         // text matrix shifting artifacts across multiple regions in the same text object.
         std::sort(redactAnnots.begin(), redactAnnots.end(),
-                  [](const CommitMark& a, const CommitMark& b) {
+                  [](const AnnotItem& a, const AnnotItem& b) {
                       if (std::abs(a.area.rect.bottom - b.area.rect.bottom) > 2.0f) {
                           return a.area.rect.bottom < b.area.rect.bottom;
                       }
@@ -1238,24 +1257,50 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
             appendRedactorAreas(item.area, redactAreas);
         }
 
+        // Apply marks in bounded batches. One mark per call makes the engine
+        // re-walk all page objects per match; an unbounded batch makes it
+        // intersect every text object with every region. 16 measured as the
+        // balance point on dense pages.
+        constexpr size_t batch = 16;
+        std::vector<FPDF_ANNOTATION> annotHandles;
+        annotHandles.reserve(std::min(batch, redactAnnots.size()));
+
+        // appliedRects tracks exactly which boxes EPDF removed content for.
+        // After a batch applies, the page content streams are mutated and
+        // the pre-EPDF annotation indices (redactIndices) and rect list no
+        // longer describe the page, so the fission fallback is banned - same
+        // fail-closed contract as jpdfium_redact_pattern / _words_ex.
+        std::vector<FS_RECTF> appliedRects;
+        appliedRects.reserve(redactAnnots.size());
         bool epdfOk = true;
-        std::vector<FPDF_ANNOTATION> marks;
-        marks.reserve(redactAnnots.size());
-        for (auto& item : redactAnnots) {
-            // Drop Acrobat's pre-baked /RO overlay: EmbedPDF ignores its /Matrix and
-            // repaints it near the origin, while we draw our own cover below.
-            EPDFAnnot_RemoveKey(item.annot, "RO");
-            marks.push_back(item.annot);
-        }
-        for (size_t start = 0; start < marks.size(); start += kRedactApplyChunk) {
-            const int n = static_cast<int>(std::min(kRedactApplyChunk, marks.size() - start));
-            uint32_t rem = 0;
-            if (!EPDFPage_ApplyRedactions(pw->page, marks.data() + start, n, &rem)) {
-                epdfOk = false;
-                break;
+        for (size_t start = 0; start < redactAnnots.size() && epdfOk; start += batch) {
+            const size_t end = std::min(start + batch, redactAnnots.size());
+            annotHandles.clear();
+            for (size_t i = start; i < end; ++i) {
+                auto& item = redactAnnots[i];
+                // Drop Acrobat's pre-baked /RO overlay: EmbedPDF ignores its /Matrix and
+                // repaints it near the origin, while we draw our own cover below.
+                EPDFAnnot_RemoveKey(item.annot.get(), "RO");
+                annotHandles.push_back(item.annot.get());
+            }
+            if (!annotHandles.empty()) {
+                uint32_t rem = 0;
+                epdfOk = EPDFPage_ApplyRedactions(pw->page, annotHandles.data(),
+                                                  static_cast<int>(annotHandles.size()), &rem) != 0;
+            }
+            for (size_t i = start; i < end; ++i) redactAnnots[i].annot.reset();
+            if (epdfOk) {
+                appliedRects.insert(appliedRects.end(), redactRects.begin() + start,
+                                    redactRects.begin() + end);
             }
         }
-        for (FPDF_ANNOTATION mark : marks) FPDFPage_CloseAnnot(mark);
+        if (!epdfOk && !appliedRects.empty()) {
+            // The page is half-redacted: a later commit can resolve it, but no
+            // save may serialize this page until then (the surviving half of the
+            // failed box is still extractable).
+            markRedactionIncomplete(pw, appliedRects);
+            return JPDFIUM_ERR_REDACT_INCOMPLETE;
+        }
         if (epdfOk) {
             for (const RedactArea& area : redactAreas) paintCover(pw->page, area, argb);
             FPDFPage_GenerateContent(pw->page);
@@ -1291,10 +1336,10 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
         }
 
         // Fallback: Object Fission engine if EPDFPage_ApplyRedactions is unavailable
-        FPDF_TEXTPAGE tp = FPDFText_LoadPage(pw->page);
+        UniqueTextPage tp(FPDFText_LoadPage(pw->page));
         if (!tp) return JPDFIUM_ERR_REDACT_UNVERIFIABLE;
 
-        int charCount = FPDFText_CountChars(tp);
+        int charCount = FPDFText_CountChars(tp.get());
         std::vector<TextMatch> matches;
         for (auto& ar : redactRects) {
             TextMatch tm;
@@ -1305,7 +1350,7 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
 
             for (int ci = 0; ci < charCount; ++ci) {
                 double l, r, b, t;
-                if (!FPDFText_GetCharBox(tp, ci, &l, &r, &b, &t)) continue;
+                if (!FPDFText_GetCharBox(tp.get(), ci, &l, &r, &b, &t)) continue;
                 if (charInRect(l, b, r, t, ar.left, ar.bottom, ar.right, ar.top)) {
                     tm.charIndices.push_back(ci);
                 }
@@ -1315,9 +1360,8 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
         }
 
         std::vector<FPDF_PAGEOBJECT> paintedCovers;
-        int32_t rc =
-            objectFissionRedact(pw->doc, pw->page, tp, matches, argb, pw->core, &paintedCovers);
-        FPDFText_ClosePage(tp);
+        int32_t rc = objectFissionRedact(pw->doc, pw->page, tp.get(), matches, argb, pw->core,
+                                         &paintedCovers);
 
         if (rc != JPDFIUM_OK) {
             // The commit removed content before auditing: a half-finished commit
@@ -1326,26 +1370,24 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
             return rc;
         }
 
-        FPDF_TEXTPAGE audit = FPDFText_LoadPage(pw->page);
+        UniqueTextPage audit(FPDFText_LoadPage(pw->page));
         if (!audit) return JPDFIUM_ERR_REDACT_UNVERIFIABLE;
-        int n = FPDFText_CountChars(audit);
+        int n = FPDFText_CountChars(audit.get());
         for (auto& ar : redactRects) {
             for (int ci = 0; ci < n; ++ci) {
                 double l, r, b, t;
-                if (!FPDFText_GetCharBox(audit, ci, &l, &r, &b, &t)) continue;
+                if (!FPDFText_GetCharBox(audit.get(), ci, &l, &r, &b, &t)) continue;
                 if (charInRect(l, b, r, t, ar.left, ar.bottom, ar.right, ar.top)) {
                     fprintf(stderr,
                             "FALLBACK AUDIT FAILED on char ci=%d cx=%.3f in rect [%.3f, %.3f, "
                             "%.3f, %.3f]\n",
                             ci, (l + r) / 2.0, ar.left, ar.bottom, ar.right, ar.top);
                     fflush(stderr);
-                    FPDFText_ClosePage(audit);
                     markRedactionIncomplete(pw, redactRects);
                     return JPDFIUM_ERR_REDACT_INCOMPLETE;
                 }
             }
         }
-        FPDFText_ClosePage(audit);
 
         if (!auditNoSurvivorsInRegion(pw->page, redactRects, paintedCovers)) {
             markRedactionIncomplete(pw, redactRects);
@@ -1380,6 +1422,8 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
 // redaction; use jpdfium_doc_save / jpdfium_doc_save_bytes (full save,
 // which drops orphaned revisions) instead.
 int32_t jpdfium_doc_save_incremental(int64_t doc, uint8_t** data, int64_t* len) noexcept {
+    // Both outputs are required: every success path writes through them.
+    if (!data || !len) return JPDFIUM_ERR_INVALID;
     DocWrapper* w = decodeDoc(doc);
     if (!w || !w->core || !w->core->doc) return JPDFIUM_ERR_INVALID;
     // A redaction that stopped half-way is not savable at all (see

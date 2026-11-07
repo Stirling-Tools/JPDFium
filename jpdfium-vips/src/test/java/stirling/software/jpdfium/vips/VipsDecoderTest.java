@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.vips;
 
+import app.photofox.vipsffm.VipsError;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import stirling.software.jpdfium.PdfDocument;
@@ -12,6 +13,7 @@ import stirling.software.jpdfium.panama.NativeLoader;
 
 import java.io.IOException;
 import java.lang.foreign.Arena;
+import java.nio.charset.StandardCharsets;
 import java.lang.foreign.MemorySegment;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -122,6 +124,15 @@ class VipsDecoderTest {
         byte[] thumbFromBytes = VipsImageConverter.thumbnailImage(png, 32, VipsFormat.PNG, 85);
         assertNotNull(thumbFromBytes);
         assertTrue(thumbFromBytes.length > 0);
+    }
+
+    @Test
+    void fromImageBytesPropagatesVipsDecodeFailure() {
+        assumeVips();
+        byte[] corrupt = "this is not an image".getBytes(StandardCharsets.UTF_8);
+        assertThrows(VipsError.class, () -> VipsImageToPdf.fromImageBytes(
+                List.of(corrupt), ImageToPdfOptions.builder().build()),
+                "VipsImageToPdf must surface the native decode failure, not fall back to ImageIO");
     }
 
     @Test

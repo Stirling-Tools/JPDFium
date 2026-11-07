@@ -2,6 +2,7 @@ package stirling.software.jpdfium.doc;
 
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.panama.FfmHelper;
+import stirling.software.jpdfium.panama.FfmHelper.Scratch;
 import stirling.software.jpdfium.panama.PageEditBindings;
 
 import java.lang.foreign.Arena;
@@ -338,28 +339,22 @@ public final class PdfPageEditor {
      * @return float[4] = {left, bottom, right, top}, or null on failure
      */
     public static float[] getBounds(MemorySegment pageObject) {
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment left = arena.allocate(ValueLayout.JAVA_FLOAT);
-            MemorySegment bottom = arena.allocate(ValueLayout.JAVA_FLOAT);
-            MemorySegment right = arena.allocate(ValueLayout.JAVA_FLOAT);
-            MemorySegment top = arena.allocate(ValueLayout.JAVA_FLOAT);
-
-            int success;
-            try {
-                success = (int) PageEditBindings.FPDFPageObj_GetBounds.invokeExact(
-                        pageObject, left, bottom, right, top);
-            } catch (Throwable t) {
-                throw new JPDFiumException(t);
-            }
-            if (success == 0) return null;
-
-            return new float[]{
-                    left.get(ValueLayout.JAVA_FLOAT, 0),
-                    bottom.get(ValueLayout.JAVA_FLOAT, 0),
-                    right.get(ValueLayout.JAVA_FLOAT, 0),
-                    top.get(ValueLayout.JAVA_FLOAT, 0)
-            };
+        Scratch scratch = FfmHelper.scratch();
+        int success;
+        try {
+            success = (int) PageEditBindings.FPDFPageObj_GetBounds.invokeExact(
+                    pageObject, scratch.float0, scratch.float1, scratch.float2, scratch.float3);
+        } catch (Throwable t) {
+            throw new JPDFiumException(t);
         }
+        if (success == 0) return null;
+
+        return new float[]{
+                scratch.float0.get(ValueLayout.JAVA_FLOAT, 0),
+                scratch.float1.get(ValueLayout.JAVA_FLOAT, 0),
+                scratch.float2.get(ValueLayout.JAVA_FLOAT, 0),
+                scratch.float3.get(ValueLayout.JAVA_FLOAT, 0)
+        };
     }
 
     /**
@@ -471,26 +466,21 @@ public final class PdfPageEditor {
      * @return float[4] = {left, bottom, right, top}, or null if not set
      */
     public static float[] getMediaBox(MemorySegment rawPageSegment) {
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment left = arena.allocate(ValueLayout.JAVA_FLOAT);
-            MemorySegment bottom = arena.allocate(ValueLayout.JAVA_FLOAT);
-            MemorySegment right = arena.allocate(ValueLayout.JAVA_FLOAT);
-            MemorySegment top = arena.allocate(ValueLayout.JAVA_FLOAT);
-            int success;
-            try {
-                success = (int) PageEditBindings.FPDFPage_GetMediaBox.invokeExact(
-                        rawPageSegment, left, bottom, right, top);
-            } catch (Throwable t) {
-                throw new JPDFiumException("FPDFPage_GetMediaBox failed", t);
-            }
-            if (success == 0) return null;
-            return new float[]{
-                    left.get(ValueLayout.JAVA_FLOAT, 0),
-                    bottom.get(ValueLayout.JAVA_FLOAT, 0),
-                    right.get(ValueLayout.JAVA_FLOAT, 0),
-                    top.get(ValueLayout.JAVA_FLOAT, 0)
-            };
+        Scratch scratch = FfmHelper.scratch();
+        int success;
+        try {
+            success = (int) PageEditBindings.FPDFPage_GetMediaBox.invokeExact(
+                    rawPageSegment, scratch.float0, scratch.float1, scratch.float2, scratch.float3);
+        } catch (Throwable t) {
+            throw new JPDFiumException("FPDFPage_GetMediaBox failed", t);
         }
+        if (success == 0) return null;
+        return new float[]{
+                scratch.float0.get(ValueLayout.JAVA_FLOAT, 0),
+                scratch.float1.get(ValueLayout.JAVA_FLOAT, 0),
+                scratch.float2.get(ValueLayout.JAVA_FLOAT, 0),
+                scratch.float3.get(ValueLayout.JAVA_FLOAT, 0)
+        };
     }
 
     /**
@@ -518,26 +508,21 @@ public final class PdfPageEditor {
      * @return float[4] = {left, bottom, right, top}, or null if not set
      */
     public static float[] getCropBox(MemorySegment rawPageSegment) {
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment left = arena.allocate(ValueLayout.JAVA_FLOAT);
-            MemorySegment bottom = arena.allocate(ValueLayout.JAVA_FLOAT);
-            MemorySegment right = arena.allocate(ValueLayout.JAVA_FLOAT);
-            MemorySegment top = arena.allocate(ValueLayout.JAVA_FLOAT);
-            int success;
-            try {
-                success = (int) PageEditBindings.FPDFPage_GetCropBox.invokeExact(
-                        rawPageSegment, left, bottom, right, top);
-            } catch (Throwable t) {
-                throw new JPDFiumException("FPDFPage_GetCropBox failed", t);
-            }
-            if (success == 0) return null;
-            return new float[]{
-                    left.get(ValueLayout.JAVA_FLOAT, 0),
-                    bottom.get(ValueLayout.JAVA_FLOAT, 0),
-                    right.get(ValueLayout.JAVA_FLOAT, 0),
-                    top.get(ValueLayout.JAVA_FLOAT, 0)
-            };
+        Scratch scratch = FfmHelper.scratch();
+        int success;
+        try {
+            success = (int) PageEditBindings.FPDFPage_GetCropBox.invokeExact(
+                    rawPageSegment, scratch.float0, scratch.float1, scratch.float2, scratch.float3);
+        } catch (Throwable t) {
+            throw new JPDFiumException("FPDFPage_GetCropBox failed", t);
         }
+        if (success == 0) return null;
+        return new float[]{
+                scratch.float0.get(ValueLayout.JAVA_FLOAT, 0),
+                scratch.float1.get(ValueLayout.JAVA_FLOAT, 0),
+                scratch.float2.get(ValueLayout.JAVA_FLOAT, 0),
+                scratch.float3.get(ValueLayout.JAVA_FLOAT, 0)
+        };
     }
 
     /**
