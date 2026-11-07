@@ -783,6 +783,18 @@ static void appendMatchChars(CharBoxCache& chars, const std::vector<int>& idxMap
     for (int k = start; k < start + len && k < static_cast<int>(idxMap.size()); ++k) {
         int ci = idxMap[k];
         if (ci == lastCi) continue;  // NFKC expansion maps several buffer units to one char
+        if (lastCi >= 0) {
+            for (int skipped = lastCi + 1; skipped < ci; ++skipped) {
+                if (!isLineEndHyphen(textPage, skipped, FPDFText_GetUnicode(textPage, skipped)))
+                    continue;
+                double l, r, b, t;
+                tm.charIndices.push_back(skipped);
+                if (matchCharBox(textPage, skipped, &l, &r, &b, &t)) {
+                    lastRight = r;
+                    addCharBox(textPage, skipped, bounds, &l, &r, &b, &t);
+                }
+            }
+        }
         lastCi = ci;
         if (isLineBreak(FPDFText_GetUnicode(textPage, ci))) {
             flush();
