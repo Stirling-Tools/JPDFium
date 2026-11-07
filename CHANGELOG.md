@@ -60,6 +60,11 @@ publishing workflows, not library releases, so they are not listed here.
   The PDFium fallback, used when qpdf is unavailable or rejects an input, still
   compresses unfiltered streams, and `PdfOptimizer` still compresses on request.
 
+- Word and regex redaction, and committing redaction marks, apply a page's
+  boxes to PDFium in groups of 16 instead of one call per box, so the page is
+  rewritten once per group rather than once per match. A 200-page document with
+  99,000 matches redacts in about 4 s instead of 16 s; output text is unchanged.
+
 ### Fixed
 
 - Word and pattern redaction now removes text drawn with glyphs the embedded
