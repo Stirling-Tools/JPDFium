@@ -1,6 +1,6 @@
 # Installation
 
-JPDFium publishes to Maven Central under the `com.stirling` group. The current release is **1.3.0**.
+JPDFium publishes to Maven Central under the `com.stirling` group. The current release is **1.3.1**.
 
 ## Requirements
 
@@ -27,7 +27,7 @@ Windows x64. Substitute the native module for your platform from the table below
 
 ```kotlin
 dependencies {
-    implementation(platform("com.stirling:jpdfium-bom:1.3.0"))
+    implementation(platform("com.stirling:jpdfium-bom:1.3.1"))
     implementation("com.stirling:jpdfium")
     runtimeOnly("com.stirling:jpdfium-natives-windows-x64")
 }
@@ -43,7 +43,7 @@ Windows x64.
         <dependency>
             <groupId>com.stirling</groupId>
             <artifactId>jpdfium-bom</artifactId>
-            <version>1.3.0</version>
+            <version>1.3.1</version>
             <type>pom</type>
             <scope>import</scope>
         </dependency>
