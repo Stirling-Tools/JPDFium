@@ -75,7 +75,7 @@ public final class PdfPageGeometry {
      */
     public static int getRotation(PdfDocument doc, int pageIndex) {
         try (PdfPage page = doc.page(pageIndex)) {
-            int r = PdfPageEditor.getRotation(page.rawHandle());
+            int r = PdfPageEditor.getRotation(page.rawHandleForRead());
             return r * 90;
         }
     }
@@ -88,10 +88,11 @@ public final class PdfPageGeometry {
      * @param degrees   rotation in degrees (0, 90, 180, 270)
      */
     public static void setRotation(PdfDocument doc, int pageIndex, int degrees) {
-        int nativeRot = (degrees / 90) % 4;
+        int nativeRot = Math.floorMod(degrees / 90, 4);
         try (PdfPage page = doc.page(pageIndex)) {
             PdfPageEditor.setRotation(page.rawHandle(), nativeRot);
         }
+        doc.markContentModified();
     }
 
     /**
@@ -107,6 +108,7 @@ public final class PdfPageGeometry {
                     rect.x(), rect.y(),
                     rect.x() + rect.width(), rect.y() + rect.height());
         }
+        doc.markContentModified();
     }
 
     /**
@@ -671,6 +673,7 @@ public final class PdfPageGeometry {
             PdfPageBoxes.setBleedBox(raw, rect);
             PdfPageBoxes.setArtBox(raw, rect);
         }
+        doc.markContentModified();
     }
 
     /**
@@ -739,7 +742,7 @@ public final class PdfPageGeometry {
      */
     public static Rect getCropBox(PdfDocument doc, int pageIndex) {
         try (PdfPage page = doc.page(pageIndex)) {
-            float[] box = PdfPageEditor.getCropBox(page.rawHandle());
+            float[] box = PdfPageEditor.getCropBox(page.rawHandleForRead());
             if (box == null) return null;
             return new Rect(box[0], box[1], box[2] - box[0], box[3] - box[1]);
         }
@@ -756,6 +759,7 @@ public final class PdfPageGeometry {
         try (PdfPage page = doc.page(pageIndex)) {
             PdfPageEditor.setMediaBox(page.rawHandle(), 0, 0, size.width(), size.height());
         }
+        doc.markContentModified();
     }
 
     /**
@@ -765,7 +769,9 @@ public final class PdfPageGeometry {
      * @param size target page size
      */
     public static void resizeAll(PdfDocument doc, PageSize size) {
-        for (int i = 0; i < doc.pageCount(); i++) {
+        int count = doc.pageCount();
+        if (count == 0) return;
+        for (int i = 0; i < count; i++) {
             setMediaBox(doc, i, size);
         }
     }
@@ -783,9 +789,26 @@ public final class PdfPageGeometry {
         if (degrees % 90 != 0) {
             throw new IllegalArgumentException("rotation must be a multiple of 90 degrees: " + degrees);
         }
-        int normalized = ((degrees % 360) + 360) % 360;
-        for (int i = 0; i < doc.pageCount(); i++) {
-            setRotation(doc, i, normalized);
+        int count = doc.pageCount();
+        if (count == 0) return;
+        int nativeRot = Math.floorMod(degrees / 90, 4);
+        boolean modified = false;
+        try {
+            for (int i = 0; i < count; i++) {
+                try (PdfPage page = doc.page(i)) {
+                    int currentRot = PdfPageEditor.getRotation(page.rawHandleForRead());
+                    if (currentRot != nativeRot) {
+                        PdfPageEditor.setRotation(page.rawHandle(), nativeRot);
+                        modified = true;
+                    }
+                }
+            }
+        } finally {
+            // Earlier pages may already be rotated when a later page throws;
+            // still record the mutation.
+            if (modified) {
+                doc.markContentModified();
+            }
         }
     }
 }

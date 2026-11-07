@@ -4,11 +4,16 @@
 #include <fpdfview.h>
 
 #include <bit>
+#include <charconv>
+#include <cmath>
+#include <cstddef>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <sstream>
 #include <string>
+#include <system_error>
 #include <unordered_map>
 #include <vector>
 
@@ -88,6 +93,50 @@ static std::vector<uint16_t> utf8_to_utf16le(const char* utf8) {
     return result;
 }
 
+// Fast, allocation-free JSON number writers for the text getters below.
+// Output contract: byte-identical to the ostringstream default formatting
+// they replace (0, -0.0, coords, 1e-5, 1e21, 123456.5, 1/3 all match; the
+// hand-rolled decimal writers match `os << int/unsigned` exactly). Non-finite
+// values are written as 0 because JSON has no infinities or NaN.
+static void append_g(std::string& s, double v) {
+    if (!std::isfinite(v)) {
+        s += '0';
+        return;
+    }
+    // to_chars is locale-independent; snprintf("%.6g") follows the C locale
+    // set by setlocale(), so a comma-decimal host locale would emit "1,5".
+    char buf[64];
+    const auto res = std::to_chars(buf, buf + sizeof(buf), v, std::chars_format::general, 6);
+    if (res.ec == std::errc()) {
+        s.append(buf, static_cast<size_t>(res.ptr - buf));
+    } else {
+        // Unreachable for a bounded double in a 64-byte buffer, but a dropped
+        // field would silently corrupt the record's column alignment; degrade
+        // to 0 like the non-finite case instead.
+        s += '0';
+    }
+}
+
+static void append_uint(std::string& s, unsigned int v) {
+    char buf[16];
+    char* p = buf + sizeof(buf);
+    do {
+        *--p = static_cast<char>('0' + v % 10);
+        v /= 10;
+    } while (v != 0);
+    s.append(p, static_cast<size_t>((buf + sizeof(buf)) - p));
+}
+
+static void append_int(std::string& s, int v) {
+    if (v < 0) {
+        s += '-';
+        // Negate in unsigned domain so INT_MIN is exact.
+        append_uint(s, static_cast<unsigned int>(-(static_cast<long long>(v))));
+    } else {
+        append_uint(s, static_cast<unsigned int>(v));
+    }
+}
+
 int32_t jpdfium_text_get_char_positions(int64_t page, char** json) {
     try {
         PageWrapper* pw = decodePage(page);
@@ -98,8 +147,9 @@ int32_t jpdfium_text_get_char_positions(int64_t page, char** json) {
         if (!tp) return JPDFIUM_ERR_NATIVE;
 
         int count = FPDFText_CountChars(tp.get());
-        std::ostringstream os;
-        os << '[';
+        std::string s;
+        s.reserve(static_cast<size_t>(count > 0 ? count : 0) * 88 + 2);
+        s += '[';
         bool first = true;
 
         for (int i = 0; i < count; ++i) {
@@ -117,14 +167,28 @@ int32_t jpdfium_text_get_char_positions(int64_t page, char** json) {
                 oy = b;
             }
 
-            if (!first) os << ',';
+            if (!first) s += ',';
             first = false;
-            os << "{\"i\":" << i << ",\"u\":" << uni << ",\"ox\":" << ox << ",\"oy\":" << oy
-               << ",\"l\":" << l << ",\"r\":" << r << ",\"b\":" << b << ",\"t\":" << t << '}';
+            s += "{\"i\":";
+            append_int(s, i);
+            s += ",\"u\":";
+            append_uint(s, uni);
+            s += ",\"ox\":";
+            append_g(s, ox);
+            s += ",\"oy\":";
+            append_g(s, oy);
+            s += ",\"l\":";
+            append_g(s, l);
+            s += ",\"r\":";
+            append_g(s, r);
+            s += ",\"b\":";
+            append_g(s, b);
+            s += ",\"t\":";
+            append_g(s, t);
+            s += '}';
         }
-        os << ']';
+        s += ']';
 
-        std::string s = os.str();
         char* out = static_cast<char*>(malloc(s.size() + 1));
         if (!out) return JPDFIUM_ERR_NATIVE;
         memcpy(out, s.c_str(), s.size() + 1);
@@ -142,7 +206,6 @@ int32_t jpdfium_text_get_chars(int64_t page, char** json) {
         // decodePage() rejects a stale page (one whose document was freed and
         // replaced) instead of letting the caller dereference freed PDFium state.
         if (!pw || !pw->page) return JPDFIUM_ERR_INVALID;
-        if (!json) return JPDFIUM_ERR_INVALID;
         // Validate the out-pointer before doing any work: it is dereferenced on
         // the way out, so a null value would be a crash, not an error return.
         if (!json) return JPDFIUM_ERR_INVALID;
@@ -151,11 +214,15 @@ int32_t jpdfium_text_get_chars(int64_t page, char** json) {
         if (!tp) return JPDFIUM_ERR_NATIVE;
 
         int count = FPDFText_CountChars(tp.get());
-        std::ostringstream os;
-        os << '[';
+        std::string s;
+        s.reserve(static_cast<size_t>(count > 0 ? count : 0) * 112 + 2);
+        s += '[';
         bool first = true;
 
         char fontbuf[256];
+        char last_font[256];
+        size_t last_font_len = 0;
+        std::string escaped_font;
         for (int i = 0; i < count; ++i) {
             unsigned int uni = FPDFText_GetUnicode(tp.get(), i);
             if (uni == 0) continue;
@@ -167,26 +234,83 @@ int32_t jpdfium_text_get_chars(int64_t page, char** json) {
                 l = r = b = t = 0.0;
             }
 
-            // FPDFText_GetFontInfo returns 0 and leaves the buffer untouched when
-            // the name does not fit or the page has no font info; zero it so the
-            // JSON never carries uninitialised stack bytes.
-            std::memset(fontbuf, 0, sizeof(fontbuf));
-            FPDFText_GetFontInfo(tp.get(), i, fontbuf, sizeof(fontbuf), nullptr);
+            unsigned long fnlen =
+                FPDFText_GetFontInfo(tp.get(), i, fontbuf, sizeof(fontbuf), nullptr);
+            if (fnlen == 0 || fnlen > sizeof(fontbuf)) {
+                fontbuf[0] = '\0';
+                fnlen = 0;
+            } else {
+                fontbuf[fnlen - 1] = '\0';
+                fnlen--;
+            }
             float size = static_cast<float>(FPDFText_GetFontSize(tp.get(), i));
 
-            if (!first) os << ',';
+            if (!first) s += ',';
             first = false;
-            os << "{\"i\":" << i << ",\"u\":" << uni << ",\"x\":" << l << ",\"y\":" << b
-               << ",\"w\":" << (r - l) << ",\"h\":" << (t - b) << ",\"font\":\"";
-            for (char c : std::string(fontbuf)) {
-                if (c == '"' || c == '\\') os << '\\';
-                os << c;
+            s += "{\"i\":";
+            append_int(s, i);
+            s += ",\"u\":";
+            append_uint(s, uni);
+            s += ",\"x\":";
+            append_g(s, l);
+            s += ",\"y\":";
+            append_g(s, b);
+            s += ",\"w\":";
+            append_g(s, r - l);
+            s += ",\"h\":";
+            append_g(s, t - b);
+            s += ",\"font\":\"";
+            if (fnlen == last_font_len &&
+                (fnlen == 0 || std::memcmp(fontbuf, last_font, fnlen) == 0)) {
+                s += escaped_font;
+            } else {
+                escaped_font.clear();
+                for (size_t k = 0; k < fnlen; ++k) {
+                    const char c = fontbuf[k];
+                    switch (c) {
+                        case '"':
+                            escaped_font += "\\\"";
+                            break;
+                        case '\\':
+                            escaped_font += "\\\\";
+                            break;
+                        case '\b':
+                            escaped_font += "\\b";
+                            break;
+                        case '\f':
+                            escaped_font += "\\f";
+                            break;
+                        case '\n':
+                            escaped_font += "\\n";
+                            break;
+                        case '\r':
+                            escaped_font += "\\r";
+                            break;
+                        case '\t':
+                            escaped_font += "\\t";
+                            break;
+                        default:
+                            if (static_cast<unsigned char>(c) < 0x20) {
+                                char ubuf[8];
+                                std::snprintf(ubuf, sizeof(ubuf), "\\u%04x",
+                                              static_cast<unsigned char>(c));
+                                escaped_font += ubuf;
+                            } else {
+                                escaped_font += c;
+                            }
+                            break;
+                    }
+                }
+                std::memcpy(last_font, fontbuf, fnlen + 1);
+                last_font_len = fnlen;
+                s += escaped_font;
             }
-            os << "\",\"size\":" << size << '}';
+            s += "\",\"size\":";
+            append_g(s, size);
+            s += '}';
         }
-        os << ']';
+        s += ']';
 
-        std::string s = os.str();
         char* out = static_cast<char*>(malloc(s.size() + 1));
         if (!out) return JPDFIUM_ERR_NATIVE;
         memcpy(out, s.c_str(), s.size() + 1);
@@ -200,23 +324,35 @@ int32_t jpdfium_text_get_chars(int64_t page, char** json) {
 
 namespace {
 
+// One packed character record, laid out exactly as the documented little-endian
+// wire format. Keeping it a plain 32-byte value type lets the per-character loop
+// append with a single push_back instead of eight byte-wise appends.
+struct PackedCharRecord {
+    int32_t index;
+    int32_t unicode;
+    float x;
+    float y;
+    float w;
+    float h;
+    float size;
+    int32_t fontId;
+};
+
+static_assert(sizeof(PackedCharRecord) == 32, "packed char record must stay 32 bytes");
+static_assert(offsetof(PackedCharRecord, index) == 0, "wire layout");
+static_assert(offsetof(PackedCharRecord, unicode) == 4, "wire layout");
+static_assert(offsetof(PackedCharRecord, x) == 8, "wire layout");
+static_assert(offsetof(PackedCharRecord, y) == 12, "wire layout");
+static_assert(offsetof(PackedCharRecord, w) == 16, "wire layout");
+static_assert(offsetof(PackedCharRecord, h) == 20, "wire layout");
+static_assert(offsetof(PackedCharRecord, size) == 24, "wire layout");
+static_assert(offsetof(PackedCharRecord, fontId) == 28, "wire layout");
+
 static_assert(std::endian::native == std::endian::little,
               "jpdfium_text_get_chars_packed writes host byte order and documents little-endian");
 
 constexpr int64_t kPackedRecordBytes = 32;
 constexpr int64_t kPackedMaxBytes = std::numeric_limits<int32_t>::max();
-
-void appendI32(std::vector<uint8_t>& out, int32_t v) {
-    uint8_t b[4];
-    std::memcpy(b, &v, 4);
-    out.insert(out.end(), b, b + 4);
-}
-
-void appendF32(std::vector<uint8_t>& out, float v) {
-    uint8_t b[4];
-    std::memcpy(b, &v, 4);
-    out.insert(out.end(), b, b + 4);
-}
 
 }  // namespace
 
@@ -234,13 +370,15 @@ int32_t jpdfium_text_get_chars_packed(int64_t page, uint8_t** data, int64_t* len
             kPackedMaxBytes) {
             return JPDFIUM_ERR_TOO_LARGE;
         }
-        std::vector<uint8_t> records;
-        records.reserve(static_cast<size_t>(count > 0 ? count : 0) * kPackedRecordBytes);
+        std::vector<PackedCharRecord> records;
+        records.reserve(static_cast<size_t>(count > 0 ? count : 0));
         std::unordered_map<std::string, int32_t> fontIds;
         std::vector<std::string> fonts;
-        int32_t emitted = 0;
 
         char fontbuf[256];
+        char lastFont[256];
+        size_t lastFontLen = 0;
+        int32_t lastFontId = -1;
         for (int i = 0; i < count; ++i) {
             unsigned int uni = FPDFText_GetUnicode(tp.get(), i);
             if (uni == 0) continue;
@@ -249,48 +387,74 @@ int32_t jpdfium_text_get_chars_packed(int64_t page, uint8_t** data, int64_t* len
             if (!FPDFText_GetCharBox(tp.get(), i, &l, &r, &b, &t)) {
                 l = r = b = t = 0.0;
             }
-            std::memset(fontbuf, 0, sizeof(fontbuf));
-            FPDFText_GetFontInfo(tp.get(), i, fontbuf, sizeof(fontbuf), nullptr);
-            fontbuf[sizeof(fontbuf) - 1] = '\0';
-            float size = static_cast<float>(FPDFText_GetFontSize(tp.get(), i));
+            // FPDFText_GetFontInfo returns the length including the trailing NUL
+            // and leaves the buffer untouched when the name does not fit, so a
+            // preset first byte is enough: no 256-byte clear per character.
+            fontbuf[0] = '\0';
+            const unsigned long fontInfoLen =
+                FPDFText_GetFontInfo(tp.get(), i, fontbuf, sizeof(fontbuf), nullptr);
+            const size_t nameLen =
+                (fontInfoLen > 0 && fontInfoLen <= sizeof(fontbuf)) ? fontInfoLen - 1 : 0;
 
-            auto [it, inserted] = fontIds.try_emplace(fontbuf, static_cast<int32_t>(fonts.size()));
-            if (inserted) fonts.emplace_back(fontbuf);
+            int32_t fontId;
+            if (lastFontId >= 0 && nameLen == lastFontLen &&
+                (nameLen == 0 || std::memcmp(fontbuf, lastFont, nameLen) == 0)) {
+                // Consecutive glyphs almost always share a font: reuse the id
+                // without hashing a std::string or touching the map.
+                fontId = lastFontId;
+            } else {
+                // Same key the old map built from the NUL-terminated buffer, so a
+                // font name carrying an embedded NUL still interns identically.
+                std::string key(fontbuf);
+                const size_t keyLen = key.size();
+                auto [it, inserted] =
+                    fontIds.try_emplace(std::move(key), static_cast<int32_t>(fonts.size()));
+                if (inserted) fonts.push_back(it->first);
+                fontId = it->second;
+                std::memcpy(lastFont, it->first.data(), keyLen);
+                lastFontLen = keyLen;
+                lastFontId = fontId;
+            }
 
-            appendI32(records, i);
-            appendI32(records, static_cast<int32_t>(uni));
-            appendF32(records, static_cast<float>(l));
-            appendF32(records, static_cast<float>(b));
-            appendF32(records, static_cast<float>(r - l));
-            appendF32(records, static_cast<float>(t - b));
-            appendF32(records, size);
-            appendI32(records, it->second);
-            ++emitted;
+            records.push_back(PackedCharRecord{
+                i, static_cast<int32_t>(uni), static_cast<float>(l), static_cast<float>(b),
+                static_cast<float>(r - l), static_cast<float>(t - b),
+                static_cast<float>(FPDFText_GetFontSize(tp.get(), i)), fontId});
         }
 
-        int64_t total = 8 + static_cast<int64_t>(records.size());
-        for (const std::string& f : fonts) total += 4 + static_cast<int64_t>(f.size());
-        if (total > kPackedMaxBytes) return JPDFIUM_ERR_TOO_LARGE;
-
-        std::vector<uint8_t> header;
-        appendI32(header, emitted);
-        appendI32(header, static_cast<int32_t>(fonts.size()));
-        auto* buf = static_cast<uint8_t*>(malloc(static_cast<size_t>(total)));
-        if (!buf) return JPDFIUM_ERR_NATIVE;
-        uint8_t* cursor = buf;
-        std::memcpy(cursor, header.data(), header.size());
-        cursor += header.size();
-        if (!records.empty()) std::memcpy(cursor, records.data(), records.size());
-        cursor += records.size();
+        size_t bodyBytes = records.size() * sizeof(PackedCharRecord);
         for (const std::string& f : fonts) {
-            int32_t length = static_cast<int32_t>(f.size());
-            std::memcpy(cursor, &length, 4);
-            cursor += 4;
-            std::memcpy(cursor, f.data(), f.size());
-            cursor += f.size();
+            bodyBytes += 4 + f.size();
         }
+
+        const size_t total = 8 + bodyBytes;
+        if (static_cast<int64_t>(total) > kPackedMaxBytes) return JPDFIUM_ERR_TOO_LARGE;
+        auto* buf = static_cast<uint8_t*>(malloc(total));
+        if (!buf) return JPDFIUM_ERR_NATIVE;
+
+        // Single header + records + font-table copy into the caller-owned buffer;
+        // the byte layout matches the appendI32/appendF32 sequence it replaces.
+        uint8_t* p = buf;
+        const int32_t emitted = static_cast<int32_t>(records.size());
+        const int32_t fontCount = static_cast<int32_t>(fonts.size());
+        std::memcpy(p, &emitted, 4);
+        p += 4;
+        std::memcpy(p, &fontCount, 4);
+        p += 4;
+        if (!records.empty()) {
+            std::memcpy(p, records.data(), records.size() * sizeof(PackedCharRecord));
+            p += records.size() * sizeof(PackedCharRecord);
+        }
+        for (const std::string& f : fonts) {
+            const int32_t fontLen = static_cast<int32_t>(f.size());
+            std::memcpy(p, &fontLen, 4);
+            p += 4;
+            std::memcpy(p, f.data(), f.size());
+            p += f.size();
+        }
+
         *data = buf;
-        *len = total;
+        *len = static_cast<int64_t>(total);
         return JPDFIUM_OK;
     } catch (...) {
         return JPDFIUM_ERR_NATIVE;
@@ -311,22 +475,26 @@ int32_t jpdfium_text_find(int64_t page, const char* query, char** json) {
         UniqueSch sch(
             FPDFText_FindStart(tp.get(), reinterpret_cast<FPDF_WIDESTRING>(wq.data()), 0, 0));
 
-        std::ostringstream os;
-        os << '[';
+        std::string s;
+        s.reserve(128);
+        s += '[';
         bool first = true;
         while (sch && FPDFText_FindNext(sch.get())) {
             int start = FPDFText_GetSchResultIndex(sch.get());
             int cnt = FPDFText_GetSchCount(sch.get());
-            if (!first) os << ',';
+            if (!first) s += ',';
             first = false;
-            os << "{\"start\":" << start << ",\"len\":" << cnt << '}';
+            s += "{\"start\":";
+            append_int(s, start);
+            s += ",\"len\":";
+            append_int(s, cnt);
+            s += '}';
         }
-        os << ']';
+        s += ']';
 
         // sch and tp release themselves; the search handle must go first, so it
         // is declared after the text page and destroyed before it.
 
-        std::string s = os.str();
         char* out = static_cast<char*>(malloc(s.size() + 1));
         if (!out) return JPDFIUM_ERR_NATIVE;
         memcpy(out, s.c_str(), s.size() + 1);

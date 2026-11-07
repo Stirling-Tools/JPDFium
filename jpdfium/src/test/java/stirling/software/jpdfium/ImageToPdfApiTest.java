@@ -8,17 +8,26 @@ import stirling.software.jpdfium.model.ImageFormat;
 import stirling.software.jpdfium.model.ImageToPdfOptions;
 import stirling.software.jpdfium.model.PageSize;
 import stirling.software.jpdfium.panama.NativeRuntime;
+import stirling.software.jpdfium.panama.PdfiumRuntime;
 
 import java.awt.Color;
 import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.common.PDRectangle;
+
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
@@ -278,5 +287,79 @@ class ImageToPdfApiTest {
             assertEquals(1190, rendered.getWidth());
             assertEquals(1683, rendered.getHeight());
         }
+    }
+
+    /**
+     * pageToBytes must clamp through the same effectiveDpi path as pageToImage;
+     * otherwise a bounded max dimension produces different sizes per format.
+     */
+    @Test
+    void pageToBytesClampsDpiLikePageToImage() throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real PDFium native library");
+        int previous = setMaxImageDimension(1_000);
+        try {
+            byte[] pdf;
+            try (PDDocument doc = new PDDocument()) {
+                doc.addPage(new PDPage(new PDRectangle(5_000f, 5_000f)));
+                ByteArrayOutputStream out = new ByteArrayOutputStream();
+                doc.save(out);
+                pdf = out.toByteArray();
+            }
+            try (PdfDocument doc = PdfDocument.open(pdf)) {
+                BufferedImage viaImage = PdfImageConverter.pageToImage(doc, 0, 300);
+                byte[] encoded = PdfImageConverter.pageToBytes(
+                        doc, 0, 300, ImageFormat.PNG, 90, false);
+                BufferedImage viaBytes = PdfImageIO.read(encoded);
+
+                assertEquals(viaImage.getWidth(), viaBytes.getWidth(),
+                        "pageToBytes must match pageToImage width when DPI is clamped");
+                assertEquals(viaImage.getHeight(), viaBytes.getHeight(),
+                        "pageToBytes must match pageToImage height when DPI is clamped");
+                assertTrue(viaBytes.getWidth() < 5_000 * 300 / 72,
+                        "oversized page must be clamped below the requested DPI");
+            }
+        } finally {
+            setMaxImageDimension(previous);
+        }
+    }
+
+    @Test
+    void embedRgbaImagesClosesHandleWhenALaterFrameIsInvalid() {
+        assumeTrue(NativeRuntime.isFull(), "needs real PDFium native library");
+        long before = PdfiumRuntime.liveResources().documents();
+        byte[] valid = solidRgbaFrame(4, 4, 10, 20, 30, 255);
+        byte[] invalid = new byte[8]; // zero width/height header
+        ImageToPdfOptions options = ImageToPdfOptions.builder().build();
+
+        for (int i = 0; i < 10; i++) {
+            assertThrows(IllegalArgumentException.class,
+                    () -> PdfImageConverter.embedRgbaImages(List.of(valid, invalid), options),
+                    "invalid frame after a valid one must fail");
+        }
+        assertEquals(before, PdfiumRuntime.liveResources().documents(),
+                "a failed embed must close the partially built native document");
+    }
+
+    /**
+     * The max dimension is a static final resolved at class-init, so a test
+     * cannot set it through a normal field write. Unsafe is used only here to
+     * exercise the clamp deterministically within one JVM.
+     */
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
+    private static int setMaxImageDimension(int value) throws Exception {
+        Field field = PdfImageConverter.class.getDeclaredField("MAX_IMAGE_DIMENSION");
+        Class<?> unsafeClass = Class.forName("sun.misc.Unsafe");
+        Field theUnsafe = unsafeClass.getDeclaredField("theUnsafe");
+        theUnsafe.setAccessible(true);
+        Object unsafe = theUnsafe.get(null);
+        Method staticFieldBase = unsafeClass.getMethod("staticFieldBase", Field.class);
+        Method staticFieldOffset = unsafeClass.getMethod("staticFieldOffset", Field.class);
+        Method getInt = unsafeClass.getMethod("getInt", Object.class, long.class);
+        Method putInt = unsafeClass.getMethod("putInt", Object.class, long.class, int.class);
+        Object base = staticFieldBase.invoke(unsafe, field);
+        long offset = (long) staticFieldOffset.invoke(unsafe, field);
+        int previous = (int) getInt.invoke(unsafe, base, offset);
+        putInt.invoke(unsafe, base, offset, value);
+        return previous;
     }
 }

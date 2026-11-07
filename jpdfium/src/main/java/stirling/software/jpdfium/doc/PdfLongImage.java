@@ -82,7 +82,7 @@ public final class PdfLongImage {
                 int h = pageHeights[i];
 
                 // Render page to native bitmap
-                MemorySegment rawPage = page.rawHandle();
+                MemorySegment rawPage = page.rawHandleForRead();
                 MemorySegment bitmap;
                 try {
                     bitmap = (MemorySegment) RenderBindings.FPDFBitmap_Create.invokeExact(w, h, 0);

@@ -2,9 +2,17 @@ package stirling.software.jpdfium;
 
 import com.sun.management.ThreadMXBean;
 import org.junit.jupiter.api.Test;
+import org.apache.pdfbox.pdfwriter.compress.CompressParameters;
+import org.apache.pdfbox.cos.COSStream;
+import org.apache.pdfbox.cos.COSName;
+import org.apache.pdfbox.Loader;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import org.junit.jupiter.api.io.TempDir;
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.model.StorageOptions;
+import stirling.software.jpdfium.doc.ActionType;
+import stirling.software.jpdfium.doc.Bookmark;
+import stirling.software.jpdfium.doc.PdfBookmarkEditor;
 import stirling.software.jpdfium.doc.PdfPageEditor;
 import stirling.software.jpdfium.doc.PdfSecurity;
 import stirling.software.jpdfium.panama.NativeRuntime;
@@ -13,6 +21,7 @@ import stirling.software.jpdfium.panama.QpdfLib;
 import java.io.IOException;
 import java.lang.management.ManagementFactory;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermission;
@@ -20,7 +29,9 @@ import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -307,6 +318,99 @@ class PdfMergeSplitFilesTest {
     }
 
     @Test
+    void nonDurableMergePublishesACompleteFile(@TempDir Path tmp) throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real PDFium native library");
+        assumeTrue(QpdfLib.isMergeFilesSupported(), "needs file-backed qpdf merge symbol");
+
+        Path a = tmp.resolve("a.pdf");
+        Path b = tmp.resolve("b.pdf");
+        Files.write(a, SyntheticPdfFactory.createDiverse(2));
+        Files.write(b, SyntheticPdfFactory.createDiverse(3));
+
+        Path out = tmp.resolve("merged.pdf");
+        StorageOptions fast = StorageOptions.builder().durable(false).build();
+        PdfMerge.mergeFilesToFile(List.of(a, b), out, fast);
+        assertTrue(Files.size(out) > 0, "non-durable merge must still publish the file");
+        byte[] bytes = Files.readAllBytes(out);
+        assertEquals(5, PdfVerifier.pageCount(bytes, "non-durable merge"));
+        try (PdfDocument check = PdfDocument.open(bytes)) {
+            assertEquals(5, check.pageCount());
+        }
+    }
+
+    @Test
+    void fileMergeAndExtractKeepRawStreamsRaw(@TempDir Path tmp) throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real PDFium native library");
+        assumeTrue(QpdfLib.isMergeFilesSupported(), "needs file-backed qpdf merge symbol");
+        assumeTrue(QpdfLib.isExtractFileSupported(), "needs file-backed qpdf extract symbol");
+
+        Path raw = tmp.resolve("raw.pdf");
+        try (PDDocument doc = new PDDocument()) {
+            for (int i = 0; i < 2; i++) {
+                PDPage page = new PDPage(PDRectangle.A4);
+                doc.addPage(page);
+                try (PDPageContentStream cs = new PDPageContentStream(
+                        doc, page, PDPageContentStream.AppendMode.OVERWRITE, false)) {
+                    cs.addRect(10, 10, 100, 100);
+                    cs.fill();
+                }
+            }
+            doc.save(raw.toFile(), CompressParameters.NO_COMPRESSION);
+        }
+
+        Path merged = tmp.resolve("merged.pdf");
+        PdfMerge.mergeFilesToFile(List.of(raw, raw), merged);
+        Path part = tmp.resolve("part.pdf");
+        PdfSplit.extractPageRangeToFile(raw, 1, 1, part);
+
+        for (Path out : List.of(merged, part)) {
+            try (PDDocument doc = Loader.loadPDF(out.toFile())) {
+                for (PDPage page : doc.getPages()) {
+                    COSStream contents = (COSStream) page.getCOSObject().getDictionaryObject(COSName.CONTENTS);
+                    assertNull(contents.getFilters(), out.getFileName() + " content stream was re-encoded");
+                }
+            }
+        }
+    }
+
+    @Test
+    void splitToFilesFastWritesAllParts(@TempDir Path tmp) throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real PDFium native library");
+        assumeTrue(QpdfLib.isExtractRangesSupported(), "needs qpdf batch extract symbol");
+
+        Path input = tmp.resolve("fast-source.pdf");
+        Files.write(input, SyntheticPdfFactory.createDiverse(5));
+
+        Path dir = tmp.resolve("fast-parts");
+        List<Path> parts = PdfSplit.splitToFilesFast(
+                input, PdfSplit.SplitStrategy.everyNPages(2), dir);
+        assertEquals(3, parts.size());
+        int[] pages = {2, 2, 1};
+        for (int i = 0; i < parts.size(); i++) {
+            assertEquals(pages[i],
+                    PdfVerifier.pageCount(Files.readAllBytes(parts.get(i)), "fast part " + i));
+        }
+    }
+
+    @Test
+    void splitToFilesMatchesBatchSplit(@TempDir Path tmp) throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real PDFium native library");
+        assumeTrue(QpdfLib.isExtractRangesSupported(), "needs qpdf batch extract symbol");
+
+        Path input = tmp.resolve("source.pdf");
+        Files.write(input, SyntheticPdfFactory.createDiverse(6));
+
+        Path dir = tmp.resolve("parts");
+        List<Path> parts = PdfSplit.splitToFiles(
+                input, PdfSplit.SplitStrategy.everyNPages(2), dir);
+        assertEquals(3, parts.size());
+        for (int i = 0; i < parts.size(); i++) {
+            byte[] bytes = Files.readAllBytes(parts.get(i));
+            assertEquals(2, PdfVerifier.pageCount(bytes, "split part " + i));
+        }
+    }
+
+    @Test
     void extractPageRangeToFileMatchesBytesPath(@TempDir Path tmp) throws Exception {        assumeTrue(NativeRuntime.isFull(), "needs real PDFium native library");
         assumeTrue(QpdfLib.isExtractFileSupported(), "needs file-backed qpdf extract symbol");
 
@@ -522,6 +626,214 @@ class PdfMergeSplitFilesTest {
                 "extracted output lost the large image stream (size " + part.length + ")");
     }
 
+    @Test
+    void publishPreservesExistingPermissionsAndUsesUmaskDefaults(@TempDir Path tmp) throws Exception {
+        assumePosix();
+        assumeTrue(NativeRuntime.isFull(), "needs real PDFium native library");
+        assumeTrue(QpdfLib.isMergeFilesSupported(), "needs file-backed qpdf merge symbol");
+
+        Path a = tmp.resolve("a.pdf");
+        Path b = tmp.resolve("b.pdf");
+        Files.write(a, SyntheticPdfFactory.createDiverse(2));
+        Files.write(b, SyntheticPdfFactory.createDiverse(3));
+        Path input = tmp.resolve("input.pdf");
+        Files.write(input, SyntheticPdfFactory.createDiverse(5));
+        StorageOptions durableOpts = StorageOptions.defaults();
+        Set<PosixFilePermission> custom = PosixFilePermissions.fromString("rw-r-----");
+        Set<PosixFilePermission> defaults = defaultCreatePermissions(tmp);
+
+        // Durable merge: existing destination permissions are preserved...
+        Path existingMerge = tmp.resolve("existing-merge.pdf");
+        Files.write(existingMerge, new byte[] {1, 2, 3});
+        Files.setPosixFilePermissions(existingMerge, custom);
+        PdfMerge.mergeFilesToFile(List.of(a, b), existingMerge, durableOpts);
+        assertEquals(custom, Files.getPosixFilePermissions(existingMerge),
+                "durable merge must preserve existing destination permissions");
+        assertEquals(5, PdfVerifier.pageCount(Files.readAllBytes(existingMerge), "merge"));
+
+        // ...and a new destination gets the umask default, not the native 0600.
+        Path newMerge = tmp.resolve("new-merge.pdf");
+        PdfMerge.mergeFilesToFile(List.of(a, b), newMerge, durableOpts);
+        assertEquals(defaults, Files.getPosixFilePermissions(newMerge),
+                "durable merge must not leave a 0600 destination");
+
+        // Safe split: existing and new part files follow the same rules.
+        Path safeDir = tmp.resolve("safe-parts");
+        Files.createDirectories(safeDir);
+        Path existingPart = safeDir.resolve("part-001.pdf");
+        Files.write(existingPart, new byte[] {1, 2, 3});
+        Files.setPosixFilePermissions(existingPart, custom);
+        List<Path> safeParts = PdfSplit.splitToFiles(
+                input, PdfSplit.SplitStrategy.everyNPages(10), safeDir, durableOpts);
+        assertEquals(1, safeParts.size());
+        assertEquals(custom, Files.getPosixFilePermissions(existingPart),
+                "durable split must preserve existing part permissions");
+
+        Path safeNewDir = tmp.resolve("safe-new-parts");
+        List<Path> safeNewParts = PdfSplit.splitToFiles(
+                input, PdfSplit.SplitStrategy.everyNPages(10), safeNewDir, durableOpts);
+        for (Path part : safeNewParts) {
+            assertEquals(defaults, Files.getPosixFilePermissions(part),
+                    "durable split must not leave a 0600 part");
+        }
+
+        // Fast direct split: native output starts at 0600 and must be restored
+        // to the destination's permissions (existing) or the umask default.
+        Path fastDir = tmp.resolve("fast-parts");
+        Files.createDirectories(fastDir);
+        Path fastExistingPart = fastDir.resolve("part-001.pdf");
+        Files.write(fastExistingPart, new byte[] {1, 2, 3});
+        Files.setPosixFilePermissions(fastExistingPart, custom);
+        List<Path> fastParts = PdfSplit.splitToFilesFast(
+                input, PdfSplit.SplitStrategy.everyNPages(10), fastDir);
+        assertEquals(1, fastParts.size());
+        assertEquals(custom, Files.getPosixFilePermissions(fastExistingPart),
+                "fast split must preserve existing part permissions");
+
+        Path fastNewDir = tmp.resolve("fast-new-parts");
+        List<Path> fastNewParts = PdfSplit.splitToFilesFast(
+                input, PdfSplit.SplitStrategy.everyNPages(10), fastNewDir);
+        for (Path part : fastNewParts) {
+            assertEquals(defaults, Files.getPosixFilePermissions(part),
+                    "fast split must not leave a 0600 part");
+        }
+    }
+
+    @Test
+    void splitRejectsInputAliasingAnOutputPart(@TempDir Path tmp) throws Exception {
+        assumePosix();
+        assumeTrue(NativeRuntime.isFull(), "needs real PDFium native library");
+        StorageOptions fast = StorageOptions.builder().durable(false).build();
+
+        Path dir = tmp.resolve("alias");
+        Files.createDirectories(dir);
+        Path input = dir.resolve("part-001.pdf");
+        byte[] original = SyntheticPdfFactory.createDiverse(3);
+        Files.write(input, original);
+
+        JPDFiumException safe = assertThrows(JPDFiumException.class,
+                () -> PdfSplit.splitToFiles(
+                        input, PdfSplit.SplitStrategy.everyNPages(1), dir, fast));
+        assertTrue(safe.getMessage().contains("must differ"), safe.getMessage());
+        assertArrayEquals(original, Files.readAllBytes(input),
+                "aliased safe split must not modify the input");
+
+        JPDFiumException direct = assertThrows(JPDFiumException.class,
+                () -> PdfSplit.splitToFilesFast(
+                        input, PdfSplit.SplitStrategy.everyNPages(1), dir));
+        assertTrue(direct.getMessage().contains("must differ"), direct.getMessage());
+        assertArrayEquals(original, Files.readAllBytes(input),
+                "aliased fast split must not modify the input");
+
+        // A symlink to the input is the same alias even though the paths differ.
+        Path linkDir = tmp.resolve("alias-link");
+        Files.createDirectories(linkDir);
+        Path source = tmp.resolve("source.pdf");
+        Files.write(source, original);
+        Path link = linkDir.resolve("part-001.pdf");
+        createSymlinkOrSkip(link, source);
+
+        assertThrows(JPDFiumException.class,
+                () -> PdfSplit.splitToFiles(
+                        source, PdfSplit.SplitStrategy.everyNPages(1), linkDir, fast));
+        assertArrayEquals(original, Files.readAllBytes(source),
+                "symlink-aliased safe split must not modify the input");
+        assertThrows(JPDFiumException.class,
+                () -> PdfSplit.splitToFilesFast(
+                        source, PdfSplit.SplitStrategy.everyNPages(1), linkDir));
+        assertArrayEquals(original, Files.readAllBytes(source),
+                "symlink-aliased fast split must not modify the input");
+    }
+
+    @Test
+    void splitToFilesPreservesBookmarksInTheFallbackPath(@TempDir Path tmp) throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real PDFium native library");
+        Path plain = tmp.resolve("plain.pdf");
+        Files.write(plain, SyntheticPdfFactory.createDiverse(6));
+        Path marked = tmp.resolve("marked.pdf");
+        try (PdfDocument doc = PdfDocument.open(plain)) {
+            PdfBookmarkEditor.setBookmarks(doc,
+                    List.of(goTo("First", 0), goTo("Fourth", 3)), marked);
+        }
+
+        StorageOptions fast = StorageOptions.builder().durable(false).build();
+        List<Path> safe = PdfSplit.splitToFiles(
+                marked, PdfSplit.SplitStrategy.everyNPages(3), tmp.resolve("safe"), fast);
+        assertBookmarks(safe);
+
+        List<Path> direct = PdfSplit.splitToFilesFast(
+                marked, PdfSplit.SplitStrategy.everyNPages(3), tmp.resolve("direct"));
+        assertBookmarks(direct);
+    }
+
+    @Test
+    void splitFollowsAnExistingPartSymlinkWithoutReplacingIt(@TempDir Path tmp) throws Exception {
+        assumePosix();
+        assumeTrue(NativeRuntime.isFull(), "needs real PDFium native library");
+        StorageOptions fast = StorageOptions.builder().durable(false).build();
+        Path input = tmp.resolve("source.pdf");
+        Files.write(input, SyntheticPdfFactory.createDiverse(4));
+
+        assertSymlinkPublish(tmp.resolve("safe"), input, fast, false);
+        assertSymlinkPublish(tmp.resolve("direct"), input, fast, true);
+    }
+
+    private static void assertSymlinkPublish(Path dir, Path input, StorageOptions options,
+                                             boolean direct) throws Exception {
+        Files.createDirectories(dir);
+        Path real = dir.resolve("real-part.pdf");
+        Files.write(real, new byte[] {1, 2, 3});
+        Path link = dir.resolve("part-001.pdf");
+        createSymlinkOrSkip(link, real);
+
+        List<Path> parts = direct
+                ? PdfSplit.splitToFilesFast(input, PdfSplit.SplitStrategy.everyNPages(10), dir)
+                : PdfSplit.splitToFiles(input, PdfSplit.SplitStrategy.everyNPages(10), dir, options);
+        assertEquals(1, parts.size());
+        assertTrue(Files.isSymbolicLink(link), "the part symlink must not be replaced");
+        assertEquals(4, PdfVerifier.pageCount(Files.readAllBytes(real),
+                "split output through symlink"));
+    }
+
+    private static void assertBookmarks(List<Path> parts) throws Exception {
+        assertEquals(2, parts.size());
+        try (PdfDocument first = PdfDocument.open(parts.get(0));
+             PdfDocument second = PdfDocument.open(parts.get(1))) {
+            assertEquals("First", first.bookmarks().getFirst().title());
+            Bookmark fourth = second.bookmarks().getFirst();
+            assertEquals("Fourth", fourth.title());
+            assertEquals(0, fourth.pageIndex(), "bookmark must be remapped into its part");
+        }
+    }
+
+    private static Bookmark goTo(String title, int page) {
+        return new Bookmark(title, page, List.of(), ActionType.GOTO,
+                Optional.empty(), Optional.empty());
+    }
+
+    private static Set<PosixFilePermission> defaultCreatePermissions(Path dir) throws Exception {
+        Path probe = dir.resolve("umask-probe-" + UUID.randomUUID());
+        Files.createFile(probe);
+        try {
+            return Files.getPosixFilePermissions(probe);
+        } finally {
+            Files.deleteIfExists(probe);
+        }
+    }
+
+    private static void createSymlinkOrSkip(Path link, Path target) throws Exception {
+        try {
+            Files.createSymbolicLink(link, target);
+        } catch (UnsupportedOperationException | java.io.IOException e) {
+            assumeTrue(false, "symlinks unavailable: " + e.getMessage());
+        }
+    }
+
+    private static void assumePosix() {
+        assumeTrue(FileSystems.getDefault().supportedFileAttributeViews().contains("posix"),
+                "needs a POSIX filesystem");
+    }
+
     /** Multi-megabyte input: qpdf must re-read its streams lazily while writing. */
     private static byte[] largePdf(int pages) throws Exception {
         BufferedImage img =
@@ -601,5 +913,38 @@ class PdfMergeSplitFilesTest {
         assertTrue(allocated < outSize,
                 "file merge allocated " + allocated + " bytes for " + outSize
                         + " bytes of output - document bytes leaked onto the heap");
+    }
+
+    @Test
+    void documentMergeToFileUsesTheFileBackedPath(@TempDir Path tmp) throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real PDFium native library");
+        assumeTrue(QpdfLib.isMergeFilesSupported(), "needs file-backed qpdf merge symbol");
+
+        Path a = tmp.resolve("a.pdf");
+        Path b = tmp.resolve("b.pdf");
+        Files.write(a, SyntheticPdfFactory.createDiverse(2));
+        Files.write(b, SyntheticPdfFactory.createDiverse(3));
+
+        Path merged = tmp.resolve("merged.pdf");
+        PdfDocument.merge(List.of(a, b), merged);
+        byte[] bytes = Files.readAllBytes(merged);
+        assertEquals(5, PdfVerifier.pageCount(bytes, "document merge to file"));
+        for (int i = 0; i < 5; i++) {
+            PdfVerifier.assertNonEmptyText(bytes, i, "document merge page " + i);
+        }
+
+        // Replacing an existing destination must publish a complete file.
+        PdfDocument.merge(List.of(b, a), merged);
+        assertEquals(5, PdfVerifier.pageCount(Files.readAllBytes(merged), "replaced merge"));
+
+        // A single input still takes the staging copy path.
+        Path single = tmp.resolve("single.pdf");
+        PdfDocument.merge(List.of(a), single);
+        assertEquals(2, PdfVerifier.pageCount(Files.readAllBytes(single), "single input merge"));
+
+        assertThrows(IllegalArgumentException.class,
+                () -> PdfDocument.merge(List.of(), merged));
+        assertThrows(IllegalArgumentException.class,
+                () -> PdfDocument.merge(List.of(a), null));
     }
 }

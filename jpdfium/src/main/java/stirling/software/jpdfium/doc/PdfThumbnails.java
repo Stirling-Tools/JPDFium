@@ -138,10 +138,12 @@ public final class PdfThumbnails {
             if (needed <= 0) return Optional.empty();
 
             MemorySegment buf = arena.allocate(needed);
+            long written;
             try {
-                long _ = (long) getter.invokeExact(page, buf, needed);
+                written = (long) getter.invokeExact(page, buf, needed);
             } catch (Throwable t) { throw new JPDFiumException(t); }
-            return Optional.of(buf.asSlice(0, needed).toArray(ValueLayout.JAVA_BYTE));
+            long actualLen = Math.min(needed, written > 0 ? written : needed);
+            return Optional.of(buf.asSlice(0, actualLen).toArray(ValueLayout.JAVA_BYTE));
         }
     }
 }

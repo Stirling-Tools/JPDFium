@@ -150,76 +150,118 @@ inline void bgraToRgbaInPlace(uint8_t* __restrict buf, int w, int h, int stride)
     }
 }
 
+// Single-pixel unpremultiply plus the optional RGB/BGR swap. Extracted so the vector
+// fast path below can fall back to exactly the same arithmetic for mixed blocks.
+inline void unpremulSwapPixel(uint8_t* __restrict r, bool reverse_byte_order) {
+    const uint8_t a = r[3];
+    if (a == 255) {
+        if (reverse_byte_order) {
+            const uint8_t b = r[0];
+            r[0] = r[2];
+            r[2] = b;
+        }
+        return;
+    }
+    if (a == 0) {
+        r[0] = 0;
+        r[1] = 0;
+        r[2] = 0;
+        return;
+    }
+    const auto& row = kUnpremulTable[a];
+    const uint8_t b = row[r[0]];
+    const uint8_t g = row[r[1]];
+    const uint8_t red = row[r[2]];
+    if (reverse_byte_order) {
+        r[0] = red;
+        r[1] = g;
+        r[2] = b;
+    } else {
+        r[0] = b;
+        r[1] = g;
+        r[2] = red;
+    }
+}
+
+#if defined(__aarch64__)
+// Lane masks that reduce "all four alpha lanes are 255" to a single vector compare.
+constexpr uint8_t kAlphaLaneMask[16] = {0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255};
+constexpr uint8_t kRgbLaneMask[16] = {255, 255, 255, 0, 255, 255, 255, 0,
+                                      255, 255, 255, 0, 255, 255, 255, 0};
+// Swaps R and B inside each four-byte group and leaves every alpha byte alone.
+constexpr uint8_t kRgbSwapIndices[16] = {2, 1, 0, 3, 6, 5, 4, 7, 10, 9, 8, 11, 14, 13, 12, 15};
+
+// A fully opaque run only needs the byte-order swap, which is one table lookup per
+// 128-bit vector. A fully transparent run is all zeroes. A block that is neither
+// falls back to the scalar body, so the output is bit-identical to a scalar pass
+// over the same buffer.
+inline void swapRgbWhereOpaque(uint8_t* __restrict buf, int total) {
+    const uint8x16_t indices = vld1q_u8(kRgbSwapIndices);
+    const uint8x16_t alpha_lane = vld1q_u8(kAlphaLaneMask);
+    const uint8x16_t rgb_lane = vld1q_u8(kRgbLaneMask);
+    const uint8x16_t opaque = vdupq_n_u8(0xFF);
+    const auto is_opaque = [&](uint8x16_t v) {
+        return vceqq_u8(vorrq_u8(vandq_u8(v, alpha_lane), rgb_lane), opaque);
+    };
+    int i = 0;
+    for (; i + 16 <= total; i += 16) {
+        uint8_t* p = buf + static_cast<std::size_t>(i) * 4;
+        const uint8x16_t v0 = vld1q_u8(p);
+        const uint8x16_t v1 = vld1q_u8(p + 16);
+        const uint8x16_t v2 = vld1q_u8(p + 32);
+        const uint8x16_t v3 = vld1q_u8(p + 48);
+        const uint8x16_t same = vandq_u8(vandq_u8(is_opaque(v0), is_opaque(v1)),
+                                         vandq_u8(is_opaque(v2), is_opaque(v3)));
+        if (vminvq_u8(same) == 0xFF) {
+            vst1q_u8(p, vqtbl1q_u8(v0, indices));
+            vst1q_u8(p + 16, vqtbl1q_u8(v1, indices));
+            vst1q_u8(p + 32, vqtbl1q_u8(v2, indices));
+            vst1q_u8(p + 48, vqtbl1q_u8(v3, indices));
+            continue;
+        }
+        const uint8x16_t alphas =
+            vorrq_u8(vorrq_u8(vandq_u8(v0, alpha_lane), vandq_u8(v1, alpha_lane)),
+                     vorrq_u8(vandq_u8(v2, alpha_lane), vandq_u8(v3, alpha_lane)));
+        if (vmaxvq_u8(alphas) == 0) {
+            memset(p, 0, 64);
+            continue;
+        }
+        for (int k = 0; k < 16; ++k) unpremulSwapPixel(p + k * 4, true);
+    }
+    for (; i + 4 <= total; i += 4) {
+        uint8_t* p = buf + static_cast<std::size_t>(i) * 4;
+        const uint8x16_t v = vld1q_u8(p);
+        if (vminvq_u8(is_opaque(v)) == 0xFF) {
+            vst1q_u8(p, vqtbl1q_u8(v, indices));
+            continue;
+        }
+        for (int k = 0; k < 4; ++k) unpremulSwapPixel(p + k * 4, true);
+    }
+    for (; i < total; ++i) unpremulSwapPixel(buf + static_cast<std::size_t>(i) * 4, true);
+}
+#endif
+
+// The vector path re-checks every block, so it is correct for pages that mix
+// opaque, transparent and partial-alpha regions (e.g. a transparent render
+// whose top margin is fully transparent).
 inline void unpremulAndSwapBgraInPlace(uint8_t* __restrict buf, int w, int h, int stride,
                                        bool reverse_byte_order) {
     if (stride == w * 4) {
-        int total = w * h;
-        uint8_t* __restrict r = buf;
-        for (int i = 0; i < total; ++i, r += 4) {
-            uint8_t a = r[3];
-            if (a == 255) {
-                if (reverse_byte_order) {
-                    uint8_t b = r[0];
-                    r[0] = r[2];
-                    r[2] = b;
-                }
-                continue;
-            }
-            if (a == 0) {
-                r[0] = 0;
-                r[1] = 0;
-                r[2] = 0;
-                continue;
-            }
-            const auto& row = kUnpremulTable[a];
-            uint8_t b = row[r[0]];
-            uint8_t g = row[r[1]];
-            uint8_t red = row[r[2]];
-            if (reverse_byte_order) {
-                r[0] = red;
-                r[1] = g;
-                r[2] = b;
-            } else {
-                r[0] = b;
-                r[1] = g;
-                r[2] = red;
-            }
+        const int total = w * h;
+#if defined(__aarch64__)
+        if (reverse_byte_order) {
+            swapRgbWhereOpaque(buf, total);
+            return;
         }
+#endif
+        uint8_t* __restrict r = buf;
+        for (int i = 0; i < total; ++i, r += 4) unpremulSwapPixel(r, reverse_byte_order);
         return;
     }
 
     for (int row = 0; row < h; ++row) {
         uint8_t* __restrict r = buf + static_cast<std::ptrdiff_t>(row) * stride;
-        for (int col = 0; col < w; ++col, r += 4) {
-            uint8_t a = r[3];
-            if (a == 255) {
-                if (reverse_byte_order) {
-                    uint8_t b = r[0];
-                    r[0] = r[2];
-                    r[2] = b;
-                }
-                continue;
-            }
-            if (a == 0) {
-                r[0] = 0;
-                r[1] = 0;
-                r[2] = 0;
-                continue;
-            }
-            const auto& row_tbl = kUnpremulTable[a];
-            uint8_t b = row_tbl[r[0]];
-            uint8_t g = row_tbl[r[1]];
-            uint8_t red = row_tbl[r[2]];
-            if (reverse_byte_order) {
-                r[0] = red;
-                r[1] = g;
-                r[2] = b;
-            } else {
-                r[0] = b;
-                r[1] = g;
-                r[2] = red;
-            }
-        }
+        for (int col = 0; col < w; ++col, r += 4) unpremulSwapPixel(r, reverse_byte_order);
     }
 }
 #endif
@@ -256,15 +298,11 @@ static bool isCancelRequested(const void* cancel_flag) {
 static std::mutex g_progLock;
 static std::unordered_map<void*, ProgressiveState> g_progMap;
 
-// Render a page (plus optional form widgets) into a caller-provided buffer.
-// Shared by the zero-allocation FFM render paths so the Skia premultiply/
-// matrix handling lives in one place.
-//
-// The caller contract requires capacity for all padded rows (stride * height).
-// Java validates the full contract (null, read-only, scope, budget, capacity)
-// before the downcall; the checks below independently reject malformed
-// dimensions with overflow-safe 64-bit math so raw bridge callers cannot
-// smuggle a wrapped stride past the native write paths.
+// Render a page (plus optional form widgets) into a caller-provided buffer,
+// shared by the zero-allocation FFM render paths. The caller contract requires
+// capacity for all padded rows (stride * height); the checks below re-validate the
+// dimensions with overflow-safe 64-bit math so raw bridge callers cannot smuggle
+// a wrapped stride past the native write paths.
 static bool renderIntoArgsValid(uint64_t target_capacity, int32_t width, int32_t height,
                                 int32_t stride) {
     if (width <= 0 || height <= 0 || stride <= 0) return false;
@@ -332,6 +370,16 @@ int32_t renderIntoBuffer(FPDF_PAGE page, FPDF_FORMHANDLE form, uint8_t* target,
 }
 
 }  // namespace
+
+int32_t jpdfium_render_into_buffer(FPDF_PAGE page, uint8_t* target, uint64_t target_capacity,
+                                   int32_t width, int32_t height, int32_t stride, int32_t flags) {
+    try {
+        return renderIntoBuffer(page, nullptr, target, target_capacity, width, height, stride,
+                                flags);
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
+    }
+}
 
 int32_t jpdfium_render_page_flags(int64_t page, int32_t dpi, int32_t flags, uint8_t** rgba,
                                   int32_t* width, int32_t* height) JPDFIUM_NOEXCEPT {
@@ -541,6 +589,7 @@ int32_t jpdfium_render_page_progressive_continue(void* fpdf_page,
             g_progMap.erase(fpdf_page);
         } catch (...) {
             // Map erase cannot usefully fail here; teardown continues below.
+            (void)0;
         }
         FPDF_PAGE page = static_cast<FPDF_PAGE>(fpdf_page);
         FPDF_RenderPage_Close(page);
@@ -560,6 +609,7 @@ int32_t jpdfium_render_page_progressive_continue(void* fpdf_page,
         g_progMap.erase(fpdf_page);
     } catch (...) {
         // Best-effort erase on the terminal path; Close/Destroy still run.
+        (void)0;
     }
     FPDF_RenderPage_Close(page);
     FPDFBitmap_Destroy(state.bmp);
@@ -618,6 +668,7 @@ void jpdfium_render_forget_progressive(void* fpdf_page) noexcept {
         }
     } catch (...) {
         // Best-effort cleanup in a noexcept closer.
+        (void)0;
     }
 }
 
@@ -773,7 +824,10 @@ int32_t prepare_replacement_page(DocWrapper* dw, int32_t insertAt, UniquePage& p
         FPDFPageObj_SetMatrix(imgObj.get(), &matrix);
 
         FPDFPage_InsertObject(newPage.get(), imgObj.get());
-        imgObj.release();  // the page owns it now
+        // The page owns the object from here, so the unique_ptr must relinquish it; the raw
+        // pointer it returns is deliberately discarded.
+        // NOLINTNEXTLINE(bugprone-unused-return-value)
+        (void)imgObj.release();
         if (!FPDFPage_GenerateContent(newPage.get())) return JPDFIUM_ERR_NATIVE;
         // A generated replacement page must carry the image object; PDFium drops
         // an image it cannot stream, so never import a content-less page.

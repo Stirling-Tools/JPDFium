@@ -144,7 +144,8 @@ public final class PageOps {
      * @param dpi render quality
      */
     public static void convertAllToImages(PdfDocument doc, int dpi) {
-        for (int i = 0; i < doc.pageCount(); i++) {
+        int count = doc.pageCount();
+        for (int i = 0; i < count; i++) {
             doc.convertPageToImage(i, dpi);
         }
     }
@@ -172,8 +173,10 @@ public final class PageOps {
      * @return list of rendered images
      */
     public static List<BufferedImage> renderAll(PdfDocument doc, int dpi) {
-        List<BufferedImage> images = new ArrayList<>();
-        for (int i = 0; i < doc.pageCount(); i++) {
+        int count = doc.pageCount();
+        if (count == 0) return List.of();
+        List<BufferedImage> images = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
             images.add(renderPage(doc, i, dpi));
         }
         return images;

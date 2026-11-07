@@ -94,6 +94,66 @@ class FastKeywordIndexTest {
     }
 
     @Test
+    void phraseMatchesAcrossCompatibilitySpaces() {
+        FastKeywordIndex index = FastKeywordIndex.create(List.of("john doe"), false);
+        // Every one of these is Unicode White_Space and matches \s+ natively.
+        String[] pageTexts = {
+            "john\u00A0doe",     // NBSP (NFKC -> space)
+            "john\u3000doe",     // ideographic space (NFKC -> space)
+            "john\u000Bdoe",     // vertical tab (no decomposition)
+            "john\u0085doe",     // NEL (no decomposition)
+            "john\u2028doe",     // line separator (no decomposition)
+            "john \u2003doe",    // space + em space (NFKC -> run of two spaces)
+            "john\u00A0\u2003\u000Bdoe"
+        };
+        for (String page : pageTexts) {
+            Set<String> fromString = new HashSet<>();
+            index.findMatches(page, true, fromString);
+            assertTrue(fromString.contains("john doe"),
+                    "CharSequence path missed " + codePoints(page));
+
+            Set<String> fromChars = new HashSet<>();
+            char[] chars = page.toCharArray();
+            index.findMatches(chars, chars.length, true, fromChars);
+            assertTrue(fromChars.contains("john doe"),
+                    "char[] prefilter path skipped page " + codePoints(page));
+        }
+    }
+
+    @Test
+    void keywordJoinedByCompatibilitySpaceMatchesPlainPageText() {
+        FastKeywordIndex index = FastKeywordIndex.create(List.of("john\u00A0doe", "jane\u3000roe"), false);
+        Set<String> matches = new HashSet<>();
+        index.findMatches("john doe and jane roe met", true, matches);
+
+        assertTrue(matches.contains("john\u00A0doe"));
+        assertTrue(matches.contains("jane\u3000roe"));
+    }
+
+    @Test
+    void decomposedPageTextStillMatchesPartialKeyword() {
+        FastKeywordIndex index = FastKeywordIndex.create(List.of("cafe"), false);
+        // Native PCRE2 matches the literal "cafe" inside "cafe\u0301"; NFKC of
+        // the page composes it to "café", so the prefilter must keep scanning
+        // the raw text as well as the NFKC form.
+        Set<String> fromString = new HashSet<>();
+        index.findMatches("a cafe\u0301 visit", true, fromString);
+        assertTrue(fromString.contains("cafe"), "CharSequence path lost the raw-text match");
+
+        char[] chars = "a cafe\u0301\nvisit".toCharArray();
+        Set<String> fromChars = new HashSet<>();
+        index.findMatches(chars, chars.length, true, fromChars);
+        assertTrue(fromChars.contains("cafe"),
+                "char[] prefilter path lost the raw-text match on " + codePoints(new String(chars)));
+    }
+
+    private static String codePoints(String text) {
+        StringBuilder sb = new StringBuilder("[");
+        text.codePoints().forEach(cp -> sb.append(String.format("U+%04X ", cp)));
+        return sb.append(']').toString();
+    }
+
+    @Test
     void testLargeDictionarySpeed() {
         List<String> dict = new ArrayList<>(10_000);
         for (int i = 0; i < 10_000; i++) {

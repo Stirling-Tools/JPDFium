@@ -657,18 +657,12 @@ public final class JpdfiumCli {
             throw new UsageError("--pages-per must be >= 1");
         }
         Files.createDirectories(outDir);
-        int parts;
-        try (PdfDocument doc = PdfDocument.open(in)) {
-            List<int[]> ranges = PdfSplit.SplitStrategy.everyNPages(per).computeRanges(doc);
-            parts = ranges.size();
-            for (int i = 0; i < ranges.size(); i++) {
-                int[] range = ranges.get(i);
-                try (PdfDocument part = PdfSplit.extractPageRange(doc, range[0], range[1])) {
-                    Path partPath = outDir.resolve(String.format("part-%03d.pdf", i + 1));
-                    part.save(partPath);
-                }
-            }
-        }
+        // Split outputs are derived artifacts: splitToFilesFast writes the
+        // one-parse QPDF batch straight to the final part paths, skipping
+        // staging, atomic rename, reopen verification and fsync. Bookmarked or
+        // symlinked destinations still fall back to the staged non-durable path.
+        int parts = PdfSplit.splitToFilesFast(
+                in, PdfSplit.SplitStrategy.everyNPages(per), outDir).size();
         if (!a.has("quiet")) {
             System.out.println("split " + in + " into " + parts + " parts in " + outDir);
         }

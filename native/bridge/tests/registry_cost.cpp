@@ -80,7 +80,7 @@ void check(bool ok, const char* msg) {
 
 }  // namespace
 
-int main() {
+int main() try {
     std::printf("=== handle registry validation cost ===\n");
     std::printf("live handles=%d, %d probes/iteration, %d iterations\n\n", kLiveHandles,
                 kLiveHandles + kStaleProbes, kIters);
@@ -247,4 +247,7 @@ int main() {
     std::printf("sink=%zu\n", sink);
     std::printf("=== failures: %d ===\n", g_failures);
     return g_failures == 0 ? 0 : 1;
+} catch (...) {
+    std::fprintf(stderr, "registry_cost: unhandled exception\n");
+    return 1;
 }

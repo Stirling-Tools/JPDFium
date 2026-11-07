@@ -273,7 +273,7 @@ class FormXObjectRedactTest {
         }
     }
 
-    // -------- Pixel verification: only the redacted regions may change ----
+    // Pixel verification: only the redacted regions may change
 
     private static final int DPI = 150;
     private static final int PIXEL_THRESHOLD = 4;

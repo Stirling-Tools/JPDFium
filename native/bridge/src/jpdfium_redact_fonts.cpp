@@ -304,7 +304,7 @@ static std::vector<uint8_t> loadSystemFontFallback(const std::string& fontName) 
         std::ifstream file(matchedPath, std::ios::binary | std::ios::ate);
         if (file) {
             auto size = file.tellg();
-            if (size > 0 && size < 100 * 1024 * 1024) {
+            if (size > 0 && size < static_cast<std::streamoff>(100) * 1024 * 1024) {
                 std::vector<uint8_t> data(static_cast<size_t>(size));
                 file.seekg(0, std::ios::beg);
                 if (file.read(reinterpret_cast<char*>(data.data()), size)) {

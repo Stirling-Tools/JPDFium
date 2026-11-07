@@ -69,7 +69,10 @@ IO_BOUND_BENCHMARKS = {
 
 # `ubuntu-latest` is a pool of hardware classes; a run that shifted together
 # beyond this band is a different class, so report it but skip the verdict.
-RUNNER_CLASS_TOLERANCE = 0.20
+# Note: RUNNER_CLASS_TOLERANCE must not exceed MAX_REGRESSION_PCT / 100.0 (0.15),
+# otherwise a uniform hardware shift in (15%, 20%] trips individual benchmarks
+# without triggering the common-mode shift detection (structural false failure).
+RUNNER_CLASS_TOLERANCE = 0.15
 
 
 def load(path: str) -> dict:
