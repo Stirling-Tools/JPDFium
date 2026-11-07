@@ -82,13 +82,13 @@ public final class JpdfiumLib {
     // Scratch outputs for leaf downcalls, one set per thread: Java holds no PDFium lock, so a
     // shared slot would race. Consume a value before any nested JpdfiumLib call reuses its slot.
     private static final class Scratch {
-        private final Arena arena = Arena.ofAuto();
-        final MemorySegment int1 = arena.allocate(JAVA_INT);
-        final MemorySegment int2 = arena.allocate(JAVA_INT);
-        final MemorySegment long1 = arena.allocate(JAVA_LONG);
-        final MemorySegment float1 = arena.allocate(JAVA_FLOAT);
-        final MemorySegment float2 = arena.allocate(JAVA_FLOAT);
-        final MemorySegment addr = arena.allocate(ADDRESS);
+        private final MemorySegment block = Arena.ofAuto().allocate(32, 8);
+        final MemorySegment int1 = block.asSlice(0, JAVA_INT);
+        final MemorySegment int2 = block.asSlice(4, JAVA_INT);
+        final MemorySegment float1 = block.asSlice(8, JAVA_FLOAT);
+        final MemorySegment float2 = block.asSlice(12, JAVA_FLOAT);
+        final MemorySegment long1 = block.asSlice(16, JAVA_LONG);
+        final MemorySegment addr = block.asSlice(24, ADDRESS);
     }
 
     private static final ThreadLocal<Scratch> SCRATCH = ThreadLocal.withInitial(Scratch::new);
