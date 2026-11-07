@@ -1,6 +1,6 @@
 # Installation
 
-JPDFium publishes to https://maven.stirlingpdf.com under the `com.stirling` group, and releases are also published to Maven Central. The current release is **1.3.0**.
+JPDFium publishes to https://maven.stirlingpdf.com under the `com.stirling` group, and releases are also published to Maven Central. The current release is **1.3.1**.
 
 ## Requirements
 
@@ -34,7 +34,7 @@ repositories {
 }
 
 dependencies {
-    implementation(platform("com.stirling:jpdfium-bom:1.3.0"))
+    implementation(platform("com.stirling:jpdfium-bom:1.3.1"))
     implementation("com.stirling:jpdfium")
     runtimeOnly("com.stirling:jpdfium-natives-windows-x64")
 }
@@ -57,7 +57,7 @@ Windows x64.
         <dependency>
             <groupId>com.stirling</groupId>
             <artifactId>jpdfium-bom</artifactId>
-            <version>1.3.0</version>
+            <version>1.3.1</version>
             <type>pom</type>
             <scope>import</scope>
         </dependency>
