@@ -97,7 +97,7 @@ jobs:
           - { platform: linux-musl-x64,   runner: ubuntu-latest,    os: linux, libc: musl }
           - { platform: linux-musl-arm64, runner: ubuntu-24.04-arm, os: linux, libc: musl }
           - { platform: darwin-x64,    runner: macos-15-intel,    os: darwin }
-          - { platform: darwin-arm64,  runner: macos-14,          os: darwin }
+          - { platform: darwin-arm64,  runner: macos-15,          os: darwin }
           - { platform: windows-x64,   runner: windows-2022,      os: windows, triplet: x64-windows }
           - { platform: windows-arm64, runner: windows-11-arm,    os: windows, triplet: arm64-windows }
           # FreeBSD has no GitHub-hosted runner; build natively inside a VM.

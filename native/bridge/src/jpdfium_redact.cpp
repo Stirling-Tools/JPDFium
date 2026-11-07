@@ -515,7 +515,7 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
         std::vector<char> redactSet(count, 0);
         for (auto& m : matches)
             for (int ci : m.charIndices) redactSet[ci] = 1;
-        std::u32string expectedFp = survivingFingerprint(wtext, idxMap, redactSet);
+        std::u32string expectedFp = survivingFingerprint(tp.get(), count, wtext, idxMap, redactSet);
 
         // Best case scenario: Wrap EmbedPDF core engine (EPDFPage_ApplyRedactions)
         // High-fidelity native in-place redaction via EmbedPDF core engine.
@@ -625,7 +625,7 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
 #ifdef JPDFIUM_HAS_PCRE2
         collectPcre2Matches(audit.get(), wtext2, idxMap2, pc, 0.0f, remaining);
 #endif
-        std::u32string actualFp = survivingFingerprint(wtext2, idxMap2, {});
+        std::u32string actualFp = survivingFingerprint(audit.get(), n2, wtext2, idxMap2, {});
         if (!remaining.empty() || actualFp != expectedFp) {
             // Content was removed but the audit still finds survivors: the page is
             // half-redacted, so no save may serialize it until a commit resolves it.
@@ -697,6 +697,69 @@ int32_t jpdfium_redact_words(int64_t page, const char** words, int32_t wordCount
 }
 
 // Extended version that reports match count back to the caller.
+namespace {
+
+FS_RECTF rectOf(const TextMatch& m) {
+    FS_RECTF rect;
+    rect.left = m.bboxL;
+    rect.bottom = m.bboxB;
+    rect.right = m.bboxR;
+    rect.top = m.bboxT;
+    return rect;
+}
+
+constexpr size_t kRedactApplyChunk = 16;
+
+enum class BatchApply { Applied, NothingApplied, Partial };
+
+BatchApply applyMatchesTogether(FPDF_PAGE page, const std::vector<TextMatch>& matches,
+                                std::vector<FS_RECTF>& appliedRects) {
+    if (matches.empty()) return BatchApply::Applied;
+    const int before = FPDFPage_GetAnnotCount(page);
+    std::vector<FPDF_ANNOTATION> annots;
+    annots.reserve(matches.size());
+    bool created = true;
+    for (const auto& m : matches) {
+        FPDF_ANNOTATION annot = FPDFPage_CreateAnnot(page, FPDF_ANNOT_REDACT);
+        if (!annot) {
+            created = false;
+            break;
+        }
+        FS_RECTF rect = rectOf(m);
+        FPDFAnnot_SetRect(annot, &rect);
+        if (m.hasQuad) FPDFAnnot_AppendAttachmentPoints(annot, &m.quad);
+        annots.push_back(annot);
+    }
+    uint32_t removed = 0;
+    const bool ok = created && EPDFPage_ApplyRedactions(page, annots.data(),
+                                                        static_cast<int>(annots.size()), &removed);
+    for (FPDF_ANNOTATION annot : annots) FPDFPage_CloseAnnot(annot);
+    if (ok) {
+        for (const auto& m : matches) appliedRects.push_back(rectOf(m));
+        return BatchApply::Applied;
+    }
+    const int after = FPDFPage_GetAnnotCount(page);
+    if (after != before + static_cast<int>(annots.size())) return BatchApply::Partial;
+    for (int i = after - 1; i >= before; --i) FPDFPage_RemoveAnnot(page, i);
+    return BatchApply::NothingApplied;
+}
+
+BatchApply applyMatchesInChunks(FPDF_PAGE page, const std::vector<TextMatch>& matches,
+                                std::vector<FS_RECTF>& appliedRects) {
+    std::vector<TextMatch> part;
+    for (size_t start = 0; start < matches.size(); start += kRedactApplyChunk) {
+        const size_t end = std::min(matches.size(), start + kRedactApplyChunk);
+        part.assign(matches.begin() + start, matches.begin() + end);
+        BatchApply r = applyMatchesTogether(page, part, appliedRects);
+        if (r == BatchApply::Applied) continue;
+        if (r == BatchApply::NothingApplied && start == 0) return r;
+        return BatchApply::Partial;
+    }
+    return BatchApply::Applied;
+}
+
+}  // namespace
+
 int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCount, uint32_t argb,
                                 float padding, int32_t wholeWord, int32_t useRegex,
                                 int32_t remove_content, int32_t caseSensitive,
@@ -781,7 +844,7 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
         // survive untouched, so fission damage there is still detected.
         std::vector<char>& touched = t_redactScratch.auditTouched;
         markTouchedByRects(tp.get(), count, auditRects, touched);
-        std::u32string expectedFp = survivingFingerprint(wtext, idxMap, touched);
+        std::u32string expectedFp = survivingFingerprint(tp.get(), count, wtext, idxMap, touched);
 
         std::vector<TextMatch>& sortedMatches = t_redactScratch.sortedMatches;
         sortedMatches = matches;
@@ -795,53 +858,34 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
 
         std::vector<FS_RECTF>& appliedRects = t_redactScratch.appliedRects;
         appliedRects.reserve(sortedMatches.size());
-        // Create every mark first and apply them in ONE EPDFPage_ApplyRedactions
-        // call per batch. The engine's documented contract is that marks passed
-        // together are applied together: it walks the page objects once and
-        // reads/writes each image once. Applying one mark per call instead
-        // re-walks every page object for every match, so a page with many hits
-        // (a common word on a dense page) becomes O(matches x objects).
-        //
-        // The engine also intersects every text object against every passed
-        // region, so an unbounded batch is itself O(objects x matches). 16 marks
-        // per call measured as the balance point on dense text pages; 1 mark per
-        // call (the historical behaviour) is many times slower.
-        constexpr size_t batch = 16;
-        std::vector<FPDF_ANNOTATION> annots;
-        std::vector<FS_RECTF> pendingRects;
-        annots.reserve(std::min(batch, sortedMatches.size()));
-        pendingRects.reserve(std::min(batch, sortedMatches.size()));
         bool epdfOk = true;
-        for (size_t start = 0; start < sortedMatches.size() && epdfOk; start += batch) {
-            const size_t end = std::min(start + batch, sortedMatches.size());
-            annots.clear();
-            pendingRects.clear();
-            for (size_t i = start; i < end; ++i) {
-                const TextMatch& m = sortedMatches[i];
-                FPDF_ANNOTATION annot = FPDFPage_CreateAnnot(pw->page, FPDF_ANNOT_REDACT);
-                if (!annot) {
-                    epdfOk = false;
-                    break;
+        switch (applyMatchesInChunks(pw->page, sortedMatches, appliedRects)) {
+            case BatchApply::Applied:
+                break;
+            case BatchApply::Partial:
+                markRedactionIncomplete(pw, sortedMatches);
+                return JPDFIUM_ERR_REDACT_INCOMPLETE;
+            case BatchApply::NothingApplied:
+                for (const auto& m : sortedMatches) {
+                    FPDF_ANNOTATION annot = FPDFPage_CreateAnnot(pw->page, FPDF_ANNOT_REDACT);
+                    if (!annot) {
+                        epdfOk = false;
+                        break;
+                    }
+                    FS_RECTF rect = rectOf(m);
+                    FPDFAnnot_SetRect(annot, &rect);
+                    if (m.hasQuad) FPDFAnnot_AppendAttachmentPoints(annot, &m.quad);
+
+                    uint32_t rem = 0;
+                    FPDF_BOOL ok = EPDFPage_ApplyRedactions(pw->page, &annot, 1, &rem);
+                    FPDFPage_CloseAnnot(annot);
+                    if (!ok) {
+                        epdfOk = false;
+                        break;
+                    }
+                    appliedRects.push_back(rect);
                 }
-                FS_RECTF rect;
-                rect.left = m.bboxL;
-                rect.bottom = m.bboxB;
-                rect.right = m.bboxR;
-                rect.top = m.bboxT;
-                FPDFAnnot_SetRect(annot, &rect);
-                if (m.hasQuad) FPDFAnnot_AppendAttachmentPoints(annot, &m.quad);
-                annots.push_back(annot);
-                pendingRects.push_back(rect);
-            }
-            if (epdfOk && !annots.empty()) {
-                uint32_t rem = 0;
-                epdfOk = EPDFPage_ApplyRedactions(pw->page, annots.data(),
-                                                  static_cast<int>(annots.size()), &rem) != 0;
-            }
-            for (FPDF_ANNOTATION annot : annots) FPDFPage_CloseAnnot(annot);
-            if (epdfOk) {
-                appliedRects.insert(appliedRects.end(), pendingRects.begin(), pendingRects.end());
-            }
+                break;
         }
         // Once one box is applied, tp indexes objects that redaction freed, so the
         // fission fallback cannot finish the page. The post-redaction check cannot
@@ -893,7 +937,7 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
         // which catches silent fission damage to surviving fragments.
         std::vector<char>& touched2 = t_redactScratch.auditTouched2;
         markTouchedByRects(audit.get(), n2, auditRects, touched2);
-        std::u32string actualFp = survivingFingerprint(wtext2, idxMap2, touched2);
+        std::u32string actualFp = survivingFingerprint(audit.get(), n2, wtext2, idxMap2, touched2);
         if (actualFp != expectedFp) {
             // Survivors after a mutation: fail every save until a commit resolves
             // this page (same contract as jpdfium_redact_pattern).
