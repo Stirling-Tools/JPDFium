@@ -680,45 +680,42 @@ constexpr size_t kRedactApplyChunk = 16;
 
 enum class BatchApply { Applied, NothingApplied, Partial };
 
-BatchApply applyMatchesTogether(FPDF_PAGE page, const std::vector<TextMatch>& matches,
-                                std::vector<FS_RECTF>& appliedRects) {
-    if (matches.empty()) return BatchApply::Applied;
+BatchApply applyMatchRange(FPDF_PAGE page, const std::vector<TextMatch>& matches, size_t start,
+                           size_t end, std::vector<FPDF_ANNOTATION>& annots,
+                           std::vector<FS_RECTF>& appliedRects) {
+    annots.clear();
     const int before = FPDFPage_GetAnnotCount(page);
-    std::vector<FPDF_ANNOTATION> annots;
-    annots.reserve(matches.size());
-    bool created = true;
-    for (const auto& m : matches) {
+    for (size_t i = start; i < end; ++i) {
         FPDF_ANNOTATION annot = FPDFPage_CreateAnnot(page, FPDF_ANNOT_REDACT);
         if (!annot) {
-            created = false;
-            break;
+            for (FPDF_ANNOTATION created : annots) FPDFPage_CloseAnnot(created);
+            for (int k = FPDFPage_GetAnnotCount(page) - 1; k >= before; --k) {
+                FPDFPage_RemoveAnnot(page, k);
+            }
+            return BatchApply::NothingApplied;
         }
-        FS_RECTF rect = rectOf(m);
+        FS_RECTF rect = rectOf(matches[i]);
         FPDFAnnot_SetRect(annot, &rect);
-        if (m.hasQuad) FPDFAnnot_AppendAttachmentPoints(annot, &m.quad);
+        if (matches[i].hasQuad) FPDFAnnot_AppendAttachmentPoints(annot, &matches[i].quad);
         annots.push_back(annot);
     }
     uint32_t removed = 0;
-    const bool ok = created && EPDFPage_ApplyRedactions(page, annots.data(),
-                                                        static_cast<int>(annots.size()), &removed);
+    const bool ok =
+        EPDFPage_ApplyRedactions(page, annots.data(), static_cast<int>(annots.size()), &removed);
     for (FPDF_ANNOTATION annot : annots) FPDFPage_CloseAnnot(annot);
-    if (ok) {
-        for (const auto& m : matches) appliedRects.push_back(rectOf(m));
-        return BatchApply::Applied;
-    }
-    const int after = FPDFPage_GetAnnotCount(page);
-    if (after != before + static_cast<int>(annots.size())) return BatchApply::Partial;
-    for (int i = after - 1; i >= before; --i) FPDFPage_RemoveAnnot(page, i);
-    return BatchApply::NothingApplied;
+    if (!ok) return BatchApply::Partial;
+    for (size_t i = start; i < end; ++i) appliedRects.push_back(rectOf(matches[i]));
+    return BatchApply::Applied;
 }
 
 BatchApply applyMatchesInChunks(FPDF_PAGE page, const std::vector<TextMatch>& matches,
                                 std::vector<FS_RECTF>& appliedRects) {
-    std::vector<TextMatch> part;
+    std::vector<FPDF_ANNOTATION> annots;
+    annots.reserve(kRedactApplyChunk);
+    appliedRects.reserve(appliedRects.size() + matches.size());
     for (size_t start = 0; start < matches.size(); start += kRedactApplyChunk) {
         const size_t end = std::min(matches.size(), start + kRedactApplyChunk);
-        part.assign(matches.begin() + start, matches.begin() + end);
-        BatchApply r = applyMatchesTogether(page, part, appliedRects);
+        BatchApply r = applyMatchRange(page, matches, start, end, annots, appliedRects);
         if (r == BatchApply::Applied) continue;
         if (r == BatchApply::NothingApplied && start == 0) return r;
         return BatchApply::Partial;
@@ -840,25 +837,7 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
                 markRedactionIncomplete(pw, sortedMatches);
                 return JPDFIUM_ERR_REDACT_INCOMPLETE;
             case BatchApply::NothingApplied:
-                for (const auto& m : sortedMatches) {
-                    FPDF_ANNOTATION annot = FPDFPage_CreateAnnot(pw->page, FPDF_ANNOT_REDACT);
-                    if (!annot) {
-                        epdfOk = false;
-                        break;
-                    }
-                    FS_RECTF rect = rectOf(m);
-                    FPDFAnnot_SetRect(annot, &rect);
-                    if (m.hasQuad) FPDFAnnot_AppendAttachmentPoints(annot, &m.quad);
-
-                    uint32_t rem = 0;
-                    FPDF_BOOL ok = EPDFPage_ApplyRedactions(pw->page, &annot, 1, &rem);
-                    FPDFPage_CloseAnnot(annot);
-                    if (!ok) {
-                        epdfOk = false;
-                        break;
-                    }
-                    appliedRects.push_back(rect);
-                }
+                epdfOk = false;
                 break;
         }
         // Once one box is applied, tp indexes objects that redaction freed, so the
@@ -1251,6 +1230,11 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
             const int n = static_cast<int>(std::min(kRedactApplyChunk, marks.size() - start));
             uint32_t rem = 0;
             if (!EPDFPage_ApplyRedactions(pw->page, marks.data() + start, n, &rem)) {
+                if (start > 0) {
+                    for (FPDF_ANNOTATION mark : marks) FPDFPage_CloseAnnot(mark);
+                    markRedactionIncomplete(pw, redactAreas);
+                    return JPDFIUM_ERR_REDACT_INCOMPLETE;
+                }
                 epdfOk = false;
                 break;
             }
