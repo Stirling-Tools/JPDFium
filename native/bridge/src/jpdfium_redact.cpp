@@ -665,6 +665,69 @@ int32_t jpdfium_redact_words(int64_t page, const char** words, int32_t wordCount
 }
 
 // Extended version that reports match count back to the caller.
+namespace {
+
+FS_RECTF rectOf(const TextMatch& m) {
+    FS_RECTF rect;
+    rect.left = m.bboxL;
+    rect.bottom = m.bboxB;
+    rect.right = m.bboxR;
+    rect.top = m.bboxT;
+    return rect;
+}
+
+constexpr size_t kRedactApplyChunk = 16;
+
+enum class BatchApply { Applied, NothingApplied, Partial };
+
+BatchApply applyMatchesTogether(FPDF_PAGE page, const std::vector<TextMatch>& matches,
+                                std::vector<FS_RECTF>& appliedRects) {
+    if (matches.empty()) return BatchApply::Applied;
+    const int before = FPDFPage_GetAnnotCount(page);
+    std::vector<FPDF_ANNOTATION> annots;
+    annots.reserve(matches.size());
+    bool created = true;
+    for (const auto& m : matches) {
+        FPDF_ANNOTATION annot = FPDFPage_CreateAnnot(page, FPDF_ANNOT_REDACT);
+        if (!annot) {
+            created = false;
+            break;
+        }
+        FS_RECTF rect = rectOf(m);
+        FPDFAnnot_SetRect(annot, &rect);
+        if (m.hasQuad) FPDFAnnot_AppendAttachmentPoints(annot, &m.quad);
+        annots.push_back(annot);
+    }
+    uint32_t removed = 0;
+    const bool ok = created && EPDFPage_ApplyRedactions(page, annots.data(),
+                                                        static_cast<int>(annots.size()), &removed);
+    for (FPDF_ANNOTATION annot : annots) FPDFPage_CloseAnnot(annot);
+    if (ok) {
+        for (const auto& m : matches) appliedRects.push_back(rectOf(m));
+        return BatchApply::Applied;
+    }
+    const int after = FPDFPage_GetAnnotCount(page);
+    if (after != before + static_cast<int>(annots.size())) return BatchApply::Partial;
+    for (int i = after - 1; i >= before; --i) FPDFPage_RemoveAnnot(page, i);
+    return BatchApply::NothingApplied;
+}
+
+BatchApply applyMatchesInChunks(FPDF_PAGE page, const std::vector<TextMatch>& matches,
+                                std::vector<FS_RECTF>& appliedRects) {
+    std::vector<TextMatch> part;
+    for (size_t start = 0; start < matches.size(); start += kRedactApplyChunk) {
+        const size_t end = std::min(matches.size(), start + kRedactApplyChunk);
+        part.assign(matches.begin() + start, matches.begin() + end);
+        BatchApply r = applyMatchesTogether(page, part, appliedRects);
+        if (r == BatchApply::Applied) continue;
+        if (r == BatchApply::NothingApplied && start == 0) return r;
+        return BatchApply::Partial;
+    }
+    return BatchApply::Applied;
+}
+
+}  // namespace
+
 int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCount, uint32_t argb,
                                 float padding, int32_t wholeWord, int32_t useRegex,
                                 int32_t remove_content, int32_t caseSensitive,
@@ -769,28 +832,34 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
         std::vector<FS_RECTF>& appliedRects = t_redactScratch.appliedRects;
         appliedRects.reserve(sortedMatches.size());
         bool epdfOk = true;
-        for (const auto& m : sortedMatches) {
-            FPDF_ANNOTATION annot = FPDFPage_CreateAnnot(pw->page, FPDF_ANNOT_REDACT);
-            if (!annot) {
-                epdfOk = false;
+        switch (applyMatchesInChunks(pw->page, sortedMatches, appliedRects)) {
+            case BatchApply::Applied:
                 break;
-            }
-            FS_RECTF rect;
-            rect.left = m.bboxL;
-            rect.bottom = m.bboxB;
-            rect.right = m.bboxR;
-            rect.top = m.bboxT;
-            FPDFAnnot_SetRect(annot, &rect);
-            if (m.hasQuad) FPDFAnnot_AppendAttachmentPoints(annot, &m.quad);
+            case BatchApply::Partial:
+                FPDFText_ClosePage(tp);
+                markRedactionIncomplete(pw, sortedMatches);
+                return JPDFIUM_ERR_REDACT_INCOMPLETE;
+            case BatchApply::NothingApplied:
+                for (const auto& m : sortedMatches) {
+                    FPDF_ANNOTATION annot = FPDFPage_CreateAnnot(pw->page, FPDF_ANNOT_REDACT);
+                    if (!annot) {
+                        epdfOk = false;
+                        break;
+                    }
+                    FS_RECTF rect = rectOf(m);
+                    FPDFAnnot_SetRect(annot, &rect);
+                    if (m.hasQuad) FPDFAnnot_AppendAttachmentPoints(annot, &m.quad);
 
-            uint32_t rem = 0;
-            FPDF_BOOL ok = EPDFPage_ApplyRedactions(pw->page, &annot, 1, &rem);
-            FPDFPage_CloseAnnot(annot);
-            if (!ok) {
-                epdfOk = false;
+                    uint32_t rem = 0;
+                    FPDF_BOOL ok = EPDFPage_ApplyRedactions(pw->page, &annot, 1, &rem);
+                    FPDFPage_CloseAnnot(annot);
+                    if (!ok) {
+                        epdfOk = false;
+                        break;
+                    }
+                    appliedRects.push_back(rect);
+                }
                 break;
-            }
-            appliedRects.push_back(rect);
         }
         // Once one box is applied, tp indexes objects that redaction freed, so the
         // fission fallback cannot finish the page. The post-redaction check cannot
@@ -1170,19 +1239,23 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
         }
 
         bool epdfOk = true;
+        std::vector<FPDF_ANNOTATION> marks;
+        marks.reserve(redactAnnots.size());
         for (auto& item : redactAnnots) {
             // Drop Acrobat's pre-baked /RO overlay: EmbedPDF ignores its /Matrix and
             // repaints it near the origin, while we draw our own cover below.
             EPDFAnnot_RemoveKey(item.annot, "RO");
-
+            marks.push_back(item.annot);
+        }
+        for (size_t start = 0; start < marks.size(); start += kRedactApplyChunk) {
+            const int n = static_cast<int>(std::min(kRedactApplyChunk, marks.size() - start));
             uint32_t rem = 0;
-            FPDF_BOOL ok = EPDFPage_ApplyRedactions(pw->page, &item.annot, 1, &rem);
-            FPDFPage_CloseAnnot(item.annot);
-            if (!ok) {
+            if (!EPDFPage_ApplyRedactions(pw->page, marks.data() + start, n, &rem)) {
                 epdfOk = false;
                 break;
             }
         }
+        for (FPDF_ANNOTATION mark : marks) FPDFPage_CloseAnnot(mark);
         if (epdfOk) {
             for (const RedactArea& area : redactAreas) paintCover(pw->page, area, argb);
             FPDFPage_GenerateContent(pw->page);
