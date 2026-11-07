@@ -62,6 +62,11 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Fixed
 
+- Word and regex redaction finds words PDFium reports hyphenated across a line
+  break (`Trace-` / `Monkey`), and removes the hyphen with them; it previously
+  missed them, and with eight or more words the keyword prefilter skipped such
+  pages too. Redacting the word after a line-end hyphen no longer fails as
+  incomplete when that hyphen stops reading as a word break.
 - Word and pattern redaction now removes text drawn with glyphs the embedded
   font has no outline for, such as text using a truncated font subset. These
   pages previously stopped with `RedactIncompleteException`.

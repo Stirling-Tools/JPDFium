@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include <fpdf_text.h>
 #include <fpdfview.h>
 
 #include <cstdint>
@@ -38,6 +39,9 @@ struct ErasedGrayImage;
 // nesting cannot appear in the page-object model either; mirror that limit to
 // stay safe against self-referential form streams.
 static constexpr int kMaxFormNesting = 40;
+inline bool isLineEndHyphen(FPDF_TEXTPAGE textPage, int index, unsigned int unicode) {
+    return unicode == 0xFFFE || FPDFText_IsHyphen(textPage, index) == 1;
+}
 
 static constexpr FS_MATRIX kIdentityMatrix{1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f};
 
@@ -147,7 +151,8 @@ float overlapRatio(float al, float ab, float ar, float at, float bl, float bb, f
 void buildNormalizedText(FPDF_TEXTPAGE textPage, int count, std::vector<int>& normIdxMap,
                          std::u32string& norm);
 std::u32string buildNormalizedText(FPDF_TEXTPAGE textPage, int count, std::vector<int>& normIdxMap);
-std::u32string survivingFingerprint(const std::u32string& normalizedText,
+std::u32string survivingFingerprint(FPDF_TEXTPAGE textPage, int count,
+                                    const std::u32string& normalizedText,
                                     const std::vector<int>& normIdxMap,
                                     const std::vector<char>& redactSet);
 bool eraseImagePixels(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_PAGEOBJECT imageObj,

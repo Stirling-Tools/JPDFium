@@ -507,7 +507,7 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
         std::vector<char> redactSet(count, 0);
         for (auto& m : matches)
             for (int ci : m.charIndices) redactSet[ci] = 1;
-        std::u32string expectedFp = survivingFingerprint(wtext, idxMap, redactSet);
+        std::u32string expectedFp = survivingFingerprint(tp, count, wtext, idxMap, redactSet);
 
         // Best case scenario: Wrap EmbedPDF core engine (EPDFPage_ApplyRedactions)
         // High-fidelity native in-place redaction via EmbedPDF core engine.
@@ -601,7 +601,7 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
 #ifdef JPDFIUM_HAS_PCRE2
         collectPcre2Matches(audit, wtext2, idxMap2, pc, 0.0f, remaining);
 #endif
-        std::u32string actualFp = survivingFingerprint(wtext2, idxMap2, {});
+        std::u32string actualFp = survivingFingerprint(audit, n2, wtext2, idxMap2, {});
         FPDFText_ClosePage(audit);
         if (!remaining.empty() || actualFp != expectedFp) {
             // Content was removed but the audit still finds survivors: the page is
@@ -754,7 +754,7 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
         // survive untouched, so fission damage there is still detected.
         std::vector<char>& touched = t_redactScratch.auditTouched;
         markTouchedByRects(tp, count, auditRects, touched);
-        std::u32string expectedFp = survivingFingerprint(wtext, idxMap, touched);
+        std::u32string expectedFp = survivingFingerprint(tp, count, wtext, idxMap, touched);
 
         std::vector<TextMatch>& sortedMatches = t_redactScratch.sortedMatches;
         sortedMatches = matches;
@@ -846,7 +846,7 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
         //      damage to surviving fragments, which is silent data loss.
         std::vector<char>& touched2 = t_redactScratch.auditTouched2;
         markTouchedByRects(audit, n2, auditRects, touched2);
-        std::u32string actualFp = survivingFingerprint(wtext2, idxMap2, touched2);
+        std::u32string actualFp = survivingFingerprint(audit, n2, wtext2, idxMap2, touched2);
         if (actualFp != expectedFp) {
             FPDFText_ClosePage(audit);
             // Survivors after a mutation: fail every save until a commit resolves
