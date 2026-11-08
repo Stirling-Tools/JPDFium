@@ -129,12 +129,12 @@ jobs:
           - { platform: linux-musl-x64,   runner: ubuntu-latest,    mode: static,    libc: musl }
           - { platform: linux-musl-arm64, runner: ubuntu-24.04-arm, mode: component, libc: musl }
           - { platform: linux-musl-arm64, runner: ubuntu-24.04-arm, mode: static,    libc: musl }
-          # darwin-x64 cross-compiles from macos-14 (arm64) - the macos-13
+          # darwin-x64 cross-compiles from macos-15 (arm64) - the macos-13
           # free runner is constrained to the point of 24h queue timeouts.
-          - { platform: darwin-x64,   runner: macos-14,          target_cpu: x64,   mode: component }
-          - { platform: darwin-x64,   runner: macos-14,          target_cpu: x64,   mode: static    }
-          - { platform: darwin-arm64, runner: macos-14,          target_cpu: arm64, mode: component }
-          - { platform: darwin-arm64, runner: macos-14,          target_cpu: arm64, mode: static    }
+          - { platform: darwin-x64,   runner: macos-15,          target_cpu: x64,   mode: component }
+          - { platform: darwin-x64,   runner: macos-15,          target_cpu: x64,   mode: static    }
+          - { platform: darwin-arm64, runner: macos-15,          target_cpu: arm64, mode: component }
+          - { platform: darwin-arm64, runner: macos-15,          target_cpu: arm64, mode: static    }
           # windows: pinned to windows-2022. The windows-latest (windows-2025)
           # image dropped VS 2022 in its 2026-06 update; Chromium's
           # vs_toolchain.py only accepts VS 2017/2019/2022 and fails GN gen

@@ -21,8 +21,8 @@ jobs:
   # Cross-build trimmed ICU data once on Linux, ahead of the matrix, so the
   # darwin + windows legs can stay within their size budgets (the full ICU data
   # is ~30-33 MB; the trimmed set ~2 MB). build-minimal-icu-windows.sh produces
-  # BOTH the trimmed windows icudt78.dll and the bare icudt78l.dat that macOS
-  # wraps into libicudata via clang. Mirrors snapshot/release prep-icu-data.
+  # both the trimmed Windows ICU DLLs and the bare icudt<major>l.dat files that
+  # macOS wraps into libicudata via clang. Mirrors snapshot/release prep-icu-data.
   prep-icu-data:
     runs-on: ubuntu-latest
     defaults:
@@ -84,7 +84,7 @@ jobs:
           # darwin-x64 runs natively on an Intel runner: Homebrew lives at
           # /usr/local and no Rosetta translation is involved.
           - { platform: darwin-x64,   runner: macos-15-intel,   target_cpu: x64   }
-          - { platform: darwin-arm64, runner: macos-14,         target_cpu: arm64 }
+          - { platform: darwin-arm64, runner: macos-15,         target_cpu: arm64 }
           - { platform: windows-x64,  runner: windows-latest,   target_cpu: x64   }
           - { platform: windows-arm64, runner: windows-11-arm,  target_cpu: arm64 }
           - { platform: freebsd-x64,  runner: ubuntu-latest,    target_cpu: x64   }
@@ -174,7 +174,7 @@ jobs:
           HOMEBREW_NO_INSTALL_CLEANUP: "1"
           HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
         run: |
-          # macos-14 is arm64. To cross-compile darwin-x64 we need x86_64
+          # macos-15 is arm64. To cross-compile darwin-x64 we need x86_64
           # builds of every pkg-config dep the bridge links against. The
           # cleanest path is a second Homebrew install at /usr/local managed
           # by Rosetta - Homebrew refuses dual-arch in a single prefix and
@@ -200,7 +200,7 @@ jobs:
             tar xz --strip-components=1 -C /usr/local/Homebrew -f /tmp/brew.tgz
             sudo ln -sf /usr/local/Homebrew/bin/brew /usr/local/bin/brew
           fi
-          # /usr/local/share/man pre-exists root-owned on macos-14 runners;
+          # /usr/local/share/man pre-exists root-owned on macos-15 runners;
           # brew needs it writable regardless of which path above installed it.
           sudo chown -R "$(whoami):admin" /usr/local/share/man 2>/dev/null || true
           # Build tools only generate files; native bottles are fine.
@@ -376,7 +376,7 @@ jobs:
         run: bash native/build-minimal-icu.sh
 
       - name: Download bare trimmed ICU .dat (macOS)
-        # brew icu4c@78 doesn't ship icupkg/pkgdata, so we don't trim locally;
+        # brew icu4c doesn't ship icupkg/pkgdata, so we don't trim locally;
         # we download the pre-trimmed .dat produced once on Linux by the
         # prep-icu-data job and wrap it on macOS via clang. The .dat is
         # platform-agnostic.
@@ -388,9 +388,9 @@ jobs:
 
       - name: Build minimal ICU data (macOS)
         if: startsWith(matrix.platform, 'darwin-')
-        # Wraps the downloaded icudt78l.dat into a libicudata.<MAJ>.dylib via a
-        # clang .incbin asm stub, pre-staged so the bundler picks it up instead
-        # of brew's full 33 MB copy - keeps the darwin bundles within budget.
+        # Wraps the icudt<major>l.dat matching the bridge's ICU into a
+        # libicudata.<MAJ>.dylib via a clang .incbin asm stub, pre-staged so
+        # the bundler picks it up instead of brew's full 33 MB copy.
         run: bash native/build-minimal-icu-macos.sh
 
       - name: Import macOS signing certificate
@@ -584,7 +584,7 @@ jobs:
           distribution: 'temurin'
           java-version: '25'
 
-      - uses: gradle/actions/setup-gradle@1cff18a4cfab5cd8d4c49a8ccf11c1ad18bb30b9 # v6.3.0
+      - uses: gradle/actions/setup-gradle@c8a326d85724fce2ae59a38810306f4a058f26a4 # v6.3.0
 
       - name: Install jextract
         run: |

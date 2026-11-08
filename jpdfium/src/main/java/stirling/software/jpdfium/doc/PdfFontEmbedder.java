@@ -3,10 +3,12 @@ package stirling.software.jpdfium.doc;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 import stirling.software.jpdfium.exception.JPDFiumException;
-import stirling.software.jpdfium.panama.PodofoLib;
+import stirling.software.jpdfium.panama.QpdfLib;
 
 /**
  * Replace existing font program streams when the caller already has matching
@@ -15,9 +17,15 @@ import stirling.software.jpdfium.panama.PodofoLib;
  * <p>This is deliberately not a font-substitution engine: it does not search
  * for a font, change encodings, widths, CID maps or Type3 procedures, and it
  * cannot invent a licensed substitute. Callers must key the data by the
- * document's existing {@code /BaseFont} and supply a program that matches the
- * font dictionary. A build without PoDoFo rejects the request instead of
- * silently returning an unembedded document.
+ * document's exact {@code /BaseFont} name (including subset prefix if present)
+ * and supply a program that matches the font dictionary.
+ *
+ * <p>The replacement is written through qpdf, preserves the existing
+ * {@code /FontFile2} or {@code /FontFile3} stream type, and updates
+ * {@code /Length1} for TrueType programs. Type 1 {@code /FontFile} streams are
+ * rejected because {@code /Length1}-{@code /Length3} cannot be derived. When no
+ * matching font descriptor exists, the call fails instead of returning a
+ * silently unchanged PDF.
  */
 public final class PdfFontEmbedder {
 
@@ -25,37 +33,47 @@ public final class PdfFontEmbedder {
 
     /** True when this native build can replace existing font streams. */
     public static boolean isAvailable() {
-        return PodofoLib.isAvailable();
+        return QpdfLib.isFontReplacementSupported();
     }
 
     /**
-     * Replace font streams by {@code /BaseFont}.
+     * Replace font streams by exact {@code /BaseFont}.
      *
      * @param pdf   source document bytes
-     * @param fonts font program bytes keyed by the exact BaseFont name
+     * @param fonts font program bytes keyed by exact {@code /BaseFont}
+     *              (including subset prefix if present)
      * @return rewritten PDF
-     * @throws JPDFiumException when PoDoFo is absent, a font is not found, or
-     *                          the replacement cannot be written
+     * @throws JPDFiumException when no matching font descriptor exists or the
+     *                          replacement cannot be written
      */
     public static byte[] embed(byte[] pdf, Map<String, byte[]> fonts) {
         if (pdf == null || pdf.length == 0) {
             throw new IllegalArgumentException("pdf must not be empty");
         }
         if (fonts == null || fonts.isEmpty()) return pdf;
-        if (!PodofoLib.isAvailable()) {
-            throw new JPDFiumException("font embedding requires a build with PoDoFo linked");
+        if (!isAvailable()) {
+            throw new JPDFiumException("font embedding requires native qpdf support");
         }
-        byte[] current = pdf;
+        Map<String, byte[]> normalized = new LinkedHashMap<>();
         for (var entry : fonts.entrySet()) {
-            if (entry.getKey() == null || entry.getKey().isBlank()
-                    || entry.getValue() == null || entry.getValue().length == 0) {
+            String name = entry.getKey();
+            byte[] data = entry.getValue();
+            if (name == null || name.isBlank() || data == null || data.length == 0) {
                 throw new IllegalArgumentException("font name and data must not be empty");
             }
-            current = PodofoLib.embedFontData(current, entry.getKey(), entry.getValue());
-            if (current == null) {
-                throw new JPDFiumException(
-                        "no font descriptor or program for /BaseFont " + entry.getKey());
+            String existing = normalizeName(name);
+            if (existing.isBlank()) {
+                throw new IllegalArgumentException("font name and data must not be empty");
             }
+            byte[] previous = normalized.putIfAbsent(existing, data);
+            if (previous != null && !Arrays.equals(previous, data)) {
+                throw new IllegalArgumentException(
+                        "conflicting font data for /BaseFont " + name);
+            }
+        }
+        byte[] current = pdf;
+        for (var entry : normalized.entrySet()) {
+            current = QpdfLib.replaceFontStream(current, entry.getKey(), entry.getValue());
         }
         return current;
     }
@@ -63,5 +81,26 @@ public final class PdfFontEmbedder {
     /** File-backed variant of {@link #embed(byte[], Map)}. */
     public static byte[] embed(Path input, Map<String, byte[]> fonts) throws IOException {
         return embed(Files.readAllBytes(input), fonts);
+    }
+
+    /**
+     * Alias for {@link #embed(byte[], Map)} emphasizing font stream replacement.
+     *
+     * @param pdf   source document bytes
+     * @param fonts font program bytes keyed by exact {@code /BaseFont}
+     * @return rewritten PDF
+     */
+    public static byte[] replace(byte[] pdf, Map<String, byte[]> fonts) {
+        return embed(pdf, fonts);
+    }
+
+    /** File-backed alias of {@link #replace(byte[], Map)}. */
+    public static byte[] replace(Path input, Map<String, byte[]> fonts) throws IOException {
+        return embed(input, fonts);
+    }
+
+    private static String normalizeName(String name) {
+        String trimmed = name.trim();
+        return trimmed.startsWith("/") ? trimmed.substring(1) : trimmed;
     }
 }

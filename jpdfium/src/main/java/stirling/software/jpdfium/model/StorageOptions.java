@@ -23,11 +23,13 @@ public final class StorageOptions {
     private final Mode mode;
     private final Path tempDir;
     private final boolean reuseSourceFile;
+    private final boolean durable;
 
     private StorageOptions(Builder b) {
         this.mode = b.mode;
         this.tempDir = b.tempDir;
         this.reuseSourceFile = b.reuseSourceFile;
+        this.durable = b.durable;
     }
 
     public Mode mode() { return mode; }
@@ -36,8 +38,9 @@ public final class StorageOptions {
     public Path tempDir() { return tempDir; }
 
     /**
-     * Whether a multi-output split may read its inputs straight from the
-     * document's source file instead of a fresh snapshot.
+     * Whether a multi-output split, {@code PdfSplit.extractPageRange} or
+     * {@code PdfSplit.extractPages} may read straight from the document's source
+     * file instead of a fresh snapshot.
      *
      * <p>Off by default. Many mutating APIs leave the structural epoch at zero,
      * so a file-opened document can hold edits the file does not; reusing the
@@ -46,6 +49,15 @@ public final class StorageOptions {
      * caller knows the document is untouched since it was opened.
      */
     public boolean reuseSourceFile() { return reuseSourceFile; }
+
+    /**
+     * Whether a file written by {@code mergeFilesToFile} or {@code extractPageRangeToFile} is
+     * published durably: fsynced, given the replaced file's permissions, then renamed with a
+     * best-effort directory flush. On by default. Turn it off for outputs the caller reads back
+     * and deletes, such as files streamed into a response; those are renamed into place owner-only
+     * and without fsync.
+     */
+    public boolean durable() { return durable; }
 
     public static StorageOptions defaults() { return builder().build(); }
 
@@ -90,6 +102,7 @@ public final class StorageOptions {
         private Mode mode = Mode.AUTO;
         private Path tempDir;
         private boolean reuseSourceFile;
+        private boolean durable = true;
 
         private Builder() {}
 
@@ -101,7 +114,7 @@ public final class StorageOptions {
         /**
          * Read split inputs from the document's source file instead of
          * snapshotting the live document first. Saves one native serialization
-         * per multi-output split.
+         * per multi-output split or single-range extract.
          *
          * <p>Only correct when the document has not been mutated since it was
          * opened from that file: in-memory edits are invisible to the file, so
@@ -110,6 +123,12 @@ public final class StorageOptions {
          */
         public Builder reuseSourceFile(boolean reuse) {
             this.reuseSourceFile = reuse;
+            return this;
+        }
+
+        /** Flush published outputs to disk; see {@link StorageOptions#durable()}. */
+        public Builder durable(boolean durable) {
+            this.durable = durable;
             return this;
         }
 

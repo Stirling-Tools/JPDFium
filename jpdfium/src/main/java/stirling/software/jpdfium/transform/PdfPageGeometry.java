@@ -10,18 +10,24 @@ import stirling.software.jpdfium.exception.RedactUnverifiableException;
 import stirling.software.jpdfium.model.PageSize;
 import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.panama.FormFillBindings;
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.text.PageText;
 import stirling.software.jpdfium.text.PdfTextExtractor;
 import stirling.software.jpdfium.text.TextChar;
+import stirling.software.jpdfium.text.TextWord;
 import stirling.software.jpdfium.panama.JpdfiumLib;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.WeakHashMap;
 
 /**
  * Page geometry operations: crop, rotate, resize, and box manipulation.
@@ -48,6 +54,15 @@ public final class PdfPageGeometry {
      * crop. Words and objects that straddle the crop edge survive whole.
      */
     public static final float AUTO_CONTENT_MARGIN = 0.0f;
+
+    /**
+     * Crop rectangles whose strict audit failed, keyed by document and page.
+     * A page-wide native marker cannot tell which rectangle failed, so a
+     * later successful crop may only clear it once every failed rectangle it
+     * covers has been resolved.
+     */
+    private static final Map<PdfDocument, Map<Integer, List<Rect>>> STRICT_CROP_FAILURES =
+            Collections.synchronizedMap(new WeakHashMap<>());
 
     private PdfPageGeometry() {}
 
@@ -150,47 +165,156 @@ public final class PdfPageGeometry {
      */
     public static void cropAndRemoveContentStrict(PdfDocument doc, int pageIndex, Rect rect) {
         requireValidCrop(rect);
-        removeBoundaryCrossingText(doc, pageIndex, rect);
+        if (!JpdfiumLib.isStrictCropIncompleteSupported()) {
+            throw new UnsupportedOperationException(
+                    "strict crop requires both jpdfium_page_mark_redaction_incomplete and "
+                            + "jpdfium_page_clear_strict_crop_incomplete");
+        }
+        try {
+            removeBoundaryCrossingText(doc, pageIndex, rect);
+        } catch (RuntimeException failure) {
+            recordStrictCropFailure(doc, pageIndex, rect);
+            throw failure;
+        }
         cropAndRemoveContent(doc, pageIndex, rect);
-    }
 
-    private static void removeBoundaryCrossingText(PdfDocument doc, int pageIndex, Rect crop) {
-        PageText text = PdfTextExtractor.extractPage(doc, pageIndex);
-        float epsilon = 0.01f;
-        try (PdfPage page = doc.page(pageIndex)) {
-            for (TextChar ch : text.chars()) {
-                if (!intersects(ch, crop) || isFullyInside(ch, crop)) {
-                    continue;
+        // Strict audit: verify no non-whitespace text survived outside or across the crop edge
+        PageText remaining = PdfTextExtractor.extractPage(doc, pageIndex);
+        float eps = 0.5f;
+        for (TextChar ch : remaining.chars()) {
+            if (Character.isWhitespace(ch.unicode()) || ch.width() <= 0 || ch.height() <= 0) {
+                continue;
+            }
+            boolean fullyInside = ch.x() >= rect.x() - eps
+                    && ch.y() >= rect.y() - eps
+                    && ch.x() + ch.width() <= rect.x() + rect.width() + eps
+                    && ch.y() + ch.height() <= rect.y() + rect.height() + eps;
+            if (!fullyInside) {
+                recordStrictCropFailure(doc, pageIndex, rect);
+                try (PdfPage page = doc.page(pageIndex)) {
+                    page.markRedactionIncomplete();
                 }
-                boolean removed =
-                        page.redactInRect(
-                                new Rect(
-                                        ch.x() - epsilon,
-                                        ch.y() - epsilon,
-                                        ch.width() + 2 * epsilon,
-                                        ch.height() + 2 * epsilon),
-                                true,
-                                false);
-                if (!removed) {
-                    throw new RedactIncompleteException(
-                            "strict crop could not remove a boundary-crossing glyph");
-                }
+                throw new RedactIncompleteException(
+                        "strict crop could not remove a boundary-crossing glyph");
+            }
+        }
+
+        // The full strict-crop audit passed, so failures from earlier attempts
+        // that this rectangle now covers are resolved. Other failed rectangles
+        // and other incomplete redaction areas on the page stay recorded.
+        if (clearResolvedStrictCropFailures(doc, pageIndex, rect)) {
+            try (PdfPage page = doc.page(pageIndex)) {
+                page.clearRedactionIncomplete();
             }
         }
     }
 
-    private static boolean intersects(TextChar ch, Rect crop) {
-        return ch.x() <= crop.x() + crop.width()
-                && ch.x() + ch.width() >= crop.x()
-                && ch.y() <= crop.y() + crop.height()
-                && ch.y() + ch.height() >= crop.y();
+    static void recordStrictCropFailure(PdfDocument doc, int pageIndex, Rect rect) {
+        synchronized (STRICT_CROP_FAILURES) {
+            STRICT_CROP_FAILURES
+                    .computeIfAbsent(doc, ignored -> new HashMap<>())
+                    .computeIfAbsent(pageIndex, ignored -> new ArrayList<>())
+                    .add(rect);
+        }
     }
 
-    private static boolean isFullyInside(TextChar ch, Rect crop) {
-        return ch.x() >= crop.x()
-                && ch.y() >= crop.y()
-                && ch.x() + ch.width() <= crop.x() + crop.width()
-                && ch.y() + ch.height() <= crop.y() + crop.height();
+    /**
+     * Remove failed rectangles covered by {@code crop}. Returns true when the
+     * page has no unresolved strict-crop failures left, so the page-wide
+     * marker may be cleared.
+     */
+    static boolean clearResolvedStrictCropFailures(
+            PdfDocument doc, int pageIndex, Rect crop) {
+        synchronized (STRICT_CROP_FAILURES) {
+            Map<Integer, List<Rect>> pages = STRICT_CROP_FAILURES.get(doc);
+            if (pages == null) return true;
+            List<Rect> failures = pages.get(pageIndex);
+            if (failures == null || failures.isEmpty()) return true;
+            failures.removeIf(failure -> contains(crop, failure));
+            if (!failures.isEmpty()) return false;
+            pages.remove(pageIndex);
+            if (pages.isEmpty()) STRICT_CROP_FAILURES.remove(doc);
+            return true;
+        }
+    }
+
+    private static boolean contains(Rect outer, Rect inner) {
+        float eps = 0.5f;
+        return inner.x() >= outer.x() - eps
+                && inner.y() >= outer.y() - eps
+                && inner.x() + inner.width() <= outer.x() + outer.width() + eps
+                && inner.y() + inner.height() <= outer.y() + outer.height() + eps;
+    }
+
+    /** Test hook: whether a page still has unresolved strict-crop failures. */
+    static boolean hasUnresolvedStrictCropFailure(PdfDocument doc, int pageIndex) {
+        synchronized (STRICT_CROP_FAILURES) {
+            Map<Integer, List<Rect>> pages = STRICT_CROP_FAILURES.get(doc);
+            if (pages == null) return false;
+            List<Rect> failures = pages.get(pageIndex);
+            return failures != null && !failures.isEmpty();
+        }
+    }
+
+    /** Test hook: forget tracked strict-crop failures for a document. */
+    static void clearTrackedStrictCropFailures(PdfDocument doc) {
+        synchronized (STRICT_CROP_FAILURES) {
+            STRICT_CROP_FAILURES.remove(doc);
+        }
+    }
+
+    private static void removeBoundaryCrossingText(PdfDocument doc, int pageIndex, Rect crop) {
+        PageText text = PdfTextExtractor.extractPage(doc, pageIndex);
+        try (PdfPage page = doc.page(pageIndex)) {
+            try {
+                for (TextWord word : text.allWords()) {
+                    if (word.chars().isEmpty() || word.text().trim().isEmpty()
+                            || word.width() <= 0 || word.height() <= 0) {
+                        continue;
+                    }
+                    if (intersects(word, crop) && !isFullyInside(word, crop)) {
+                        for (TextChar ch : word.chars()) {
+                            if (ch.isWhitespace() || ch.width() <= 0 || ch.height() <= 0) {
+                                continue;
+                            }
+                            if (!page.redactInRect(
+                                    new Rect(ch.x(), ch.y(), ch.width(), ch.height()),
+                                    true,
+                                    false)) {
+                                throw new RedactIncompleteException(
+                                        "strict crop could not redact a boundary-crossing glyph");
+                            }
+                        }
+                    }
+                }
+            } catch (RuntimeException failure) {
+                markIncompletePreservingFailure(page, failure);
+                throw failure;
+            }
+        }
+    }
+
+    private static void markIncompletePreservingFailure(PdfPage page, Throwable failure) {
+        try {
+            page.markRedactionIncomplete();
+        } catch (Throwable markFailure) {
+            NativeRuntime.rethrowFatal(markFailure);
+            failure.addSuppressed(markFailure);
+        }
+    }
+
+    private static boolean intersects(TextWord w, Rect crop) {
+        return w.x() <= crop.x() + crop.width()
+                && w.x() + w.width() >= crop.x()
+                && w.y() <= crop.y() + crop.height()
+                && w.y() + w.height() >= crop.y();
+    }
+
+    private static boolean isFullyInside(TextWord w, Rect crop) {
+        return w.x() >= crop.x()
+                && w.y() >= crop.y()
+                && w.x() + w.width() <= crop.x() + crop.width()
+                && w.y() + w.height() <= crop.y() + crop.height();
     }
 
     /**

@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include <fpdf_text.h>
 #include <fpdfview.h>
 
 #include <cstdint>
@@ -38,6 +39,9 @@ struct ErasedGrayImage;
 // nesting cannot appear in the page-object model either; mirror that limit to
 // stay safe against self-referential form streams.
 static constexpr int kMaxFormNesting = 40;
+inline bool isLineEndHyphen(FPDF_TEXTPAGE textPage, int index, unsigned int unicode) {
+    return unicode == 0xFFFE || FPDFText_IsHyphen(textPage, index) == 1;
+}
 
 static constexpr FS_MATRIX kIdentityMatrix{1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f};
 
@@ -48,6 +52,10 @@ struct TextMatch {
     std::vector<int> charIndices;                      // text-page char indices for matched chars
     float bboxL = 0, bboxB = 0, bboxR = 0, bboxT = 0;  // tight aggregate bbox (PDF coords)
     int group = -1;                                    // -1: a match on its own
+    // The match's own outline on rotated or skewed text (see orientMatchQuads),
+    // whose bbox also spans the corners around it.
+    bool hasQuad = false;
+    FS_QUADPOINTSF quad{};
 };
 
 // PCRE2 matching layer (replaces std::wregex entirely).
@@ -143,7 +151,8 @@ float overlapRatio(float al, float ab, float ar, float at, float bl, float bb, f
 void buildNormalizedText(FPDF_TEXTPAGE textPage, int count, std::vector<int>& normIdxMap,
                          std::u32string& norm);
 std::u32string buildNormalizedText(FPDF_TEXTPAGE textPage, int count, std::vector<int>& normIdxMap);
-std::u32string survivingFingerprint(const std::u32string& normalizedText,
+std::u32string survivingFingerprint(FPDF_TEXTPAGE textPage, int count,
+                                    const std::u32string& normalizedText,
                                     const std::vector<int>& normIdxMap,
                                     const std::vector<char>& redactSet);
 bool eraseImagePixels(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_PAGEOBJECT imageObj,
@@ -174,6 +183,10 @@ class ScopedCoverPage {
     ScopedCoverPage(const ScopedCoverPage&) = delete;
     ScopedCoverPage& operator=(const ScopedCoverPage&) = delete;
 };
+// The page-space box of a char, with a glyph the font has no outline for given
+// the cell a cover must span to remove it rather than PDFium's one-unit sliver.
+bool outlineAwareCharBox(FPDF_TEXTPAGE textPage, int index, double* l, double* r, double* b,
+                         double* t);
 bool matchCharBox(FPDF_TEXTPAGE textPage, int index, double* l, double* r, double* b, double* t);
 bool recomputeMatchBbox(FPDF_TEXTPAGE textPage, TextMatch& m);
 int32_t logicalMatchCount(const std::vector<TextMatch>& matches);
@@ -189,6 +202,9 @@ void scanPagePatterns(DocCore* core, FPDF_TEXTPAGE tp, const std::u32string& wte
 void alignMatchesToGraphemes(FPDF_TEXTPAGE textPage, const std::vector<uint32_t>& unicodeSeq,
                              std::vector<TextMatch>& matches);
 void alignMatchesToShapedClusters(FPDF_TEXTPAGE tp, std::vector<TextMatch>& matches);
+// Sets the quad of each match on text that is not upright, for its REDACT mark's
+// /QuadPoints. Must run while `tp` still describes the page the matches came from.
+void orientMatchQuads(FPDF_TEXTPAGE tp, std::vector<TextMatch>& matches);
 bool auditNoSurvivorsInRegion(FPDF_PAGE page, const std::vector<FS_RECTF>& regions,
                               const std::vector<FPDF_PAGEOBJECT>& exclude);
 void deletePatternCache(void* p);

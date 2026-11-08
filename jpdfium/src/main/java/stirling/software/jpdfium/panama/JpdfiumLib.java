@@ -1331,6 +1331,38 @@ public final class JpdfiumLib {
         });
     }
 
+    private static final MethodHandle TEXT_GET_CHARS_PACKED_HANDLE = Symbols.downcallOptional(
+            "jpdfium_text_get_chars_packed",
+            FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS, ADDRESS));
+
+    /**
+     * Characters of a page in the packed layout documented on
+     * {@code jpdfium_text_get_chars_packed}, or null when the loaded bridge predates it.
+     */
+    public static byte[] textGetCharsPacked(long page) {
+        if (TEXT_GET_CHARS_PACKED_HANDLE == null) return null;
+        return PdfiumRuntime.execute(() -> {
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment dataOut = a.allocate(ADDRESS);
+                MemorySegment lenOut = a.allocate(JAVA_LONG);
+                check((int) TEXT_GET_CHARS_PACKED_HANDLE.invokeExact(page, dataOut, lenOut),
+                        "textGetCharsPacked");
+                MemorySegment data = dataOut.get(ADDRESS, 0);
+                long len = lenOut.get(JAVA_LONG, 0);
+                try {
+                    return data.reinterpret(len).toArray(JAVA_BYTE);
+                } finally {
+                    JpdfiumH.jpdfium_free_buffer(data);
+                }
+            } catch (RuntimeException re) {
+                throw re;
+            } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
+                throw new JPDFiumException("textGetCharsPacked failed", t);
+            }
+        });
+    }
+
     public static String textGetChars(long page) {
         return PdfiumRuntime.execute(() -> {
             check(JpdfiumH.jpdfium_text_get_chars(page, ADDR_SCRATCH), "textGetChars");
@@ -1406,6 +1438,69 @@ public final class JpdfiumLib {
                     "cropRemoveContent");
         } finally {
             PdfiumRuntime.exitLeaf();
+        }
+    }
+
+    private static final MethodHandle jpdfium_page_mark_redacted =
+            Symbols.downcallOptional("jpdfium_page_mark_redacted",
+                    FunctionDescriptor.of(JAVA_INT, JAVA_LONG));
+
+    public static void pageMarkRedacted(long page) {
+        if (jpdfium_page_mark_redacted == null) {
+            throw new UnsupportedOperationException(
+                    "jpdfium_page_mark_redacted is not supported by this native build");
+        }
+        try {
+            int rc = (int) jpdfium_page_mark_redacted.invokeExact(page);
+            check(rc, "pageMarkRedacted");
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw new JPDFiumException("jpdfium_page_mark_redacted failed", t);
+        }
+    }
+
+    private static final MethodHandle jpdfium_page_mark_redaction_incomplete =
+            Symbols.downcallOptional("jpdfium_page_mark_redaction_incomplete",
+                    FunctionDescriptor.of(JAVA_INT, JAVA_LONG));
+
+    public static void pageMarkRedactionIncomplete(long page) {
+        if (jpdfium_page_mark_redaction_incomplete == null) {
+            throw new UnsupportedOperationException(
+                    "jpdfium_page_mark_redaction_incomplete is not supported by this native build");
+        }
+        try {
+            int rc = (int) jpdfium_page_mark_redaction_incomplete.invokeExact(page);
+            check(rc, "pageMarkRedactionIncomplete");
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw new JPDFiumException("jpdfium_page_mark_redaction_incomplete failed", t);
+        }
+    }
+
+    private static final MethodHandle jpdfium_page_clear_strict_crop_incomplete =
+            Symbols.downcallOptional("jpdfium_page_clear_strict_crop_incomplete",
+                    FunctionDescriptor.of(JAVA_INT, JAVA_LONG));
+
+    /**
+     * Whether this build can both arm and clear the strict-crop incomplete
+     * marker. Both symbols are required: a bridge that only exports the mark
+     * would leave the page unsavable after a later successful audit.
+     */
+    public static boolean isStrictCropIncompleteSupported() {
+        return jpdfium_page_mark_redaction_incomplete != null
+                && jpdfium_page_clear_strict_crop_incomplete != null;
+    }
+
+    public static void pageClearRedactionIncomplete(long page) {
+        // Clearing is only meaningful after this branch's marking API armed the
+        // strict-crop state; older builds have nothing to clear.
+        if (jpdfium_page_clear_strict_crop_incomplete == null) return;
+        try {
+            int rc = (int) jpdfium_page_clear_strict_crop_incomplete.invokeExact(page);
+            check(rc, "pageClearRedactionIncomplete");
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw new JPDFiumException("jpdfium_page_clear_strict_crop_incomplete failed", t);
         }
     }
 

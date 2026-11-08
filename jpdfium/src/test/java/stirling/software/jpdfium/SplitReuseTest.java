@@ -173,6 +173,42 @@ class SplitReuseTest {
     }
 
     @Test
+    void singleRangeExtractReusesTheSourceWhenAskedTo() throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "object-stream page counts require real PDFium native library");
+        Path in = resource("/pdfs/redact/redact-test-100pages.pdf");
+        try (PdfDocument doc = PdfDocument.open(in)) {
+            PdfSplit.resetCounters();
+            try (PdfDocument snapshot = PdfSplit.extractPageRange(doc, 10, 19)) {
+                assertEquals(10, snapshot.pageCount());
+            }
+            assertEquals(1, PdfSplit.COUNTERS.extractSerializations.get(),
+                    "a default extract must snapshot the live document");
+
+            PdfSplit.resetCounters();
+            StorageOptions reuse = StorageOptions.builder().reuseSourceFile(true).build();
+            try (PdfDocument range = PdfSplit.extractPageRange(doc, 10, 19, reuse);
+                    PdfDocument pages = PdfSplit.extractPages(doc, Set.of(3, 5, 7), reuse);
+                    PdfDocument reference = PdfSplit.extractPageRange(doc, 10, 19)) {
+                assertEquals(10, range.pageCount());
+                assertEquals(3, pages.pageCount());
+                for (int i = 0; i < 10; i++) {
+                    try (PdfPage a = range.page(i); PdfPage b = reference.page(i)) {
+                        assertEquals(b.extractText(), a.extractText(), "page " + i);
+                    }
+                }
+                int[] picked = {3, 5, 7};
+                for (int i = 0; i < picked.length; i++) {
+                    try (PdfPage a = pages.page(i); PdfPage b = doc.page(picked[i])) {
+                        assertEquals(b.extractText(), a.extractText(), "picked page " + picked[i]);
+                    }
+                }
+            }
+            assertEquals(1, PdfSplit.COUNTERS.extractSerializations.get(),
+                    "only the reference extract may snapshot once the caller vouches for the file");
+        }
+    }
+
+    @Test
     void defaultSplitSnapshotsSoEditsCannotBeLost() throws Exception {
         assumeTrue(NativeRuntime.isFull(), "object-stream page counts require real PDFium native library");
         Path in = resource("/pdfs/redact/redact-test-100pages.pdf");

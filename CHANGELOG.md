@@ -17,10 +17,17 @@ publishing workflows, not library releases, so they are not listed here.
 
 ## [Unreleased]
 
-## [1.3.1] - 2026-11-05
-
 ### Added
 
+- `PdfSplit.extractPageRangesToFiles` writes many page ranges of one file from a single qpdf
+  parse instead of one parse per range. Ranges qpdf cannot write, and `MEMORY` storage, go
+  through `extractPageRangeToFile` one at a time. 400 single-page parts of a 4.3 MB PDF take 0.12 s instead of
+  7.3 s, and 400 parts of a 28.7 MB PDF 0.5 s instead of 45 s. Parts match
+  `extractPageRangeToFile` page for page, form fields and page labels included.
+- Native qpdf font-stream replacement. `PdfFontEmbedder.embed(...)` replaces
+  `/FontFile2` or `/FontFile3` streams by exact `/BaseFont`, updating
+  `/Length1`; Type 1 `/FontFile` streams are rejected. `PdfXOptions.fontData(...)`
+  applies the same replacement before PDF/X validation.
 - PDF/X-1a, PDF/X-3, PDF/X-4, and PDF/X-6 metadata bootstrap. `PdfXConverter`
   now sets the standard base version, writes a missing `/TrimBox`, and
   optionally fails on non-embedded fonts. `PdfXOptions` gains
@@ -29,12 +36,64 @@ publishing workflows, not library releases, so they are not listed here.
 - `PdfPageGeometry.cropAndRemoveContentStrict(...)`, which removes a word that
   crosses the crop edge instead of leaving its outside glyphs clipped and
   extractable.
+- `StorageOptions.Builder.durable(false)` and `PdfSecurity.copyEncryption(..., SaveOptions)`
+  skip the fsync for file outputs the caller reads back and deletes, such as
+  split parts streamed into a response.
+- `PdfPage.extractTextCharsPacked()` and the native `jpdfium_text_get_chars_packed`
+  return a page's characters in a packed binary layout. `PdfTextExtractor` uses it
+  when the native bundle exports it, instead of formatting and parsing JSON, which
+  was most of the cost of text extraction.
+
+### Changed
+
+- `PdfMerge.mergeFilesToFile` and `PdfSplit.extractPageRangeToFile` write their
+  staging file without fsync and flush once when they publish the output, which
+  now gets the destination's permissions as other saves do. They previously
+  flushed the staging file and then renamed it without flushing the rename.
+- `PdfSplit.extractPageRange` and `PdfSplit.extractPages` honour
+  `StorageOptions.reuseSourceFile`: an untouched file-backed document is read
+  from its file instead of being saved through PDFium before every extract.
+  `SplitCounters.extractSerializations` counts the snapshots they still take.
+- `PdfRedactor.redact` with fewer than eight literal words no longer reads every
+  page's text in Java before the native redaction reads it again; the native
+  redaction already skips pages without a match.
+- qpdf merge, page extract and encryption copy (`PdfMerge.mergeFilesToFile`,
+  `PdfSplit.extractPageRangeToFile`, the qpdf byte-array merge and extract, and
+  `PdfSecurity.copyEncryption`) keep every stream's existing encoding instead of
+  decoding and deflating it. Image-heavy inputs with raw image data merge several
+  times faster; such outputs are as large as their inputs rather than compressed.
+  The PDFium fallback, used when qpdf is unavailable or rejects an input, still
+  compresses unfiltered streams, and `PdfOptimizer` still compresses on request.
+
+- Word and regex redaction, and committing redaction marks, apply a page's
+  boxes to PDFium in groups of 16 instead of one call per box, so the page is
+  rewritten once per group rather than once per match. A 200-page document with
+  99,000 matches redacts in about 4 s instead of 16 s; output text is unchanged.
 
 ### Fixed
 
+- Word and regex redaction finds words PDFium reports hyphenated across a line
+  break (`Trace-` / `Monkey`), and removes the hyphen with them; it previously
+  missed them, and with eight or more words the keyword prefilter skipped such
+  pages too. Redacting the word after a line-end hyphen no longer fails as
+  incomplete when that hyphen stops reading as a word break.
+- Word and pattern redaction now removes text drawn with glyphs the embedded
+  font has no outline for, such as text using a truncated font subset. These
+  pages previously stopped with `RedactIncompleteException`.
+- `commitRedactions` now verifies that marked text was removed, as the other
+  redaction paths do, and raises `RedactIncompleteException` otherwise.
+- A page whose redaction did not finish stays unsavable until a later commit
+  removes the text that redaction left, not merely until any commit on the page
+  succeeds.
+- Redacting a word on rotated, mirrored or skewed text no longer removes
+  glyphs of the neighbouring words or paints over them: the redaction marks
+  and covers the word's own quad instead of the box around it.
 - `PdfVersionConverter` now writes a PDF 2.0 header for `PdfVersion.V2_0`.
-  PDFium's `FPDF_SaveWithVersion` currently falls back to a PDF 1.4 header for
-  version 20 even though the saved object graph is valid.
+  PDFium's `FPDF_SaveWithVersion` rejects version codes above 17 (PDF 1.7) and
+  falls back to keeping the source document's version rather than writing a
+  PDF 2.0 header.
+- Refuse incremental saves after `PdfPage.redactInRect` modifies content, failing
+  closed with `RedactedSaveException` to protect redacted pages.
 
 ## [1.3.0] - 2026-11-05
 
@@ -372,8 +431,7 @@ PDFium-backed document, page, text, image, and redaction APIs. Per-version notes
 were not maintained; see the [Releases](https://github.com/Stirling-Tools/JPDFium/releases)
 page and the `v1.0.x` tags.
 
-[Unreleased]: https://github.com/Stirling-Tools/JPDFium/compare/v1.3.1...HEAD
-[1.3.1]: https://github.com/Stirling-Tools/JPDFium/releases/tag/v1.3.1
+[Unreleased]: https://github.com/Stirling-Tools/JPDFium/compare/v1.3.0...HEAD
 [1.3.0]: https://github.com/Stirling-Tools/JPDFium/releases/tag/v1.3.0
 [1.2.0]: https://github.com/Stirling-Tools/JPDFium/releases/tag/v1.2.0
 [1.1.5]: https://github.com/Stirling-Tools/JPDFium/releases/tag/v1.1.5

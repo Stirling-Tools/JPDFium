@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <set>
@@ -125,18 +126,30 @@ struct ErasedGrayImage {
     uint64_t hash = 0;  // FNV-1a over the row-packed samples
 };
 
+// The area a redaction covered: its rect, and its quads when the mark had them
+// (rotated or wrapped text), which then bound the area more tightly.
+struct RedactArea {
+    FS_RECTF rect{};
+    std::vector<FS_QUADPOINTSF> quads;
+};
+
 // Shared document state.
 struct DocCore {
     FPDF_DOCUMENT doc = nullptr;
     bool contentRedacted = false;
     bool sanitizeOnSave = false;
     // Pages on which a redaction mutated content and then stopped
-    // (JPDFIUM_ERR_REDACT_INCOMPLETE): the applied boxes already removed content
-    // while the rest of the match is still extractable, so every save path
-    // refuses while this set is not empty. Only a later successful redaction
-    // commit that really applies rectangles on the SAME page removes that page's
-    // entry, so a commit on another page can never clear the failure.
-    std::set<int32_t> incompleteRedactPages{};
+    // (JPDFIUM_ERR_REDACT_INCOMPLETE), with the areas those redactions covered:
+    // the applied boxes already removed content while the rest of the match is
+    // still extractable, so every save path refuses while this is not empty. A
+    // later successful commit on the SAME page removes the entry only once no
+    // recorded area there still holds text, so neither a commit on another page
+    // nor an unrelated commit on this one can clear the failure.
+    std::map<int32_t, std::vector<RedactArea>> incompleteRedactPages{};
+    // Pages whose strict-crop audit failed. Unlike incompleteRedactPages, a
+    // later redaction commit cannot clear this: only a full strict-crop audit
+    // that passes on the same page may remove the entry.
+    std::set<int32_t> strictCropIncompletePages{};
     int32_t unappliedRedactMarksCount = 0;
     // Structural generation: bumped whenever native state is freed and
     // replaced (document reload, page raster replacement). Pages capture it
@@ -187,7 +200,7 @@ struct DocCore {
     // not resolved by a later successful commit on that same page - see
     // incompleteRedactPages.
     bool hasIncompleteRedaction() const {
-        return !incompleteRedactPages.empty();
+        return !incompleteRedactPages.empty() || !strictCropIncompletePages.empty();
     }
 
     void addRedactLiteral(const char* s) {

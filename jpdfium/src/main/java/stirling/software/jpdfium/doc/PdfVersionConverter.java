@@ -94,10 +94,10 @@ public final class PdfVersionConverter {
     private static final byte[] PDF2_HEADER = "%PDF-2.0".getBytes(StandardCharsets.US_ASCII);
 
     /**
-     * PDFium's {@code FPDF_SaveWithVersion} currently writes a PDF 1.4 header for
-     * a requested version 20 (PDF 2.0). The saved object graph is already
-     * 1.4-compatible and PDF 2.0 is backwards compatible, so only the header
-     * needs the requested marker.
+     * PDFium's {@code FPDF_SaveWithVersion} rejects version codes above 17
+     * (PDF 1.7) and keeps the source document's version, so a requested PDF 2.0
+     * needs the header marker rewritten. PDF 2.0 is backwards compatible with
+     * the existing object graph.
      */
     private static void forcePdf2Header(Path path, PdfVersion version) {
         if (version != PdfVersion.V2_0) return;
@@ -117,6 +117,21 @@ public final class PdfVersionConverter {
     public static boolean forceVersion(Path input, Path output, PdfVersion version) {
         if (version == null) return false;
         return QpdfLib.forceVersionToFile(input, output, version.toString());
+    }
+
+    /**
+     * Rewrite PDF bytes with an exact PDF version and no catalog /Version override.
+     */
+    public static byte[] forceVersion(byte[] input, PdfVersion version) {
+        if (input == null || version == null) return null;
+        if (!QpdfLib.isForceVersionSupported()) {
+            throw new JPDFiumException("forceVersion requires native QPDF version rewrite support");
+        }
+        byte[] out = QpdfLib.forceVersionToBytes(input, version.toString());
+        if (out == null) {
+            throw new JPDFiumException("forceVersion failed to rewrite PDF bytes to version " + version);
+        }
+        return out;
     }
 
     /**

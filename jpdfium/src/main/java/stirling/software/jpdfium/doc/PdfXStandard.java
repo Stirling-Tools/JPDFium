@@ -7,7 +7,7 @@ package stirling.software.jpdfium.doc;
  */
 public enum PdfXStandard {
     PDF_X_1A("PDF 1.3", "PDF/X-1:2001", "PDF/X-1a:2001", true),
-    PDF_X_3("PDF 1.3", "PDF/X-3:2002", "PDF/X-3:2002", true),
+    PDF_X_3("PDF 1.3", "PDF/X-3:2002", null, true),
     PDF_X_4("PDF 1.6", "PDF/X-4", "PDF/X-4", true),
     PDF_X_6("PDF 2.0", "PDF/X-6", "PDF/X-6", true);
 
@@ -34,7 +34,10 @@ public enum PdfXStandard {
         return gtsVersion;
     }
 
-    /** Value of the XMP {@code GTS_PDFXConformance} property. */
+    /**
+     * Value of the XMP {@code GTS_PDFXConformance} property, or {@code null}
+     * when the standard does not define one (PDF/X-3).
+     */
     public String gtsConformance() {
         return gtsConformance;
     }
