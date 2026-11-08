@@ -19,4 +19,5 @@ EXPORTS
     jpdfium_rust_encode_jpeg
     jpdfium_rust_encode_jpeg_ex
     jpdfium_rust_encode_ccitt_g4
+    jpdfium_rust_encode_jbig2
     jpdfium_has_rust

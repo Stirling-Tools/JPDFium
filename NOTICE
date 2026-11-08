@@ -16,6 +16,7 @@ Native bridge deps (linked at build time):
 - libunibreak - zlib
 - mozjpeg-rs - BSD-3-Clause (pure-Rust mozjpeg port used for JPEG encoding)
 - fax - MIT (pure-Rust CCITT Group 4 encoder for bilevel images)
+- jbig2enc-rust - MIT / Apache-2.0 (pure-Rust JBIG2 encoder with PDF fragments)
 
 Bundled ICC profile (jpdfium main jar):
 - JPDFiumCompactCmyk.icc - generated generic CMYK fallback, MIT; see

@@ -236,6 +236,7 @@ class PdfImageEdgeAndReencodeTest {
                     CompressOptions.builder()
                             .maxImageDpi(-1)
                             .imageQuality(0)
+                            .jbig2(false)
                             .preservationMode(PreservationMode.DESTRUCTIVE)
                             .build());
             assertTrue(out.bytes().length < input.length,
@@ -256,6 +257,38 @@ class PdfImageEdgeAndReencodeTest {
                     }
                 }
                 assertTrue(hasInk, "CCITT G4 page must render pixels");
+            }
+        }
+    }
+
+    @Test
+    void reencodesBilevelImagesAsJbig2WhenSmaller() throws Exception {
+        byte[] input = bitonalBarsPdf();
+        try (PdfDocument doc = PdfDocument.open(input)) {
+            PdfCompressor.CompressResultWithBytes out = PdfCompressor.compress(doc,
+                    CompressOptions.builder()
+                            .maxImageDpi(-1)
+                            .imageQuality(0)
+                            .preservationMode(PreservationMode.DESTRUCTIVE)
+                            .build());
+            assertTrue(out.bytes().length < input.length,
+                    "JBIG2 must only be adopted when smaller");
+            assertTrue(new String(out.bytes(), StandardCharsets.ISO_8859_1)
+                            .contains("/JBIG2Decode"),
+                    "bilevel stream must use JBIG2 when it wins");
+            try (PdfDocument reopened = PdfDocument.open(out.bytes());
+                 var page = reopened.page(0)) {
+                BufferedImage rendered = page.renderImage(72);
+                boolean hasInk = false;
+                for (int y = 0; y < rendered.getHeight() && !hasInk; y += 8) {
+                    for (int x = 0; x < rendered.getWidth(); x += 8) {
+                        if ((rendered.getRGB(x, y) & 0x00FFFFFF) != 0x00FFFFFF) {
+                            hasInk = true;
+                            break;
+                        }
+                    }
+                }
+                assertTrue(hasInk, "JBIG2 page must render pixels");
             }
         }
     }

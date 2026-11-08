@@ -1418,6 +1418,16 @@ int32_t jpdfium_rust_encode_ccitt_g4(const uint8_t*, int64_t, int32_t, int32_t, 
     return fail_native_bytes(out_ptr, out_len);
 }
 
+int32_t jpdfium_rust_encode_jbig2(const uint8_t*, int64_t, int32_t, int32_t, int32_t,
+                                  uint8_t** page_out, int64_t* page_len,
+                                  uint8_t** globals_out, int64_t* globals_len) {
+    if (page_out) *page_out = nullptr;
+    if (page_len) *page_len = 0;
+    if (globals_out) *globals_out = nullptr;
+    if (globals_len) *globals_len = 0;
+    return JPDFIUM_ERR_NOT_FOUND;
+}
+
 void jpdfium_rust_free(uint8_t* p) {
     std::free(p);
 }

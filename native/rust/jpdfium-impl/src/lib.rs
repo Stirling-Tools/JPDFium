@@ -924,3 +924,102 @@ unsafe fn encode_ccitt_g4(
     *out_len = buffer.len() as i64;
     JPDFIUM_OK
 }
+
+/// Encode a packed 1-bit image as a PDF JBIG2 fragment pair.
+///
+/// `pixels` is row-major, MSB-first, one bit per pixel; a set bit means white
+/// (DeviceGray). The returned `page` is the image stream; `globals`, when
+/// non-empty, is the `/JBIG2Globals` stream.
+///
+/// # Safety
+/// `pixels` must point to `pixels_len` readable bytes; all out pointers must be valid.
+#[no_mangle]
+pub unsafe extern "C" fn jpdfium_rust_encode_jbig2(
+    pixels: *const u8,
+    pixels_len: i64,
+    width: i32,
+    height: i32,
+    invert: i32,
+    page_out: *mut *mut u8,
+    page_len: *mut i64,
+    globals_out: *mut *mut u8,
+    globals_len: *mut i64,
+) -> i32 {
+    if page_out.is_null() || page_len.is_null() || globals_out.is_null() || globals_len.is_null() {
+        return JPDFIUM_ERR_INVALID;
+    }
+    *page_out = std::ptr::null_mut();
+    *page_len = 0;
+    *globals_out = std::ptr::null_mut();
+    *globals_len = 0;
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        encode_jbig2(pixels, pixels_len, width, height, invert != 0, page_out, page_len,
+                     globals_out, globals_len)
+    }))
+    .unwrap_or(JPDFIUM_ERR_GENERIC)
+}
+
+/// Encoding body for [`jpdfium_rust_encode_jbig2`].
+///
+/// # Safety
+/// `pixels` must point to `pixels_len` readable bytes; all out pointers must be valid.
+unsafe fn encode_jbig2(
+    pixels: *const u8,
+    pixels_len: i64,
+    width: i32,
+    height: i32,
+    invert: bool,
+    page_out: *mut *mut u8,
+    page_len: *mut i64,
+    globals_out: *mut *mut u8,
+    globals_len: *mut i64,
+) -> i32 {
+    if pixels.is_null()
+        || width <= 0
+        || height <= 0
+        || width > 64 * 1024
+        || height > 64 * 1024
+    {
+        return JPDFIUM_ERR_INVALID;
+    }
+    let row_bytes = (width as usize + 7) / 8;
+    let needed = row_bytes * height as usize;
+    if pixels_len < 0 || needed > pixels_len as usize {
+        return JPDFIUM_ERR_INVALID;
+    }
+    let packed = slice::from_raw_parts(pixels, needed);
+    let mut raster = Vec::with_capacity(width as usize * height as usize);
+    for y in 0..height as usize {
+        let row = &packed[y * row_bytes..(y + 1) * row_bytes];
+        for x in 0..width as usize {
+            let bit = (row[x / 8] >> (7 - (x % 8))) & 1;
+            let white = if invert { bit == 0 } else { bit == 1 };
+            raster.push(if white { 0 } else { 1 });
+        }
+    }
+    let context = jbig2enc_rust::Jbig2Context::with_config(
+        jbig2enc_rust::Jbig2Config::text_lossless(), true);
+    let encoded = match jbig2enc_rust::encode_single_image_with_config(
+        &raster, width as u32, height as u32, context) {
+        Ok(encoded) => encoded,
+        Err(_) => return JPDFIUM_ERR_GENERIC,
+    };
+    let page_ptr = malloc_copy(&encoded.page_data);
+    if page_ptr.is_null() {
+        return JPDFIUM_ERR_GENERIC;
+    }
+    *page_out = page_ptr;
+    *page_len = encoded.page_data.len() as i64;
+    if let Some(globals) = encoded.global_data {
+        let globals_ptr = malloc_copy(&globals);
+        if globals_ptr.is_null() {
+            libc::free(page_ptr as *mut libc::c_void);
+            *page_out = std::ptr::null_mut();
+            *page_len = 0;
+            return JPDFIUM_ERR_GENERIC;
+        }
+        *globals_out = globals_ptr;
+        *globals_len = globals.len() as i64;
+    }
+    JPDFIUM_OK
+}

@@ -138,6 +138,12 @@ JPDFIUM_EXPORT int32_t jpdfium_rust_encode_ccitt_g4(const uint8_t* pixels, int64
                                                     int32_t width, int32_t height, int32_t invert,
                                                     uint8_t** out_ptr, int64_t* out_len);
 
+// Encode packed 1-bit pixels (MSB first) as a PDF JBIG2 page/global pair.
+JPDFIUM_EXPORT int32_t jpdfium_rust_encode_jbig2(const uint8_t* pixels, int64_t pixels_len,
+                                                 int32_t width, int32_t height, int32_t invert,
+                                                 uint8_t** page_out, int64_t* page_len,
+                                                 uint8_t** globals_out, int64_t* globals_len);
+
 // Free a buffer allocated by any jpdfium_rust_* function.
 //
 // Must be called to release memory returned in out_ptr by the Rust functions.

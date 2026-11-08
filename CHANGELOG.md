@@ -43,6 +43,11 @@ publishing workflows, not library releases, so they are not listed here.
   documents: it subsets a supplied font program with HarfBuzz while retaining
   glyph IDs, then replaces the matching qpdf font stream only when smaller.
   It is opt-in because the caller must supply every codepoint the content uses.
+- `CompressOptions.jbig2` (default on) encodes qualifying 1-bit DeviceGray
+  images as JBIG2 with a `/JBIG2Globals` stream and adopts it only when the
+  combined streams are smaller. A synthetic 2480x3508 bilevel bar scan went
+  from 3,109 B to 1,017 B; a 3-page 300 DPI text scan went from 93,672 B to
+  21,762 B.
 - `CompressOptions.ccittG4` (default on) re-encodes qualifying 1-bit
   DeviceGray images as CCITT Group 4 and adopts the stream only when smaller.
   A synthetic 2480x3508 bilevel bar scan went from 3,109 B to 1,690 B.

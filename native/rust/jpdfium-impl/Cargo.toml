@@ -30,3 +30,5 @@ jpeg-encoder = { version = "0.7", features = ["simd"] }
 mozjpeg-rs = "0.9.2"
 # CCITT Group 4 encoder for bilevel images (MIT).
 fax = "0.3"
+# Pure-Rust JBIG2 encoder with PDF fragment support (MIT/Apache-2.0).
+jbig2enc-rust = { version = "0.6.0", default-features = false, features = ["encode", "symboldict"] }

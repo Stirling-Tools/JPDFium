@@ -375,6 +375,7 @@ public final class PdfCompressor {
                     : PdfOptimizer.optimize(resultBytes,
                             PdfOptimizer.RECOMPRESS_FLATE | PdfOptimizer.COMPRESS_STREAMS
                                     | PdfOptimizer.DEDUPLICATE_IMAGES
+                                    | (opts.jbig2() ? PdfOptimizer.JBIG2 : 0)
                                     | (opts.ccittG4() ? PdfOptimizer.CCITT_G4 : 0),
                             9,
                             PdfOptimizer.OBJECT_STREAMS_GENERATE,
@@ -396,7 +397,8 @@ public final class PdfCompressor {
             byte[] opt = PdfOptimizer.optimize(resultBytes,
                     PdfOptimizer.RECOMPRESS_FLATE | PdfOptimizer.COMPRESS_STREAMS
                             | PdfOptimizer.DEDUPLICATE_IMAGES
-                                    | (opts.ccittG4() ? PdfOptimizer.CCITT_G4 : 0), 9,
+                            | (opts.jbig2() ? PdfOptimizer.JBIG2 : 0)
+                            | (opts.ccittG4() ? PdfOptimizer.CCITT_G4 : 0), 9,
                     PdfOptimizer.OBJECT_STREAMS_PRESERVE,
                     PdfOptimizer.STREAM_DATA_COMPRESS,
                     PdfOptimizer.DECODE_LEVEL_GENERALIZED);

@@ -26,6 +26,7 @@ public final class CompressOptions {
     private final boolean convertPngToJpeg;
     private final boolean jpegProgressive;
     private final boolean ccittG4;
+    private final boolean jbig2;
     private final boolean optimizeStreams;
     private final boolean removeUnusedObjects;
     private final boolean removeMetadata;
@@ -42,6 +43,7 @@ public final class CompressOptions {
         this.convertPngToJpeg = b.convertPngToJpeg;
         this.jpegProgressive = b.jpegProgressive;
         this.ccittG4 = b.ccittG4;
+        this.jbig2 = b.jbig2;
         this.optimizeStreams = b.optimizeStreams;
         this.removeUnusedObjects = b.removeUnusedObjects;
         this.removeMetadata = b.removeMetadata;
@@ -78,6 +80,8 @@ public final class CompressOptions {
     public boolean jpegProgressive() { return jpegProgressive; }
     /** Re-encode qualifying 1-bit DeviceGray images as CCITT G4 when smaller. */
     public boolean ccittG4() { return ccittG4; }
+    /** Re-encode qualifying 1-bit DeviceGray images as JBIG2 when smaller. */
+    public boolean jbig2() { return jbig2; }
     public boolean optimizeStreams() { return optimizeStreams; }
     public boolean removeUnusedObjects() { return removeUnusedObjects; }
     public boolean removeMetadata() { return removeMetadata; }
@@ -136,6 +140,7 @@ public final class CompressOptions {
         private boolean convertPngToJpeg;
         private boolean jpegProgressive;
         private boolean ccittG4 = true;
+        private boolean jbig2 = true;
         private boolean optimizeStreams = true;
         private boolean removeUnusedObjects = true;
         private boolean removeMetadata;
@@ -173,6 +178,8 @@ public final class CompressOptions {
         public Builder jpegProgressive(boolean v) { this.jpegProgressive = v; return this; }
         /** Disable CCITT G4 re-encoding for bilevel images. */
         public Builder ccittG4(boolean v) { this.ccittG4 = v; return this; }
+        /** Disable JBIG2 re-encoding for bilevel images. */
+        public Builder jbig2(boolean v) { this.jbig2 = v; return this; }
         /** Generate object streams and cross-reference streams (qpdf). */
         public Builder optimizeStreams(boolean v) { this.optimizeStreams = v; return this; }
         /** Remove unreferenced objects. */
