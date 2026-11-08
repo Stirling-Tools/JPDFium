@@ -67,6 +67,10 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Fixed
 
+- PDF/X-1a and PDF/X-3 no longer reject documents with transparent
+  content. Pages whose content is transparent are rasterized at 300 dpi
+  before the output intent is written, so the result has no transparent
+  page objects.
 - Word and regex redaction finds words PDFium reports hyphenated across a line
   break (`Trace-` / `Monkey`), and removes the hyphen with them; it previously
   missed them, and with eight or more words the keyword prefilter skipped such

@@ -529,31 +529,30 @@ class PdfXConverterTest {
     }
 
     @Test
-    void pdfx3RejectsConstantAlphaEvenWhenThePageFlagIsClear() throws Exception {
+    void pdfx3FlattensConstantAlphaEvenWhenThePageFlagIsClear() throws Exception {
         assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
         byte[] input = pageWithConstantAlpha();
 
         PdfXOptions options = PdfXOptions.builder()
                 .standard(PdfXStandard.PDF_X_3)
                 .useCompactCmyk()
+                .title("Flatten Transparency")
                 .build();
-        JPDFiumException error = assertThrows(JPDFiumException.class,
-                () -> PdfXConverter.applyMetadata(input, options));
-        assertTrue(error.getMessage().contains("forbids transparency"), error.getMessage());
-        assertTrue(error.getMessage().contains("page 0"), error.getMessage());
+        byte[] output = PdfXConverter.applyMetadata(input, options);
+        try (PdfDocument doc = PdfDocument.open(output);
+                PdfPage page = doc.page(0)) {
+            assertFalse(PdfPageObjects.hasTransparencyStrict(page.rawHandleForRead()),
+                    "PDF/X-3 output must not contain transparent page content");
+        }
     }
 
     @Test
     void transparencyProbeDoesNotMarkTheDocumentModified() throws Exception {
         assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
         byte[] input = pageWithConstantAlpha();
-        PdfXOptions options = PdfXOptions.builder()
-                .standard(PdfXStandard.PDF_X_3)
-                .useCompactCmyk()
-                .build();
         try (PdfDocument doc = PdfDocument.open(input)) {
             assertThrows(JPDFiumException.class,
-                    () -> PdfXConverter.applyMetadata(doc, options));
+                    () -> PdfXConverter.requireNoTransparency(doc, PdfXStandard.PDF_X_3));
             assertFalse(doc.isContentModified(),
                     "a read-only transparency preflight must not mark the document modified");
         }

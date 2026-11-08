@@ -14,6 +14,7 @@ import java.time.format.DateTimeFormatter;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.exception.JPDFiumException;
+import stirling.software.jpdfium.model.FlattenMode;
 import stirling.software.jpdfium.model.PdfVersion;
 import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.panama.DocBindings;
@@ -25,8 +26,8 @@ import stirling.software.jpdfium.panama.QpdfLib;
  * PDF version and page trim boxes.
  *
  * <p>This is <strong>not a PDF/X validator</strong>. It writes the base version and
- * missing trim boxes, can reject non-embedded fonts on request, and rejects
- * transparency for standards that forbid it. It does not repair font programs,
+ * missing trim boxes, can reject non-embedded fonts on request, and rasterizes
+ * transparent pages for standards that forbid transparency. It does not repair font programs,
  * trapping, /ID, or every remaining RGB object. Use an external preflight
  * (veraPDF or Acrobat) before claiming PDF/X conformance;
  * {@link #checkMetadata(byte[], PdfXOptions)} only checks the intent/ICC/version
@@ -306,7 +307,7 @@ public final class PdfXConverter {
             throw new JPDFiumException("PDF/X metadata requires an output intent ICC profile");
         }
         validateCmykProfile(profile);
-        requireNoTransparency(doc, standard);
+        flattenTransparency(doc, standard);
         if (!standard.allowsIccBasedColors() && !options.convertColors()) {
             throw new JPDFiumException(standard + " forbids ICC-based, Lab, and RGB colour spaces; "
                     + "colour conversion cannot be disabled");
@@ -315,6 +316,28 @@ public final class PdfXConverter {
             PdfColorConverter.convert(doc, options.colorOptions());
         }
     }
+
+    /**
+     * Rasterize pages with transparent content for standards whose PDF version
+     * forbids transparency. Full-page rasterization is the only flattening
+     * primitive JPDFium exposes; PDF/X-1a and X-3 outputs therefore trade
+     * selectable text for a valid, non-transparent page.
+     */
+    private static void flattenTransparency(PdfDocument doc, PdfXStandard standard) {
+        if (standard.allowsTransparency()) return;
+        for (int i = 0; i < doc.pageCount(); i++) {
+            boolean transparent;
+            try (PdfPage page = doc.page(i)) {
+                transparent = PdfPageObjects.hasTransparencyStrict(page.rawHandleForRead());
+            }
+            if (transparent) {
+                doc.flattenPage(i, FlattenMode.FULL, TRANSPARENCY_FLATTEN_DPI);
+            }
+        }
+        requireNoTransparency(doc, standard);
+    }
+
+    private static final int TRANSPARENCY_FLATTEN_DPI = 300;
 
     /**
      * Reject transparent page content for standards whose PDF version forbids
