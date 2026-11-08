@@ -123,7 +123,7 @@ bool ConvertSampledFunctionToCmyk(QPDFObjectHandle function) {
     if (outputs != 3) return false;
 
     QPDFObjectHandle bitsObj = dict.getKey("/BitsPerSample");
-    const int bits = bitsObj.isInteger() ? bitsObj.getIntValue() : 8;
+    const int bits = bitsObj.isInteger() ? static_cast<int>(bitsObj.getIntValue()) : 8;
     // Rewriting arbitrary bit depths would need a second packing pass; leave
     // those to the Ghostscript fallback.
     if (bits != 8) return false;
@@ -139,7 +139,7 @@ bool ConvertSampledFunctionToCmyk(QPDFObjectHandle function) {
     }
 
     QPDFObjectHandle orderObj = dict.getKey("/Order");
-    const int order = orderObj.isInteger() ? orderObj.getIntValue() : 1;
+    const int order = orderObj.isInteger() ? static_cast<int>(orderObj.getIntValue()) : 1;
     if (order != 1 && order != 3) return false;
 
     std::shared_ptr<Buffer> stream = function.getStreamData(qpdf_dl_all);
