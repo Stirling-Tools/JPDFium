@@ -266,7 +266,7 @@ ColourSpaceInfo ClassifyDeviceIndependent(const std::string& family, QPDFObjectH
     if (family == "/ICCBased" && cs.getArrayNItems() > 1) {
         QPDFObjectHandle stream = cs.getArrayItem(1);
         const int n = stream.isStream() && stream.getDict().getKey("/N").isInteger()
-                          ? stream.getDict().getKey("/N").getIntValue()
+                          ? stream.getDict().getKey("/N").getIntValueAsInt()
                           : 0;
         if (n == 3) return Replaced(Kind::Rgb, "/DeviceCMYK");
         if (n == 1) return Replaced(Kind::AsGray, "/DeviceGray");
@@ -306,7 +306,7 @@ ColourSpaceInfo Converter::ClassifyIndexed(QPDFObjectHandle cs, int depth) {
         return info;
     }
     const std::string raw = IndexedLookupBytes(lookup);
-    const int hival = cs.getArrayItem(2).isInteger() ? cs.getArrayItem(2).getIntValue() : -1;
+    const int hival = cs.getArrayItem(2).isInteger() ? cs.getArrayItem(2).getIntValueAsInt() : -1;
     if (hival < 0 || hival > 255 || raw.size() < static_cast<size_t>(hival + 1) * 3) return info;
     std::string converted;
     converted.reserve(static_cast<size_t>(hival + 1) * 4);
@@ -425,7 +425,7 @@ bool Converter::ConvertSampled(QPDFObjectHandle fn, Kind kind, const ColourSpace
     QPDFObjectHandle size = dict.getKey("/Size");
     QPDFObjectHandle bits_obj = dict.getKey("/BitsPerSample");
     if (!size.isArray() || !bits_obj.isInteger()) return false;
-    const int bits = bits_obj.getIntValue();
+    const int bits = bits_obj.getIntValueAsInt();
     if (bits != 8 && bits != 16) return false;
     int64_t samples = 1;
     for (int i = 0; i < size.getArrayNItems(); ++i) {
@@ -850,8 +850,8 @@ void ColourFilter::FlushInline() {
                 tmp.getDict().replaceKey("/DecodeParms", dict.getKey("/DecodeParms"));
             }
             std::shared_ptr<Buffer> decoded = tmp.getStreamData(qpdf_dl_all);
-            const int w = dict.getKey("/Width").getIntValue();
-            const int h = dict.getKey("/Height").getIntValue();
+            const int w = dict.getKey("/Width").getIntValueAsInt();
+            const int h = dict.getKey("/Height").getIntValueAsInt();
             if (decoded && w > 0 && h > 0 &&
                 decoded->getSize() >= static_cast<size_t>(w) * static_cast<size_t>(h) * 3) {
                 const uint8_t* p = decoded->getBuffer();
@@ -1217,7 +1217,7 @@ bool Converter::ConvertImagePixels(QPDFObjectHandle image, const ColourSpaceInfo
     Raster raster;
     raster.width = wo.getIntValue();
     raster.height = ho.getIntValue();
-    raster.bpc = bo.getIntValue();
+    raster.bpc = bo.getIntValueAsInt();
     if (raster.width <= 0 || raster.height <= 0 || raster.width > 65535 || raster.height > 65535 ||
         raster.width * raster.height > 100'000'000) {
         return false;
