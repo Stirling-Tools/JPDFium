@@ -160,7 +160,7 @@ inline void bgraToRgbaInPlace(uint8_t* __restrict buf, int w, int h, int stride)
 inline uint32x4_t packArgb4(uint16x4_t r, uint16x4_t g, uint16x4_t b, uint16x4_t a) {
     uint32x4_t v = vorrq_u32(vshll_n_u16(r, 16), vshll_n_u16(g, 8));
     v = vorrq_u32(v, vmovl_u16(b));
-    return vorrq_u32(v, vshll_n_u16(a, 24));
+    return vorrq_u32(v, vshlq_n_u32(vmovl_u16(a), 24));
 }
 
 inline uint32x4_t packRgb4(uint16x4_t r, uint16x4_t g, uint16x4_t b) {
