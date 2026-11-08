@@ -215,8 +215,7 @@ size_t imageFingerprint(QPDFObjectHandle& image, std::string& dict) {
             fnv ^= bytes[i];
             fnv *= 1099511628211ULL;
         }
-        hash ^= std::hash<uint64_t>{}(fnv) + 0x9e3779b97f4a7c15ULL
-                + (hash << 6) + (hash >> 2);
+        hash ^= std::hash<uint64_t>{}(fnv) + 0x9e3779b97f4a7c15ULL + (hash << 6) + (hash >> 2);
     }
     return hash;
 }
@@ -236,9 +235,8 @@ void deduplicateImages(QPDF& pdf) {
     QPDFPageDocumentHelper helper{pdf};
     std::unordered_map<size_t, std::vector<QPDFObjectHandle>> seen;
     for (auto& page : helper.getAllPages()) {
-        page.forEachImage(true, [&seen](QPDFObjectHandle& image,
-                                         QPDFObjectHandle& xobjDict,
-                                         std::string const& key) {
+        page.forEachImage(true, [&seen](QPDFObjectHandle& image, QPDFObjectHandle& xobjDict,
+                                        std::string const& key) {
             std::string dict;
             size_t fingerprint = imageFingerprint(image, dict);
             auto& bucket = seen[fingerprint];
