@@ -1070,6 +1070,11 @@ public final class PdfDocument implements AutoCloseable {
                 // below would otherwise mark pages stale for an untouched
                 // document.
                 if (dpi <= 0) throw new IllegalArgumentException("dpi must be > 0");
+                // Widget values often exist only as annotation appearances.
+                // PDFium's raster pass does not initialize a form-fill
+                // environment, so bake widgets into page content first; the
+                // raster then contains the same values a viewer shows.
+                JpdfiumLib.docFlattenAnnotations(handle);
                 // The native pass rolls back any failure it can still undo and reports
                 // CONTENT_MUTATED only once the replaced pages can no longer be restored.
                 boolean replacedPages = false;
@@ -1398,6 +1403,11 @@ public final class PdfDocument implements AutoCloseable {
     public void convertPageToImage(int pageIndex, int dpi) {
         ensureOpen();
         if (dpi <= 0) throw new IllegalArgumentException("dpi must be > 0");
+        // Page rasterization has no form environment; bake widget appearances
+        // into the page before rasterizing so field values are not dropped.
+        try (PdfPage page = page(pageIndex)) {
+            page.flatten();
+        }
         JpdfiumLib.pageToImage(handle, pageIndex, dpi);
         // The page is replaced by an image, so the document no longer matches
         // the bytes it was opened with.
