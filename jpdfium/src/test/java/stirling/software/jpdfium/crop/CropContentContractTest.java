@@ -1,13 +1,20 @@
 package stirling.software.jpdfium.crop;
 
 import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.cos.COSName;
+import org.apache.pdfbox.cos.COSStream;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.PDResources;
+import org.apache.pdfbox.pdmodel.common.PDRectangle;
+import org.apache.pdfbox.pdmodel.graphics.form.PDFormXObject;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
+import stirling.software.jpdfium.exception.RedactedSaveException;
 import stirling.software.jpdfium.model.Rect;
+import stirling.software.jpdfium.text.PdfTextExtractor;
 import stirling.software.jpdfium.transform.PdfPageGeometry;
 
 import java.awt.image.BufferedImage;
@@ -55,13 +62,13 @@ class CropContentContractTest {
             // triggering word boundary removal and native redaction marking.
             Rect rect = new Rect(50, 650, 75, 100);
             PdfPageGeometry.cropAndRemoveContentStrict(doc, 0, rect);
-            assertThrows(stirling.software.jpdfium.exception.RedactedSaveException.class,
+            assertThrows(RedactedSaveException.class,
                     doc::saveBytesIncremental,
                     "saveBytesIncremental() must be refused after successful cropAndRemoveContentStrict");
             byte[] fullSave = doc.saveBytes();
             assertTrue(fullSave.length > 0, "full saveBytes() must succeed after successful cropAndRemoveContentStrict");
             try (PdfDocument saved = PdfDocument.open(fullSave)) {
-                String text = stirling.software.jpdfium.text.PdfTextExtractor.extractPage(saved, 0).plainText();
+                String text = PdfTextExtractor.extractPage(saved, 0).plainText();
                 assertFalse(text.contains("KEEP_A"), "KEEP_A straddles crop boundary and must be removed");
             }
         }
@@ -159,7 +166,7 @@ class CropContentContractTest {
         // image stream recoverable.
         try (PdfDocument doc = PdfDocument.open(CropTestPdfGenerator.twoToneImagePdf())) {
             PdfPageGeometry.cropAndRemoveContent(doc, 0, KEEP_TOP);
-            assertThrows(stirling.software.jpdfium.exception.RedactedSaveException.class,
+            assertThrows(RedactedSaveException.class,
                     doc::saveBytesIncremental);
         }
     }
@@ -173,19 +180,23 @@ class CropContentContractTest {
         try (PdfDocument doc =
                 PdfDocument.open(CropTestPdfGenerator.blackAndTwoToneStraddlingImagesPdf())) {
             PdfPageGeometry.cropAndRemoveContent(doc, 0, LEFT_HALF);
-            assertThrows(stirling.software.jpdfium.exception.RedactedSaveException.class,
+            assertThrows(RedactedSaveException.class,
                     doc::saveBytesIncremental);
         }
     }
 
     @Test
-    void unerasableStraddlingImageFailsTheCrop() throws Exception {
-        // An image that cannot be pixel-erased must not be silently destroyed:
-        // that would drop its visible part, so the crop must report failure.
+    void unerasableStraddlingImageIsKeptWhole() throws Exception {
+        // An image that cannot be pixel-erased must not be dropped: keeping it
+        // whole preserves its visible part, and the page boxes clip the rest.
         try (PdfDocument doc =
                 PdfDocument.open(CropTestPdfGenerator.dimensionlessStraddlingImagePdf())) {
-            assertThrows(stirling.software.jpdfium.exception.RedactIncompleteException.class,
-                    () -> PdfPageGeometry.cropAndRemoveContent(doc, 0, LEFT_HALF));
+            PdfPageGeometry.cropAndRemoveContent(doc, 0, LEFT_HALF);
+            byte[] output = doc.saveBytes();
+            try (PDDocument pdf = Loader.loadPDF(output)) {
+                assertEquals(LEFT_HALF.width(), pdf.getPage(0).getMediaBox().getWidth());
+                assertEquals(LEFT_HALF.height(), pdf.getPage(0).getMediaBox().getHeight());
+            }
         }
     }
 
@@ -216,11 +227,11 @@ class CropContentContractTest {
             // (a /Type matcher) would exclude while the stream remains.
             int allImageStreams = 0;
             for (var object : doc.getDocument()
-                    .getObjectsByType(org.apache.pdfbox.cos.COSName.XOBJECT)) {
+                    .getObjectsByType(COSName.XOBJECT)) {
                 var value = object.getObject();
-                if (value instanceof org.apache.pdfbox.cos.COSStream stream
-                        && org.apache.pdfbox.cos.COSName.IMAGE.equals(
-                                stream.getCOSName(org.apache.pdfbox.cos.COSName.SUBTYPE))) {
+                if (value instanceof COSStream stream
+                        && COSName.IMAGE.equals(
+                                stream.getCOSName(COSName.SUBTYPE))) {
                     allImageStreams++;
                 }
             }
@@ -254,9 +265,9 @@ class CropContentContractTest {
     private static byte[] softCrop(byte[] input, Rect rect) throws Exception {
         try (PDDocument doc = Loader.loadPDF(input)) {
             PDPage page = doc.getPage(0);
-            page.setMediaBox(new org.apache.pdfbox.pdmodel.common.PDRectangle(
+            page.setMediaBox(new PDRectangle(
                     rect.x(), rect.y(), rect.width(), rect.height()));
-            page.setCropBox(new org.apache.pdfbox.pdmodel.common.PDRectangle(
+            page.setCropBox(new PDRectangle(
                     rect.x(), rect.y(), rect.width(), rect.height()));
             try (ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
                 doc.save(baos);
@@ -288,7 +299,7 @@ class CropContentContractTest {
         }
     }
 
-    private static int countDraws(org.apache.pdfbox.pdmodel.PDResources resources, String ops,
+    private static int countDraws(PDResources resources, String ops,
                                   int depth) throws Exception {
         if (resources == null || depth > 8) return 0;
         int count = 0;
@@ -297,9 +308,9 @@ class CropContentContractTest {
             count++;
             idx += 3;
         }
-        for (org.apache.pdfbox.cos.COSName name : resources.getXObjectNames()) {
+        for (COSName name : resources.getXObjectNames()) {
             var xo = resources.getXObject(name);
-            if (xo instanceof org.apache.pdfbox.pdmodel.graphics.form.PDFormXObject form) {
+            if (xo instanceof PDFormXObject form) {
                 StringBuilder sb = new StringBuilder();
                 try (var in = form.getContentStream().createInputStream()) {
                     sb.append(new String(in.readAllBytes(), StandardCharsets.ISO_8859_1));

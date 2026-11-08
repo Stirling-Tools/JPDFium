@@ -213,7 +213,9 @@ JPDFIUM_EXPORT int32_t jpdfium_redact_region(int64_t page, float x, float y, flo
                                              uint32_t argb,
                                              int32_t remove_content) JPDFIUM_NOEXCEPT;
 // Hard crop: removes page objects lying outside the crop rectangle [x,y,x+w,y+h] (PDF coordinates).
-// A text word or object that only partly falls outside the crop is preserved whole.
+// A text word or object that only partly falls outside the crop is preserved whole. An image that
+// cannot be erased without changing another surviving placement is also preserved whole; the page
+// boxes set by the caller clip the outside part.
 JPDFIUM_EXPORT int32_t jpdfium_crop_remove_content(int64_t page, float x, float y, float w,
                                                    float h) JPDFIUM_NOEXCEPT;
 // Hard crop with a content-removal margin in PDF points. A non-negative margin

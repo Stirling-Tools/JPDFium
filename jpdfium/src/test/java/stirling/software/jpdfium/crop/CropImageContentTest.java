@@ -20,11 +20,11 @@ import stirling.software.jpdfium.transform.PdfPageGeometry;
 
 import java.awt.image.BufferedImage;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
@@ -224,19 +224,34 @@ class CropImageContentTest {
     }
 
     @Test
-    void twoLevelSandwichedImageFailsTheCrop() throws Exception {
+    void twoLevelSandwichedImageKeepsPaintOrder() throws Exception {
         // The inner form's siblings live in the outer form's space; they paint
         // inside the crop both before and after the image. Promotion would
-        // reorder them, so the crop must fail instead of guessing.
-        assertThrows(stirling.software.jpdfium.exception.RedactIncompleteException.class,
-                () -> crop(CropTestPdfGenerator.twoLevelSandwichedFormImagePdf(),
-                        new Rect(200, 50, 100, 50)));
+        // reorder them, so the whole form stays in place and the page boxes
+        // clip it instead.
+        byte[] output = crop(CropTestPdfGenerator.twoLevelSandwichedFormImagePdf(),
+                new Rect(200, 50, 100, 50));
+        BufferedImage page = render(output);
+        assertEquals(0x00FF00, pixelAt(page, output, 260, 75) & 0xFFFFFF,
+                "later form content must stay above the image");
     }
 
     @Test
-    void sandwichedFormImageFailsLoudlyInsteadOfHidingSiblings() throws Exception {
-        assertThrows(stirling.software.jpdfium.exception.RedactIncompleteException.class,
-                () -> crop(CropTestPdfGenerator.formSandwichedImagePdf(), KEEP_TOP));
+    void sandwichedFormImageKeepsPaintOrder() throws Exception {
+        byte[] output = crop(CropTestPdfGenerator.formSandwichedImagePdf(), KEEP_TOP);
+        BufferedImage page = render(output);
+        assertEquals(0x00FF00, pixelAt(page, output, 200, 220) & 0xFFFFFF,
+                "later form content must stay above the image");
+    }
+
+    @Test
+    void sharedStraddlingImageIsKeptWhole() throws Exception {
+        byte[] output = crop(CropTestPdfGenerator.sharedStraddlingImagePdf(), LEFT_HALF);
+        assertEquals(2, countImageDraws(output),
+                "both placements must still paint; neither may be dropped or erased");
+        BufferedImage bi = onlyImage(output);
+        assertPixelRows(bi, 0, 50, 0xFF0000, "shared bitmap top");
+        assertPixelRows(bi, 50, 100, 0x0000FF, "shared bitmap bottom");
     }
 
     // fast paths
@@ -246,8 +261,8 @@ class CropImageContentTest {
         byte[] input = CropTestPdfGenerator.twoToneImagePdf();
         byte[] before = pageContentStream(input);
         byte[] output = crop(input, new Rect(50, 50, 512, 692));
-        assertEquals(new String(before, java.nio.charset.StandardCharsets.ISO_8859_1),
-                new String(pageContentStream(output), java.nio.charset.StandardCharsets.ISO_8859_1),
+        assertEquals(new String(before, StandardCharsets.ISO_8859_1),
+                new String(pageContentStream(output), StandardCharsets.ISO_8859_1),
                 "a fully-inside image must not rewrite the content stream");
     }
 
