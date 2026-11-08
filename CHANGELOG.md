@@ -19,6 +19,15 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Added
 
+- Ebook/comic compression: `CompressOptions.maxImageEdgePx` downsamples images
+  by their longest pixel edge, which is the only size signal that works for
+  CBZ/CBR pages laid out as 1 image pixel = 1 PDF point (they report 72 DPI and
+  escaped the DPI threshold). The image pass now honours `convertPngToJpeg`,
+  downsamples with the Rust Lanczos3 kernel, and encodes JPEG through the
+  pure-Rust mozjpeg port (trellis quantisation, deringing, optimized Huffman
+  tables). On a 24-page 2550x3301 comic scan, 150 DPI / 1600 px / quality 65
+  reduced 14.8 MB to 1.8 MB; Ghostscript `/ebook` left the same file at
+  14.7 MB.
 - Native qpdf font-stream replacement. `PdfFontEmbedder.embed(...)` replaces
   `/FontFile2` or `/FontFile3` streams by exact `/BaseFont`, updating
   `/Length1`; Type 1 `/FontFile` streams are rejected. `PdfXOptions.fontData(...)`

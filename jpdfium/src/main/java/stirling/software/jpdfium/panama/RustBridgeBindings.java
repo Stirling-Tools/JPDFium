@@ -100,6 +100,13 @@ public final class RustBridgeBindings {
             FunctionDescriptor.of(JAVA_INT,
                     ADDRESS, JAVA_LONG, ADDRESS, ADDRESS, JAVA_INT));
 
+    /** {@code int32_t jpdfium_rust_encode_jpeg(pixels, len, w, h, components, quality, out, outLen)} */
+    static final MethodHandle RUST_ENCODE_JPEG = downcallOptional(
+            "jpdfium_rust_encode_jpeg",
+            FunctionDescriptor.of(JAVA_INT,
+                    ADDRESS, JAVA_LONG, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT,
+                    ADDRESS, ADDRESS));
+
     /** {@code void jpdfium_rust_free(uint8_t* ptr)} */
     static final MethodHandle RUST_FREE = downcallOptional(
             "jpdfium_rust_free",
@@ -197,6 +204,36 @@ public final class RustBridgeBindings {
                     srcW, srcH, components,
                     dstW, dstH,
                     outPtr, outLen);
+
+            if (rc != 0) {
+                return null;
+            }
+            return extractAndFree(outPtr, outLen);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /**
+     * Encode interleaved 8-bit gray ({@code components=1}) or RGB
+     * ({@code components=3}) pixels as a baseline JPEG with optimized Huffman
+     * tables and 4:2:0 chroma for RGB.
+     *
+     * @return JPEG bytes, or {@code null} if Rust is unavailable or encoding failed
+     */
+    public static byte[] rustEncodeJpeg(byte[] pixels, int width, int height,
+                                        int components, int quality) {
+        if (!AVAILABLE || RUST_ENCODE_JPEG == null || pixels == null || pixels.length == 0) {
+            return null;
+        }
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment inSeg = arena.allocateFrom(JAVA_BYTE, pixels);
+            MemorySegment outPtr = arena.allocate(ADDRESS);
+            MemorySegment outLen = arena.allocate(JAVA_LONG);
+
+            int rc = (int) RUST_ENCODE_JPEG.invokeExact(
+                    inSeg, (long) pixels.length, width, height, components,
+                    Math.max(1, Math.min(100, quality)), outPtr, outLen);
 
             if (rc != 0) {
                 return null;

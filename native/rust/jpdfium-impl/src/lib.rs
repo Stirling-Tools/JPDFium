@@ -22,6 +22,7 @@ thread_local! {
     /// Reused encoding buffer. JPEG output is copied into a libc allocation
     /// for the C ABI, but the scratch Vec keeps its capacity between images.
     static CMYK_JPEG_BUFFER: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+    static RGB_JPEG_BUFFER: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
 }
 
 use fast_image_resize as fir;
@@ -582,8 +583,105 @@ unsafe fn encode_cmyk_jpeg(
     JPDFIUM_OK
 }
 
-/// Whether this library was built with the Rust-powered features (always 1
-/// here; the C++ stub bridge answers 0 so callers can probe capability).
+/// Encode interleaved 8-bit gray (1 byte/px) or RGB (3 bytes/px) pixels as a
+/// baseline JPEG with optimized Huffman tables. RGB uses 4:2:0 chroma.
+///
+/// Optimized tables remove JPEG's fixed-table overhead (typically 5-10% of the
+/// stream) without touching the DCT coefficients, so this is a lossless size
+/// win over the ImageIO encoder for identical quality settings.
+///
+/// # Safety
+/// `pixels` must point to `pixels_len` readable bytes; the out pointers must be valid.
+#[no_mangle]
+pub unsafe extern "C" fn jpdfium_rust_encode_jpeg(
+    pixels: *const u8,
+    pixels_len: i64,
+    width: i32,
+    height: i32,
+    components: i32,
+    quality: i32,
+    out_ptr: *mut *mut u8,
+    out_len: *mut i64,
+) -> i32 {
+    if out_ptr.is_null() || out_len.is_null() {
+        return JPDFIUM_ERR_INVALID;
+    }
+    *out_ptr = std::ptr::null_mut();
+    *out_len = 0;
+
+    // Contain a panic so it cannot unwind across the C ABI boundary.
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        encode_jpeg(
+            pixels, pixels_len, width, height, components, quality, out_ptr, out_len,
+        )
+    }))
+    .unwrap_or(JPDFIUM_ERR_GENERIC)
+}
+
+/// Encoding body, separated so the exported wrapper can contain panics.
+///
+/// # Safety
+/// `pixels` must point to `pixels_len` readable bytes; the out pointers must be valid.
+unsafe fn encode_jpeg(
+    pixels: *const u8,
+    pixels_len: i64,
+    width: i32,
+    height: i32,
+    components: i32,
+    quality: i32,
+    out_ptr: *mut *mut u8,
+    out_len: *mut i64,
+) -> i32 {
+    let color = match components {
+        1 => jpeg_encoder::ColorType::Luma,
+        3 => jpeg_encoder::ColorType::Rgb,
+        _ => return JPDFIUM_ERR_INVALID,
+    };
+    if pixels.is_null() || width <= 0 || height <= 0 || width > 65535 || height > 65535 {
+        return JPDFIUM_ERR_INVALID;
+    }
+
+    let needed = width as usize * height as usize * components as usize;
+    if pixels_len < 0 || needed > pixels_len as usize {
+        return JPDFIUM_ERR_INVALID;
+    }
+
+    let data = slice::from_raw_parts(pixels, needed);
+    let quality = quality.clamp(1, 100) as u8;
+
+    let mut buffer = RGB_JPEG_BUFFER.with(|cell| std::mem::take(&mut *cell.borrow_mut()));
+    buffer.clear();
+    let mut encoder = jpeg_encoder::Encoder::new(&mut buffer, quality);
+    encoder.set_optimized_huffman_tables(true);
+    if components == 3 {
+        // Match the ImageIO/libjpeg default for color photography. 4:4:4 would
+        // grow files by ~15% for chroma detail the eye does not resolve.
+        encoder.set_sampling_factor(jpeg_encoder::SamplingFactor::F_2_2);
+    }
+    let encoded = encoder
+        .encode(data, width as u16, height as u16, color)
+        .is_ok();
+    if !encoded || buffer.is_empty() {
+        RGB_JPEG_BUFFER.with(|cell| *cell.borrow_mut() = buffer);
+        return JPDFIUM_ERR_GENERIC;
+    }
+
+    let ptr = malloc_copy(&buffer);
+    let len = buffer.len();
+    let capacity = buffer.capacity();
+    if capacity > 4 * 1024 * 1024 {
+        // A single huge JPEG must not pin its capacity to a long-lived worker.
+        RGB_JPEG_BUFFER.with(|cell| *cell.borrow_mut() = Vec::new());
+    } else {
+        RGB_JPEG_BUFFER.with(|cell| *cell.borrow_mut() = buffer);
+    }
+    if ptr.is_null() {
+        return JPDFIUM_ERR_GENERIC;
+    }
+    *out_ptr = ptr;
+    *out_len = len as i64;
+    JPDFIUM_OK
+}
 #[no_mangle]
 pub extern "C" fn jpdfium_has_rust() -> i32 {
     1

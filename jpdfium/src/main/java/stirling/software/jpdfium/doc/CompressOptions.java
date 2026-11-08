@@ -22,6 +22,7 @@ public final class CompressOptions {
 
     private final int imageQuality;       // JPEG quality 1-100, -1 = skip
     private final int maxImageDpi;        // max DPI for downsampling, -1 = skip
+    private final int maxImageEdgePx;     // longest image edge in pixels, 0 = skip
     private final boolean convertPngToJpeg;
     private final boolean optimizeStreams;
     private final boolean removeUnusedObjects;
@@ -35,6 +36,7 @@ public final class CompressOptions {
     private CompressOptions(Builder b) {
         this.imageQuality = b.imageQuality;
         this.maxImageDpi = b.maxImageDpi;
+        this.maxImageEdgePx = b.maxImageEdgePx;
         this.convertPngToJpeg = b.convertPngToJpeg;
         this.optimizeStreams = b.optimizeStreams;
         this.removeUnusedObjects = b.removeUnusedObjects;
@@ -48,6 +50,21 @@ public final class CompressOptions {
 
     public int imageQuality() { return imageQuality; }
     public int maxImageDpi() { return maxImageDpi; }
+    /**
+     * Longest allowed image edge in pixels. Images above it are downsampled
+     * regardless of their effective DPI, which is the only usable size signal
+     * for documents whose pages are sized 1 image pixel = 1 PDF point (comic
+     * archives and many image-only PDFs report 72 DPI on every page).
+     * {@code 0} disables the cap.
+     */
+    public int maxImageEdgePx() { return maxImageEdgePx; }
+    /**
+     * Whether 8-bit gray/RGB images stored with a non-JPEG filter are
+     * re-encoded as JPEG at {@link #imageQuality()}. Unlike earlier releases
+     * this is honoured: the option previously only gated whether the image
+     * pass ran. Requires {@code imageQuality > 0}; an image is only rewritten
+     * when the JPEG is smaller than its current encoded stream.
+     */
     public boolean convertPngToJpeg() { return convertPngToJpeg; }
     public boolean optimizeStreams() { return optimizeStreams; }
     public boolean removeUnusedObjects() { return removeUnusedObjects; }
@@ -103,6 +120,7 @@ public final class CompressOptions {
     public static final class Builder {
         private int imageQuality = -1;
         private int maxImageDpi = -1;
+        private int maxImageEdgePx;
         private boolean convertPngToJpeg;
         private boolean optimizeStreams = true;
         private boolean removeUnusedObjects = true;
@@ -119,7 +137,20 @@ public final class CompressOptions {
         public Builder imageQuality(int q) { this.imageQuality = q; return this; }
         /** Maximum image DPI. Images above this will be downsampled. -1 to skip. */
         public Builder maxImageDpi(int dpi) { this.maxImageDpi = dpi; return this; }
-        /** Convert non-transparent PNG images to JPEG. */
+        /**
+         * Longest allowed image edge in pixels; images above it are downsampled
+         * even when their effective DPI is below {@link #maxImageDpi(int)}.
+         * {@code 0} disables the cap.
+         */
+        public Builder maxImageEdgePx(int px) {
+            this.maxImageEdgePx = Math.max(0, px);
+            return this;
+        }
+        /**
+         * Re-encode 8-bit gray/RGB images that are not already JPEG as JPEG at
+         * {@link #imageQuality(int)}. Only applied when the result is smaller
+         * than the current encoded stream.
+         */
         public Builder convertPngToJpeg(boolean v) { this.convertPngToJpeg = v; return this; }
         /** Generate object streams and cross-reference streams (qpdf). */
         public Builder optimizeStreams(boolean v) { this.optimizeStreams = v; return this; }

@@ -118,6 +118,14 @@ JPDFIUM_EXPORT int32_t jpdfium_rust_encode_cmyk_jpeg(const uint8_t* cmyk, int64_
                                                      int32_t width, int32_t height, int32_t quality,
                                                      uint8_t** out_ptr, int64_t* out_len);
 
+// Encode interleaved 8-bit gray (components=1) or RGB (components=3) pixels as
+// a baseline JPEG with optimized Huffman tables and, for RGB, 4:2:0 chroma.
+// Optimized tables shrink the stream 5-10% without changing DCT coefficients.
+JPDFIUM_EXPORT int32_t jpdfium_rust_encode_jpeg(const uint8_t* pixels, int64_t pixels_len,
+                                                 int32_t width, int32_t height, int32_t components,
+                                                 int32_t quality, uint8_t** out_ptr,
+                                                 int64_t* out_len);
+
 // Free a buffer allocated by any jpdfium_rust_* function.
 //
 // Must be called to release memory returned in out_ptr by the Rust functions.

@@ -1,6 +1,7 @@
 package stirling.software.jpdfium.doc;
 
 import stirling.software.jpdfium.PdfDocument;
+import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.RustBridgeBindings;
 
@@ -24,8 +25,9 @@ import java.util.zip.Inflater;
  * <ol>
  *   <li><strong>Signed PDFs</strong>: documents containing digital signatures are
  *       returned byte-for-byte unchanged - any rewrite invalidates the signature.</li>
- *   <li><strong>Images</strong> (in-process): downsampling and recompression via
- *       {@link PdfImageOptimizer} (skipped for PDF/A documents)</li>
+ *   <li><strong>Images</strong> (in-process): downsampling by effective DPI or longest
+ *       pixel edge, and JPEG re-encoding via {@link PdfImageOptimizer} (skipped for
+ *       PDF/A documents)</li>
  *   <li><strong>qpdf</strong> (in-process FFM): structural optimization via object streams,
  *       cross-reference stream compression, and unreferenced object removal</li>
  *   <li><strong>PDFium</strong>: metadata stripping via {@link PdfSecurity}
@@ -249,7 +251,7 @@ public final class PdfCompressor {
         boolean preserve = pdfA || signed || mode == PreservationMode.EXACT;
         boolean wantImagePass = !preserve && mode.lossyAllowed()
                 && (opts.imageQuality() > 0 || opts.maxImageDpi() > 0
-                    || opts.convertPngToJpeg());
+                    || opts.maxImageEdgePx() > 0 || opts.convertPngToJpeg());
         boolean removeMetadata = opts.removeMetadata() && !preserve;
         if (wantImagePass && !PdfImageOptimizer.isSupported()) {
             warnings.add("image optimization was requested but is unavailable on this platform");
@@ -300,7 +302,9 @@ public final class PdfCompressor {
             byte[] preImage = baseBytes;
             int n = 0;
             try (PdfDocument working = PdfDocument.open(preImage)) {
-                n = PdfImageOptimizer.optimize(working, opts.maxImageDpi(), opts.imageQuality());
+                n = PdfImageOptimizer.optimize(
+                        working, opts.maxImageDpi(), opts.imageQuality(),
+                        opts.maxImageEdgePx(), opts.convertPngToJpeg());
                 if (n > 0) {
                     imagePostBytes = working.saveBytes();
                 }
@@ -311,6 +315,10 @@ public final class PdfCompressor {
                 n = 0;
             }
             if (n > 0) {
+                String constraints = "quality=" + opts.imageQuality()
+                        + (opts.maxImageDpi() > 0 ? ", max DPI=" + opts.maxImageDpi() : "")
+                        + (opts.maxImageEdgePx() > 0
+                                ? ", max edge=" + opts.maxImageEdgePx() + "px" : "");
                 // Only keep rewritten images when they actually shrink the file;
                 // an inflated image pass is dropped so it cannot throw away the
                 // savings the structural passes earned.
@@ -320,15 +328,15 @@ public final class PdfCompressor {
                     warnings.add("image pass discarded: rewritten images were not smaller");
                 } else if (!verify) {
                     imagesOptimized = n;
-                    actions.add("Native: optimized %d image(s) (max DPI=%d)".formatted(
-                            n, opts.maxImageDpi()));
+                    actions.add("Native: optimized %d image(s) (%s)"
+                            .formatted(n, constraints));
                 } else {
                     double mad = maxPreviewMeanAbsDiff(preImage, imagePostBytes, expectedPages);
                     if (mad <= mode.maxMeanAbsDiff()) {
                         imagesOptimized = n;
-                        actions.add(("Native: optimized %d image(s) (max DPI=%d, "
+                        actions.add(("Native: optimized %d image(s) (%s, "
                                 + "verified mean-abs-diff=%.2f)").formatted(
-                                        n, opts.maxImageDpi(), mad));
+                                        n, constraints, mad));
                     } else {
                         imageRollbackBytes = preImage;
                         imagePostBytes = null;
@@ -842,8 +850,9 @@ public final class PdfCompressor {
             }
             double max = 0.0;
             for (int i = 0; i < expectedPages; i++) {
+                int previewDpi = previewDpi(db, i);
                 double d = worstTileMeanAbsDiff(
-                        db.renderImage(i, PREVIEW_DPI), da.renderImage(i, PREVIEW_DPI));
+                        db.renderImage(i, previewDpi), da.renderImage(i, previewDpi));
                 if (d > max) {
                     max = d;
                 }
@@ -856,6 +865,25 @@ public final class PdfCompressor {
     }
 
     private static final int PREVIEW_DPI = 96;
+
+    // Preview resolution is capped so the comparison models a page fitted to a
+    // screen, not a printed page. Comic archives lay out one image pixel as one
+    // PDF point, so a 1600x2400 px page is 22x33 in and 96 DPI would render it
+    // at 3200 px tall: downsampling that is invisible on a 1200 px screen would
+    // otherwise fail the fidelity check and roll back the whole image pass.
+    private static final int PREVIEW_MAX_EDGE_PX = 1200;
+
+    private static int previewDpi(PdfDocument doc, int pageIndex) {
+        try (PdfPage page = doc.page(pageIndex)) {
+            float longEdgeInches = Math.max(page.size().width(), page.size().height()) / 72f;
+            if (longEdgeInches <= 0f) return PREVIEW_DPI;
+            int capped = Math.round(PREVIEW_MAX_EDGE_PX / longEdgeInches);
+            return Math.max(24, Math.min(PREVIEW_DPI, capped));
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            return PREVIEW_DPI;
+        }
+    }
 
     // Worst per-tile mean absolute difference over a page; a size mismatch fails
     // outright (falling back to the pre-image), never a merely large value.
