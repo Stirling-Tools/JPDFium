@@ -4,17 +4,24 @@ import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.exception.JPDFiumException;
 
 import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.cos.COSArray;
+import org.apache.pdfbox.cos.COSDictionary;
+import org.apache.pdfbox.cos.COSInteger;
 import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.common.PDStream;
 import org.apache.pdfbox.pdmodel.PDResources;
 import org.apache.pdfbox.pdmodel.font.PDFont;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 
 import java.io.ByteArrayOutputStream;
+import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -149,6 +156,86 @@ class PdfFontEmbedderTest {
                     () -> PdfFontEmbedder.embed(pdf, Map.of(name, font)),
                     "blank font name must be rejected before native work: '" + name + "'");
             assertTrue(failure.getMessage().contains("must not be empty"), failure.getMessage());
+        }
+    }
+
+    @Test
+    void fontNameWithNulIsRejected() {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
+        IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+                () -> PdfFontEmbedder.embed(new byte[] {1}, Map.of("Helvetica\0Other", new byte[] {1, 2, 3})));
+        assertTrue(failure.getMessage().contains("must not be empty"), failure.getMessage());
+    }
+
+    @Test
+    void equivalentCollectionEntriesDoNotConflict() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
+        byte[] input = Files.readAllBytes(Path.of(PdfFontEmbedderTest.class.getResource("/pdfs/general/minimal.pdf")
+                .toURI()));
+        ByteBuffer ttc = ByteBuffer.allocate(52)
+                .putInt(0x74746366).putInt(0x00010000).putInt(1).putInt(16)
+                .putInt(0x00010000).putShort((short) 1).putShort((short) 16).putShort((short) 0).putShort((short) 0)
+                .putInt(0x6E616D65).putInt(0).putInt(44).putInt(8)
+                .putShort((short) 0).putShort((short) 0).putShort((short) 6);
+        Map<String, byte[]> fonts = new LinkedHashMap<>();
+        fonts.put("Foo", ttc.array());
+        fonts.put("/Foo", ttc.array().clone());
+        JPDFiumException failure = assertThrows(JPDFiumException.class, () -> PdfFontEmbedder.embed(input, fonts));
+        assertTrue(failure.getMessage().contains("unusable"), failure.getMessage());
+    }
+
+    @Test
+    void fontsSharingADescriptorEachGetTheirOwnProgram() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
+        byte[] input;
+        try (PDDocument pdf = new PDDocument()) {
+            PDPage page = new PDPage();
+            pdf.addPage(page);
+            COSDictionary descriptor = new COSDictionary();
+            descriptor.setItem(COSName.TYPE, COSName.FONT_DESC);
+            descriptor.setName(COSName.FONT_NAME, "Helvetica");
+            descriptor.setInt(COSName.FLAGS, 32);
+            descriptor.setDirect(false);
+            COSDictionary fonts = new COSDictionary();
+            for (String key : new String[] {"F1", "F2"}) {
+                COSDictionary font = new COSDictionary();
+                font.setItem(COSName.TYPE, COSName.FONT);
+                font.setItem(COSName.SUBTYPE, COSName.TYPE1);
+                font.setName(COSName.BASE_FONT, "Helvetica");
+                font.setItem(COSName.FONT_DESC, descriptor);
+                if (key.equals("F2")) {
+                    COSDictionary encoding = new COSDictionary();
+                    COSArray differences = new COSArray();
+                    differences.add(COSInteger.get(65));
+                    differences.add(COSName.getPDFName("ccedilla"));
+                    encoding.setItem(COSName.DIFFERENCES, differences);
+                    font.setItem(COSName.ENCODING, encoding);
+                } else {
+                    font.setItem(COSName.ENCODING, COSName.WIN_ANSI_ENCODING);
+                }
+                fonts.setItem(key, font);
+            }
+            COSDictionary resources = new COSDictionary();
+            resources.setItem(COSName.FONT, fonts);
+            page.setResources(new PDResources(resources));
+            page.setContents(new PDStream(pdf, new java.io.ByteArrayInputStream(
+                    "BT /F1 12 Tf 40 700 Td (Hello) Tj /F2 12 Tf (A) Tj ET".getBytes(
+                            java.nio.charset.StandardCharsets.US_ASCII))));
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            pdf.save(out);
+            input = out.toByteArray();
+        }
+        PdfFontEmbedder.Result result = PdfFontEmbedder.embedMissing(input);
+        assumeTrue(result.embedded().contains("Helvetica"), "no Helvetica substitute installed");
+        try (PDDocument pdf = Loader.loadPDF(result.pdf())) {
+            PDResources resources = pdf.getPage(0).getResources();
+            COSDictionary first = resources.getFont(COSName.getPDFName("F1")).getFontDescriptor().getCOSObject();
+            COSDictionary second = resources.getFont(COSName.getPDFName("F2")).getFontDescriptor().getCOSObject();
+            assertTrue(first != second, "fonts with different encodings must not share a subset descriptor");
+            for (COSDictionary descriptor : List.of(first, second)) {
+                assertTrue(descriptor.containsKey(COSName.FONT_FILE2) || descriptor.containsKey(COSName.FONT_FILE3)
+                        || descriptor.containsKey(COSName.FONT_FILE), "each font carries a program");
+            }
         }
     }
 

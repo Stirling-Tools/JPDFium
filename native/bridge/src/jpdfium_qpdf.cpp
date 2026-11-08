@@ -1349,7 +1349,7 @@ std::map<FT_UInt, FT_ULong> unicodeByGlyph(FT_Face face, bool symbolic) {
     if (FT_Select_Charmap(face, FT_ENCODING_UNICODE)) return unicodeOf;
     FT_UInt gid = 0;
     for (FT_ULong u = FT_Get_First_Char(face, &gid); gid; u = FT_Get_Next_Char(face, u, &gid)) {
-        auto [it, fresh] = unicodeOf.try_emplace(gid, u);
+        auto it = unicodeOf.try_emplace(gid, u).first;
         if (unicodePreference(u, symbolic) > unicodePreference(it->second, symbolic))
             it->second = u;
     }
@@ -1535,7 +1535,7 @@ EmbedFontsResult embedFonts(std::span<const uint8_t> input, std::vector<FontSour
         int embedded = 0;
         bool openType = false;
         std::set<QPDFObjGen> seen;
-        std::map<QPDFObjGen, QPDFObjGen> descriptorTargets;
+        std::map<QPDFObjGen, QPDFObjGen> filledBy;
         for (auto& font : fonts) {
             if (font.isIndirect() && !seen.insert(font.getObjGen()).second) continue;
             auto descendants = font.getKey("/DescendantFonts");
@@ -1566,6 +1566,17 @@ EmbedFontsResult embedFonts(std::span<const uint8_t> input, std::vector<FontSour
                         "MacExpertEncoding fonts cannot be substituted safely: " + fontName, -4};
             }
             auto descriptor = target.getKey("/FontDescriptor");
+            if (descriptor.isIndirect()) {
+                auto owner = filledBy.find(descriptor.getObjGen());
+                if (owner != filledBy.end() && owner->second != target.getObjGen()) {
+                    descriptor = qpdf->makeIndirectObject(
+                        QPDFObjectHandle::newDictionary(descriptor.getDictAsMap()));
+                    for (char const* key : {"/FontFile", "/FontFile2", "/FontFile3"})
+                        descriptor.removeKey(key);
+                    descriptor.replaceKey("/FontName", target.getKey("/BaseFont"));
+                    target.replaceKey("/FontDescriptor", descriptor);
+                }
+            }
             bool hasProgram = descriptor.isDictionary() &&
                               (descriptor.hasKey("/FontFile") || descriptor.hasKey("/FontFile2") ||
                                descriptor.hasKey("/FontFile3"));
@@ -1578,14 +1589,9 @@ EmbedFontsResult embedFonts(std::span<const uint8_t> input, std::vector<FontSour
             if (!descriptor.isDictionary()) {
                 descriptor = newDescriptor(*qpdf, target, program.face, symbolic);
                 target.replaceKey("/FontDescriptor", descriptor);
-            } else if (descriptor.isIndirect()) {
-                auto identity = descriptor.getObjGen();
-                auto [it, fresh] = descriptorTargets.try_emplace(identity, target.getObjGen());
-                if (!fresh && it->second != target.getObjGen()) {
-                    descriptor = QPDFObjectHandle::newDictionary(descriptor.getDictAsMap());
-                    target.replaceKey("/FontDescriptor", descriptor);
-                }
             }
+            if (descriptor.isIndirect())
+                filledBy.try_emplace(descriptor.getObjGen(), target.getObjGen());
             if (!cid && !target.getKey("/Widths").isArray())
                 addWidths(target, program.face, symbolic);
             std::set<FT_UInt> glyphs;
@@ -1615,7 +1621,7 @@ EmbedFontsResult embedFonts(std::span<const uint8_t> input, std::vector<FontSour
                            wrapper.getDict().getKey("/Subtype").isNameAndEquals("/OpenType");
             auto kind = program.kind == ProgramKind::TrueType && wrapped ? ProgramKind::OpenType
                                                                          : program.kind;
-            bool glyf = kind == ProgramKind::TrueType;
+            bool glyf = program.kind == ProgramKind::TrueType;
             bool trueTypeFont = current == "/TrueType" || current == "/CIDFontType2";
             if (glyf != trueTypeFont) {
                 target.replaceKey("/Subtype", QPDFObjectHandle::newName(
