@@ -40,6 +40,9 @@ class FlattenVisualCorpusTest {
     private static final double ANNOTATION_MAE = 1.0d;
     private static final double FORM_MAE = 2.0d;
     private static final double RASTER_MAE = 1.0d;
+    // A populated all_form_fields page carries widget appearance streams whose
+    // anti-aliased glyph edges differ from the rasterized replacement.
+    private static final double FORM_RASTER_MAE = 2.0d;
     // The tile average is a coarse localization check; the per-channel maximum
     // below catches a fully lost thin stroke that a tile average can hide.
     private static final double ANNOTATION_TILE_MAE = 65.0d;
@@ -138,7 +141,9 @@ class FlattenVisualCorpusTest {
                             "full raster flatten must mark the document modified");
                     doc.save(output);
                 }
-                assertRenderPreserved(input, output, RASTER_MAE, name, false);
+                assertRenderPreserved(input, output,
+                        name.equals("all_form_fields.pdf") ? FORM_RASTER_MAE : RASTER_MAE,
+                        name, false);
             } finally {
                 Files.deleteIfExists(output);
             }
