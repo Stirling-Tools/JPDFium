@@ -67,10 +67,11 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Fixed
 
-- The bundled `JPDFiumCompactCmyk.icc` fallback now uses a denser 11-point
-  grid and an inverse GCR B2A table. RGB-to-CMYK output from the generic
-  profile is much closer to the source (mean RGB delta on the 64-patch audit
-  chart: 20.14 -> 13.93 under `pdftoppm`) and still matches the AToB table.
+- The bundled `JPDFiumCompactCmyk.icc` fallback now derives its A2B/B2A tables
+  from the CC0 CGATS001Compat profile, with an 11-point inverse B2A grid. On the
+  64-patch audit chart the no-Ghostscript mean RGB delta improves from 20.14 to
+  14.03 under `pdftoppm` and from 23.76 to 13.15 under PDFBox; the old
+  Ghostscript baselines are 13.43 and 11.66.
 
 - Word and regex redaction finds words PDFium reports hyphenated across a line
   break (`Trace-` / `Monkey`), and removes the hyphen with them; it previously

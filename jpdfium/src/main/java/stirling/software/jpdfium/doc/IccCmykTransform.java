@@ -88,6 +88,18 @@ final class IccCmykTransform {
      * PDFium's image rendering, then passed through the same LUT.
      */
     void toCmykFromIcc(byte[] sourceIcc, float[] components, int[] out) {
+        if (components.length == 4
+                && components[0] <= 0.001f
+                && components[1] <= 0.001f
+                && components[2] <= 0.001f) {
+            // A K-only source is already in the target ink space. Sending it
+            // through the profile inverse can turn it into four-colour black.
+            out[0] = 0;
+            out[1] = 0;
+            out[2] = 0;
+            out[3] = clamp255(components[3]);
+            return;
+        }
         ICC_ColorSpace source = staticSourceSpace(sourceIcc, components.length);
         float[] xyz = source.toCIEXYZ(components);
         if (components.length == 1 || components.length == 4) {
