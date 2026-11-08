@@ -1935,11 +1935,21 @@ if [ "$JPDFIUM_BUILD_MODE" = "static" ]; then
             MINGW*|MSYS*|CYGWIN*)
                 LLVM_LIB="${LLVM_BIN}/llvm-lib.exe"
                 [ -x "$LLVM_LIB" ] || LLVM_LIB="$(command -v llvm-lib)"
-                "$LLVM_LIB" "/out:${TARGET_DIR}/lib/${MAIN_LIB}" "${TARGET_DIR}/lib/${MAIN_LIB}" "${LIBCXX_OBJS[@]}"
+                "$LLVM_LIB" "-out:${TARGET_DIR}/lib/${MAIN_LIB}" "${TARGET_DIR}/lib/${MAIN_LIB}" "${LIBCXX_OBJS[@]}"
                 ;;
             *)
-                LLVM_AR="${LLVM_BIN}/llvm-ar"
-                [ -x "$LLVM_AR" ] || LLVM_AR="$(command -v llvm-ar || command -v ar)"
+                LLVM_AR=""
+                for candidate in "${LLVM_BIN}/llvm-ar" "$(command -v llvm-ar || true)" "$(command -v ar || true)"; do
+                    if [ -n "$candidate" ] && [ -x "$candidate" ] && "$candidate" --version >/dev/null 2>&1; then
+                        LLVM_AR="$candidate"
+                        break
+                    fi
+                done
+                if [ -z "$LLVM_AR" ]; then
+                    echo "  ERROR: no working archiver to append libc++ objects" >&2
+                    exit 1
+                fi
+                echo "  Appending libc++ objects with ${LLVM_AR}"
                 "$LLVM_AR" qcs "${TARGET_DIR}/lib/${MAIN_LIB}" "${LIBCXX_OBJS[@]}"
                 ;;
         esac
