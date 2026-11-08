@@ -291,8 +291,8 @@ void encodeBilevelJbig2(QPDF& pdf) {
                         return;
                     }
                 }
-                int width = dict.getKey("/Width").getIntValue();
-                int height = dict.getKey("/Height").getIntValue();
+                int width = static_cast<int>(dict.getKey("/Width").getIntValue());
+                int height = static_cast<int>(dict.getKey("/Height").getIntValue());
                 if (width <= 0 || height <= 0) return;
                 auto decoded = image.getStreamData(qpdf_dl_all);
                 if (!decoded) return;
@@ -382,8 +382,8 @@ void encodeBilevelImages(QPDF& pdf) {
                         return;
                     }
                 }
-                int width = dict.getKey("/Width").getIntValue();
-                int height = dict.getKey("/Height").getIntValue();
+                int width = static_cast<int>(dict.getKey("/Width").getIntValue());
+                int height = static_cast<int>(dict.getKey("/Height").getIntValue());
                 if (width <= 0 || height <= 0) return;
                 auto decoded = image.getStreamData(qpdf_dl_all);
                 if (!decoded) return;
