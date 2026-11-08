@@ -625,12 +625,14 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_force_version(const uint8_t* input, int64_t 
                                                   const char* version, uint8_t** output,
                                                   int64_t* outputLen);
 
-// Replace the stream behind a matching /BaseFont font descriptor.
+// Embed font programs into fonts whose /BaseFont matches names[i] exactly, in one pass.
+// onlyMissing leaves fonts that already carry a program untouched.
 // Caller frees *output with jpdfium_free_buffer.
-JPDFIUM_EXPORT int32_t jpdfium_qpdf_replace_font_stream(const uint8_t* input, int64_t inputLen,
-                                                        const char* baseFont,
-                                                        const uint8_t* fontData, int64_t fontLen,
-                                                        uint8_t** output, int64_t* outputLen);
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_embed_fonts(const uint8_t* input, int64_t inputLen,
+                                                int32_t count, const char* const* names,
+                                                const uint8_t* const* fonts,
+                                                const int64_t* fontLens, int32_t onlyMissing,
+                                                uint8_t** output, int64_t* outputLen);
 
 // In-process qpdf structural sanitization (FFM, no CLI).
 // Scrubs metadata/info/structure, JavaScript actions, embedded files, AcroForm
