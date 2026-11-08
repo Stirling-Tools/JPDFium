@@ -8,6 +8,8 @@ import stirling.software.jpdfium.redact.RedactionSession;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.util.HexFormat;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -26,6 +28,30 @@ class PdfLayerTest {
             assertEquals(90, doc.getPageRotation(0));
             assertTrue(doc.setPageRotation(2, 270));
             assertEquals(270, doc.getPageRotation(2));
+        }
+    }
+
+    @Test
+    void layerIdentityAndPromotedObjectCount(@TempDir Path tmp) throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real PDFium layer runtime");
+        Path base = tmp.resolve("identity.pdf");
+        byte[] baseBytes = SyntheticPdfFactory.createDiverse(2);
+        Files.write(base, baseBytes);
+        String expectedSha = HexFormat.of().formatHex(
+                MessageDigest.getInstance("SHA-256").digest(baseBytes));
+
+        try (PdfDocument layer = PdfDocument.openLayer(base, null)) {
+            assertEquals(expectedSha, layer.layerBaseSha256().orElseThrow());
+            assertEquals(0L, layer.layerPromotedObjectCount());
+            try (PdfPage page = layer.page(0)) {
+                PdfPageEditor.setRotation(page.rawHandle(), 1);
+            }
+            assertTrue(layer.layerPromotedObjectCount() > 0);
+        }
+
+        try (PdfDocument plain = PdfDocument.open(base)) {
+            assertTrue(plain.layerBaseSha256().isEmpty());
+            assertEquals(-1L, plain.layerPromotedObjectCount());
         }
     }
 

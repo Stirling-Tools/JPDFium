@@ -145,6 +145,8 @@ JPDFIUM_EXPORT int32_t jpdfium_layer_open(const char* base_path, const char* del
                                           int64_t* handle);
 JPDFIUM_EXPORT int32_t jpdfium_layer_save_delta(int64_t doc, const char* path, int32_t* changed);
 JPDFIUM_EXPORT int32_t jpdfium_layer_materialize(int64_t doc, const char* path);
+JPDFIUM_EXPORT int32_t jpdfium_layer_base_sha256(int64_t doc, uint8_t* out32);
+JPDFIUM_EXPORT int32_t jpdfium_layer_promoted_object_count(int64_t doc, int64_t* count);
 JPDFIUM_EXPORT int32_t jpdfium_doc_page_count(int64_t doc, int32_t* count);
 JPDFIUM_EXPORT int32_t jpdfium_doc_save(int64_t doc, const char* path);
 JPDFIUM_EXPORT int32_t jpdfium_doc_save_bytes(int64_t doc, uint8_t** data, int64_t* len);

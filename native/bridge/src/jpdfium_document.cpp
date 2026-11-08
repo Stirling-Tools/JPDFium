@@ -8,8 +8,10 @@
 #include <fpdf_save.h>
 #include <fpdfview.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cerrno>
+#include <climits>
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
@@ -39,12 +41,51 @@
 
 namespace {
 
+// A frozen base: small files stay in memory, large files are opened through
+// FPDF_FILEACCESS so many bases cost page cache, not document-sized heaps.
 struct LayerBaseEntry {
     EPDF_BASE_DOCUMENT base = nullptr;
     std::vector<uint8_t> bytes;
+    std::FILE* file = nullptr;
+    FPDF_FILEACCESS access{};
+    unsigned long long size = 0;
+    mutable std::mutex ioMutex;
 
     ~LayerBaseEntry() {
         if (base) EPDF_ReleaseBaseDocument(base);
+        if (file) std::fclose(file);
+    }
+
+    static int GetBlock(void* param, unsigned long position, unsigned char* buffer,
+                        unsigned long count) {
+        auto* self = static_cast<LayerBaseEntry*>(param);
+        if (!self || !self->file || !buffer) return 0;
+#if defined(_WIN32)
+        std::lock_guard<std::mutex> lock(self->ioMutex);
+        if (_fseeki64(self->file, static_cast<__int64>(position), SEEK_SET) != 0) return 0;
+        return std::fread(buffer, 1, count, self->file) == count;
+#else
+        const ssize_t got =
+            ::pread(::fileno(self->file), buffer, count, static_cast<off_t>(position));
+        return got == static_cast<ssize_t>(count);
+#endif
+    }
+
+    bool copyTo(std::FILE* out) {
+        if (!bytes.empty()) {
+            return std::fwrite(bytes.data(), 1, bytes.size(), out) == bytes.size();
+        }
+        std::vector<uint8_t> chunk(256 * 1024);
+        unsigned long long offset = 0;
+        while (offset < size) {
+            const auto count = static_cast<unsigned long>(
+                std::min<unsigned long long>(chunk.size(), size - offset));
+            if (!GetBlock(this, static_cast<unsigned long>(offset), chunk.data(), count))
+                return false;
+            if (std::fwrite(chunk.data(), 1, count, out) != count) return false;
+            offset += count;
+        }
+        return true;
     }
 };
 
@@ -80,26 +121,28 @@ CachedBase acquireLayerBase(const char* path) {
         }
     }
 
-    std::FILE* in = std::fopen(path, "rb");
-    if (!in) return {nullptr, JPDFIUM_ERR_IO};
-    if (std::fseek(in, 0, SEEK_END) != 0) {
-        std::fclose(in);
-        return {nullptr, JPDFIUM_ERR_IO};
-    }
-    long rawLen = std::ftell(in);
-    if (rawLen <= 0) {
-        std::fclose(in);
-        return {nullptr, JPDFIUM_ERR_INVALID};
-    }
-    std::rewind(in);
+    if (size > static_cast<unsigned long long>(ULONG_MAX)) return {nullptr, JPDFIUM_ERR_TOO_LARGE};
     auto entry = std::make_shared<LayerBaseEntry>();
-    entry->bytes.resize(static_cast<size_t>(rawLen));
-    if (std::fread(entry->bytes.data(), 1, entry->bytes.size(), in) != entry->bytes.size()) {
+    entry->size = size;
+    constexpr unsigned long long kInMemoryLimit = 8ull * 1024 * 1024;
+    if (size <= kInMemoryLimit) {
+        std::FILE* in = std::fopen(path, "rb");
+        if (!in) return {nullptr, JPDFIUM_ERR_IO};
+        entry->bytes.resize(static_cast<size_t>(size));
+        const bool read =
+            std::fread(entry->bytes.data(), 1, entry->bytes.size(), in) == entry->bytes.size();
         std::fclose(in);
-        return {nullptr, JPDFIUM_ERR_IO};
+        if (!read) return {nullptr, JPDFIUM_ERR_IO};
+        entry->base = EPDF_LoadMemBaseDocument64(entry->bytes.data(), entry->bytes.size(), nullptr);
+    } else {
+        std::FILE* in = std::fopen(path, "rb");
+        if (!in) return {nullptr, JPDFIUM_ERR_IO};
+        entry->file = in;
+        entry->access.m_FileLen = static_cast<unsigned long>(size);
+        entry->access.m_GetBlock = LayerBaseEntry::GetBlock;
+        entry->access.m_Param = entry.get();
+        entry->base = EPDF_LoadBaseDocument(&entry->access, nullptr);
     }
-    std::fclose(in);
-    entry->base = EPDF_LoadMemBaseDocument64(entry->bytes.data(), entry->bytes.size(), nullptr);
     if (!entry->base) return {nullptr, JPDFIUM_ERR_NATIVE};
 
     {
@@ -629,8 +672,6 @@ int32_t jpdfium_layer_open(const char* base_path, const char* delta_path, int64_
     auto w = std::make_unique<DocWrapper>();
     w->core = makeDocCore(layer);
     w->core->layerBase = base;
-    w->core->layerBaseBytes = cached.entry->bytes.data();
-    w->core->layerBaseLen = cached.entry->bytes.size();
     w->core->layerBaseOwner = cached.entry;
     auto* raw = w.release();
     DocHandleRegistry::instance().add(raw);
@@ -678,8 +719,8 @@ int32_t jpdfium_layer_materialize(int64_t doc, const char* path) {
     if (!w || !w->core || !w->core->layerBase || !path || !*path) return JPDFIUM_ERR_INVALID;
     std::FILE* out = std::fopen(path, "wb");
     if (!out) return JPDFIUM_ERR_IO;
-    bool ok = std::fwrite(w->core->layerBaseBytes, 1, w->core->layerBaseLen, out) ==
-              w->core->layerBaseLen;
+    auto* baseEntry = static_cast<LayerBaseEntry*>(w->core->layerBaseOwner.get());
+    bool ok = baseEntry && baseEntry->copyTo(out);
     FileWriteContext ctx;
     ctx.version = 1;
     ctx.WriteBlock = FileWriteContext::Write;
@@ -697,6 +738,22 @@ int32_t jpdfium_layer_materialize(int64_t doc, const char* path) {
         return status == EPDFLayerSaveStatus_kAppendOnlyOffsetTooLarge ? JPDFIUM_ERR_TOO_LARGE
                                                                        : JPDFIUM_ERR_IO;
     }
+    return JPDFIUM_OK;
+}
+
+int32_t jpdfium_layer_base_sha256(int64_t doc, uint8_t* out32) {
+    if (!out32) return JPDFIUM_ERR_INVALID;
+    DocWrapper* w = decodeDoc(doc);
+    if (!w || !w->core || !w->core->layerBase) return JPDFIUM_ERR_INVALID;
+    if (!EPDFLayer_GetBaseSha256(w->core->doc, out32)) return JPDFIUM_ERR_NATIVE;
+    return JPDFIUM_OK;
+}
+
+int32_t jpdfium_layer_promoted_object_count(int64_t doc, int64_t* count) {
+    if (!count) return JPDFIUM_ERR_INVALID;
+    DocWrapper* w = decodeDoc(doc);
+    if (!w || !w->core || !w->core->layerBase) return JPDFIUM_ERR_INVALID;
+    *count = static_cast<int64_t>(EPDFLayer_GetPromotedObjectCount(w->core->doc));
     return JPDFIUM_OK;
 }
 
@@ -956,102 +1013,44 @@ int32_t jpdfium_doc_save(int64_t doc, const char* path) {
 }
 
 int32_t jpdfium_doc_save_bytes(int64_t doc, uint8_t** data, int64_t* len) {
-    // Both outputs are required: every success path writes through them.
     if (!data || !len) return JPDFIUM_ERR_INVALID;
-    // Grows with realloc so the finished buffer IS the caller's buffer: the
-    // old vector-then-malloc+memcpy tail copied every byte twice. The pointer
-    // stays malloc-family owned, so jpdfium_free_buffer keeps working.
-    struct MallocWriter : FPDF_FILEWRITE {
-        uint8_t* buf = nullptr;
-        size_t size = 0;
-        size_t cap = 0;
+    DocWrapper* w = decodeDoc(doc);
+    if (!w || !w->core || !w->core->doc) return JPDFIUM_ERR_INVALID;
+    // Same contract as jpdfium_doc_save_to_file: a half-finished redaction is
+    // not savable, and that refusal wins over the pending-marks one.
+    if (w->core->hasIncompleteRedaction()) return JPDFIUM_ERR_REDACT_INCOMPLETE;
+    if (w->core->hasUnappliedRedactMarks()) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
+
+    struct BufWriter : FPDF_FILEWRITE {
+        std::vector<uint8_t> buf;
         static int Write(FPDF_FILEWRITE* self, const void* data, unsigned long size) {
-            auto* mw = static_cast<MallocWriter*>(self);
             if (size == 0) return 1;
-            // Same callback contract as FileWriteContext::Write: a null buffer
-            // with a non-zero size is a PDFium violation, not a memcpy source.
             if (!data) return 0;
-            const size_t need = mw->size + static_cast<size_t>(size);
-            if (need < mw->size) return 0;  // size_t wraparound
-            if (need > mw->cap) {
-                // One realloc per write: PDFium can hand the whole document to a
-                // single WriteBlock, and doubling in a loop would copy the
-                // growing prefix once per step. Geometric across writes, but a
-                // single large write jumps straight to what it needs.
-                size_t ncap = mw->cap ? mw->cap * 2 : 65536;
-                if (ncap < need) ncap = need;  // also recovers a wrapped cap*2
-                uint8_t* nbuf = static_cast<uint8_t*>(std::realloc(mw->buf, ncap));
-                if (!nbuf) return 0;
-                mw->buf = nbuf;
-                mw->cap = ncap;
+            auto* bw = static_cast<BufWriter*>(self);
+            try {
+                auto* src = static_cast<const uint8_t*>(data);
+                bw->buf.insert(bw->buf.end(), src, src + size);
+                return 1;
+            } catch (...) {
+                return 0;  // never let exceptions cross the C callback
             }
-            std::memcpy(mw->buf + mw->size, data, static_cast<size_t>(size));
-            mw->size = need;
-            return 1;
         }
-    } mw;
-    mw.version = 1;
-    mw.WriteBlock = MallocWriter::Write;
+    } bw;
+    bw.version = 1;
+    bw.WriteBlock = BufWriter::Write;
 
-    // The guard shim for this entry point is noexcept, so decodeDoc and the
-    // vector allocations below must not let an exception escape: the whole
-    // body runs inside this firewall so mw.buf is always released on failure.
-    try {
-        DocWrapper* w = decodeDoc(doc);
-        if (!w || !w->core || !w->core->doc) return JPDFIUM_ERR_INVALID;
-        // Same contract as jpdfium_doc_save_to_file: a half-finished redaction is
-        // not savable, and that refusal wins over the pending-marks one.
-        if (w->core->hasIncompleteRedaction()) return JPDFIUM_ERR_REDACT_INCOMPLETE;
-        if (w->core->hasUnappliedRedactMarks()) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
+    if (!FPDF_SaveAsCopy(w->core->doc, &bw, FPDF_NO_INCREMENTAL)) return JPDFIUM_ERR_IO;
 
-        if (!FPDF_SaveAsCopy(w->core->doc, &mw, FPDF_NO_INCREMENTAL)) {
-            std::free(mw.buf);
-            mw.buf = nullptr;
-            return JPDFIUM_ERR_IO;
-        }
+    int32_t sanitizeRc = applySaveStages(w, bw.buf);
+    if (sanitizeRc != JPDFIUM_OK) return sanitizeRc;
 
-        // The sanitize stage works on vectors and may replace the buffer, so only
-        // the sanitize and in-memory gray-compaction path funnels through one
-        // vector (same copies as before).
-        if (w->core->contentRedacted &&
-            (w->core->sanitizeOnSave || !w->core->erasedGrayImages.empty())) {
-            std::vector<uint8_t> vec(mw.buf, mw.buf + mw.size);
-            std::free(mw.buf);
-            mw.buf = nullptr;
-            int32_t sanitizeRc = applySaveStages(w, vec);
-            if (sanitizeRc != JPDFIUM_OK) return sanitizeRc;
-            size_t sz = vec.size();
-            // malloc(0) is permitted to return NULL, which is indistinguishable
-            // from an allocation failure; an empty save result is legitimate, so
-            // allocate one byte for it.
-            uint8_t* out = static_cast<uint8_t*>(std::malloc(sz ? sz : 1));
-            if (!out) return JPDFIUM_ERR_NATIVE;
-            if (sz) std::memcpy(out, vec.data(), sz);
-            *data = out;
-            *len = static_cast<int64_t>(sz);
-            return JPDFIUM_OK;
-        }
-
-        if (mw.size == 0) {
-            std::free(mw.buf);
-            mw.buf = nullptr;
-            uint8_t* out = static_cast<uint8_t*>(std::malloc(1));
-            if (!out) return JPDFIUM_ERR_NATIVE;
-            *data = out;
-            *len = 0;
-            return JPDFIUM_OK;
-        }
-        *data = mw.buf;
-        *len = static_cast<int64_t>(mw.size);
-        return JPDFIUM_OK;
-    } catch (...) {
-        // decodeDoc, hasUnappliedRedactMarks or a vector allocation can throw;
-        // the buffer from the partial save must not leak and this entry point
-        // must report instead of terminating.
-        std::free(mw.buf);
-        mw.buf = nullptr;
-        return JPDFIUM_ERR_NATIVE;
-    }
+    const size_t sz = bw.buf.size();
+    uint8_t* out = static_cast<uint8_t*>(std::malloc(sz ? sz : 1));
+    if (!out) return JPDFIUM_ERR_NATIVE;
+    if (sz) std::memcpy(out, bw.buf.data(), sz);
+    *data = out;
+    *len = static_cast<int64_t>(sz);
+    return JPDFIUM_OK;
 }
 
 void jpdfium_doc_close(int64_t doc) noexcept {

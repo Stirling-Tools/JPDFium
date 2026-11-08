@@ -29,7 +29,6 @@ import stirling.software.jpdfium.panama.EmbedPdfDocumentBindings;
 import stirling.software.jpdfium.panama.JpdfiumLib;
 import stirling.software.jpdfium.panama.FfmHelper;
 import stirling.software.jpdfium.panama.NativeRuntime;
-import stirling.software.jpdfium.panama.OutputTransaction;
 import stirling.software.jpdfium.panama.PageEditBindings;
 import stirling.software.jpdfium.panama.PdfiumRuntime;
 
@@ -47,9 +46,10 @@ import java.nio.channels.Channels;
 import java.nio.channels.WritableByteChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -99,6 +99,8 @@ public final class PdfDocument implements AutoCloseable {
      * and must never be reused verbatim by a save or split.
      */
     private volatile boolean encryptedSource;
+    /** Whether {@link #encryptedSource} has been determined for this document. */
+    private volatile boolean encryptionKnown;
 
     /**
      * Bumped by every successful content mutation: annotation flattening, cropping,
@@ -195,53 +197,25 @@ public final class PdfDocument implements AutoCloseable {
                 && contentGeneration.get() == 0
                 && structureEpoch.get() == 0
                 && !sanitizeOnSave
-                && !encryptedSource;
+                && !isEncryptedSource();
     }
 
-    /**
-     * True when serializing the live document would reproduce the bytes it was
-     * opened with. Opening a page does not change those bytes: every page
-     * mutation goes through {@link #markContentModified()} or a raw handle that
-     * marks the document, so page reads stay reusable.
-     */
-    private boolean isBytewiseUnchangedSinceOpen() {
-        return !contentModified
-                && contentGeneration.get() == 0
-                && structureEpoch.get() == 0
-                && !sanitizeOnSave
-                && !encryptedSource;
-    }
-
-    /** Source file whose bytes still match the open-time document, or null. */
-    private Path unchangedSourcePath() {
-        Path path = sourcePath;
-        if (path != null) return sourceFileUnchanged() ? path : null;
-        return ownedTempFile;
-    }
-
-    /**
-     * Open-time bytes for the unchanged-save fast path, or null when the
-     * document has no retained/readable source. A failed read falls back to
-     * native serialization rather than failing the save.
-     */
-    private byte[] unchangedBytesOrNull() {
-        byte[] retained = sourceBytes;
-        if (retained != null) return retained.clone();
-        Path path = unchangedSourcePath();
-        if (path == null) return null;
-        try {
-            return Files.readAllBytes(path);
-        } catch (IOException e) {
-            return null;
-        }
-    }
-
-    private static boolean isSameFile(Path a, Path b) {
-        try {
-            return b != null && Files.exists(b) && Files.isSameFile(a, b);
-        } catch (IOException e) {
+    /** Resolve the encryption flag on first use (open must not pay the probe). */
+    private boolean isEncryptedSource() {
+        if (encryptionKnown) return encryptedSource;
+        if (handle == 0L) {
+            // Lazy temp documents are produced by merge/split and are already
+            // decrypted; probing here would force the lazy native open.
+            encryptionKnown = true;
             return false;
         }
+        synchronized (this) {
+            if (!encryptionKnown) {
+                encryptedSource = securityHandlerRevision() > 0;
+                encryptionKnown = true;
+            }
+        }
+        return encryptedSource;
     }
 
     /**
@@ -346,9 +320,9 @@ public final class PdfDocument implements AutoCloseable {
         PdfDocument doc = new PdfDocument(JpdfiumLib.docOpen(abs.toString()));
         doc.sourcePath = abs;
         doc.recordSourceStamp(abs);
-        // A PDF can be encrypted with an empty user password; detecting that
-        // keeps the verbatim source-reuse fast path off such documents.
-        doc.encryptedSource = doc.securityHandlerRevision() > 0;
+        // Encryption is only needed to decide whether the verbatim source-reuse
+        // path is safe; defer the native security-handler probe until a save or
+        // split actually asks for that reuse.
         return doc;
     }
 
@@ -387,6 +361,7 @@ public final class PdfDocument implements AutoCloseable {
                 : new PdfDocument(JpdfiumLib.docOpenBytesProtected(data, password));
         doc.sourceBytes = data;
         doc.encryptedSource = !password.isEmpty();
+        doc.encryptionKnown = !password.isEmpty();
         return doc;
     }
 
@@ -466,7 +441,10 @@ public final class PdfDocument implements AutoCloseable {
                     ? JpdfiumLib.docOpen(spooled.toAbsolutePath().toString())
                     : JpdfiumLib.docOpenProtected(spooled.toAbsolutePath().toString(), password);
             PdfDocument doc = new PdfDocument(handle, spooled);
-            doc.encryptedSource = password != null || doc.securityHandlerRevision() > 0;
+            if (password != null) {
+                doc.encryptedSource = true;
+                doc.encryptionKnown = true;
+            }
             ok = true;
             return doc;
         } finally {
@@ -582,6 +560,37 @@ public final class PdfDocument implements AutoCloseable {
         }
     }
 
+    /** SHA-256 of the exact base bytes a layer was opened on, lower-case hex. */
+    public java.util.Optional<String> layerBaseSha256() {
+        ensureOpen();
+        if (!layerDocument) return java.util.Optional.empty();
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment out = arena.allocate(32);
+            int rc = (int) DocBindings.JPDFIUM_LAYER_BASE_SHA256.invokeExact(handle, out);
+            if (rc != 0) return java.util.Optional.empty();
+            return java.util.Optional.of(HexFormat.of().formatHex(
+                    out.toArray(ValueLayout.JAVA_BYTE)));
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw new JPDFiumException("layer base sha256 failed", t);
+        }
+    }
+
+    /** Committed objects in the layer overlay; -1 for a non-layer document. */
+    public long layerPromotedObjectCount() {
+        ensureOpen();
+        if (!layerDocument) return -1L;
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment out = arena.allocate(ValueLayout.JAVA_LONG);
+            int rc = (int) DocBindings.JPDFIUM_LAYER_PROMOTED_OBJECT_COUNT.invokeExact(handle, out);
+            if (rc != 0) return -1L;
+            return out.get(ValueLayout.JAVA_LONG, 0);
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw new JPDFiumException("layer promoted object count failed", t);
+        }
+    }
+
     /** Materialize base bytes followed by the current cumulative delta. */
     public void saveLayerMaterialized(Path destination) throws IOException {
         if (!layerDocument) throw new IllegalStateException("not a layer document");
@@ -684,6 +693,7 @@ public final class PdfDocument implements AutoCloseable {
         doc.sourcePath = abs;
         doc.recordSourceStamp(abs);
         doc.encryptedSource = true;
+        doc.encryptionKnown = true;
         return doc;
     }
 
@@ -698,8 +708,9 @@ public final class PdfDocument implements AutoCloseable {
      */
     private void recordSourceStamp(Path path) {
         try {
-            sourceSize = Files.size(path);
-            sourceMtime = Files.getLastModifiedTime(path).toMillis();
+            BasicFileAttributes attrs = Files.readAttributes(path, BasicFileAttributes.class);
+            sourceSize = attrs.size();
+            sourceMtime = attrs.lastModifiedTime().toMillis();
         } catch (IOException e) {
             sourceSize = -1L;
             sourceMtime = -1L;
@@ -1411,44 +1422,29 @@ public final class PdfDocument implements AutoCloseable {
         rejectLayerSave();
         if (destination == null) throw new IllegalArgumentException("destination must not be null");
         SaveOptions opts = options == null ? SaveOptions.fast() : options;
-        // An unchanged document still matches its open-time bytes, so publish
-        // those directly instead of paying a native re-serialization. A byte
-        // budget and reopen validation keep the native path, which owns those
-        // policies. A destination aliasing the source is also left to the
-        // native alias guard.
-        if (isBytewiseUnchangedSinceOpen() && !opts.verifyReopen()
-                && opts.maxOutputBytes() == 0) {
-            Path tmp = this.ownedTempFile;
-            if (tmp != null && !isSameFile(tmp, destination)) {
-                if (this.handle == 0L) {
-                    // Not open in PDFium yet: the temp file can be moved directly
-                    // onto the destination instead of copied. The move transfers
-                    // ownership, so clear ownedTempFile and remember where the
-                    // bytes now live in case a later call needs a native open.
-                    if (JpdfiumLib.moveOrCopyTempToDestination(tmp, destination, opts)) {
-                        this.sourcePath = destination.toAbsolutePath();
-                        this.ownedTempFile = null;
-                    }
-                } else {
-                    JpdfiumLib.copyFileToDestination(tmp, destination, opts);
+        // An untouched temp-owned document still matches its open-time file, so
+        // publish that file directly instead of paying a native re-serialization
+        // (and, for a lazy temp document, a native open at all).
+        Path tmp = this.ownedTempFile;
+        if (tmp != null && isUntouchedSinceOpen() && !opts.verifyReopen()) {
+            if (this.handle == 0L) {
+                // Not open in PDFium yet: the temp file can be moved directly
+                // onto the destination instead of copied. The move transfers
+                // ownership, so clear ownedTempFile and remember where the
+                // bytes now live in case a later call needs a native open.
+                if (JpdfiumLib.moveOrCopyTempToDestination(tmp, destination, opts)) {
+                    this.sourcePath = destination.toAbsolutePath();
+                    this.ownedTempFile = null;
                 }
                 return;
             }
-            Path src = this.sourcePath;
-            if (src != null && sourceFileUnchanged() && !isSameFile(src, destination)) {
-                JpdfiumLib.copyFileToDestination(src, destination, opts);
-                return;
-            }
-            byte[] retained = this.sourceBytes;
-            if (retained != null) {
-                try (OutputTransaction tx = OutputTransaction.begin(destination, opts.durable())) {
-                    Files.write(tx.staging(), retained);
-                    tx.publish(opts);
-                } catch (IOException e) {
-                    throw new JPDFiumException("save failed", e);
-                }
-                return;
-            }
+            JpdfiumLib.copyFileToDestination(tmp, destination, opts);
+            return;
+        }
+        if (tmp == null && this.handle == 0L && this.sourcePath != null
+                && isUntouchedSinceOpen() && !opts.verifyReopen()) {
+            JpdfiumLib.copyFileToDestination(this.sourcePath, destination, opts);
+            return;
         }
         // Staging, reopen validation, and publish all live in docSaveToFile
         // (via OutputTransaction.publish); duplicating the probe here would
@@ -1494,17 +1490,6 @@ public final class PdfDocument implements AutoCloseable {
         ensureOpen();
         rejectLayerSave();
         SaveOptions opts = options == null ? SaveOptions.fast() : options;
-        if (isBytewiseUnchangedSinceOpen() && !opts.verifyReopen()
-                && opts.maxOutputBytes() == 0) {
-            byte[] bytes = unchangedBytesOrNull();
-            if (bytes != null) {
-                ByteBuffer buffer = ByteBuffer.wrap(bytes);
-                while (buffer.hasRemaining()) {
-                    if (channel.write(buffer) == 0) Thread.onSpinWait();
-                }
-                return;
-            }
-        }
         JpdfiumLib.docSaveTo(ensureNativeHandle(), channel, opts);
     }
 
@@ -1563,24 +1548,6 @@ public final class PdfDocument implements AutoCloseable {
         ensureOpen();
         rejectLayerSave();
         SaveOptions opts = options == null ? SaveOptions.fast() : options;
-        if (isBytewiseUnchangedSinceOpen() && !opts.verifyReopen()
-                && opts.maxOutputBytes() == 0) {
-            Path src = unchangedSourcePath();
-            byte[] retained = this.sourceBytes;
-            if (src != null || retained != null) {
-                try {
-                    Path tmp = Files.createTempFile("jpdfium-save-", ".pdf");
-                    if (src != null) {
-                        Files.copy(src, tmp, StandardCopyOption.REPLACE_EXISTING);
-                    } else {
-                        Files.write(tmp, retained);
-                    }
-                    return tmp;
-                } catch (IOException e) {
-                    throw new JPDFiumException("saveToTempFile failed", e);
-                }
-            }
-        }
         return JpdfiumLib.docSaveToTempFile(ensureNativeHandle(), opts);
     }
 
@@ -1592,18 +1559,7 @@ public final class PdfDocument implements AutoCloseable {
     public byte[] saveBytes() {
         ensureOpen();
         rejectLayerSave();
-        if (isBytewiseUnchangedSinceOpen()) {
-            byte[] bytes = unchangedBytesOrNull();
-            if (bytes != null) {
-                long cap = JpdfiumLib.maxSaveResultBytes();
-                if (cap > 0 && bytes.length > cap) {
-                    throw new JPDFiumException("native docSaveBytes output " + bytes.length
-                            + " bytes exceeds jpdfium.maxSaveResultBytes=" + cap);
-                }
-                return bytes;
-            }
-        }
-        return saveBytesNative();
+        return JpdfiumLib.docSaveBytes(ensureNativeHandle());
     }
 
     /**

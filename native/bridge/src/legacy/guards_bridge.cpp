@@ -565,6 +565,17 @@ JPDF_API int32_t jpdf_guard_jpdfium_jpx_to_raw(const uint8_t* data, int64_t len,
     }
 }
 
+JPDF_API int32_t jpdf_guard_jpdfium_layer_base_sha256(int64_t doc, uint8_t* out32) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return jpdfium_layer_base_sha256(doc, out32);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
 JPDF_API int32_t jpdf_guard_jpdfium_layer_materialize(int64_t doc, const char* path) noexcept {
     jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
     if (!guard.admitted()) return {};
@@ -582,6 +593,18 @@ JPDF_API int32_t jpdf_guard_jpdfium_layer_open(const char* base_path, const char
     if (!guard.admitted()) return {};
     try {
         return jpdfium_layer_open(base_path, delta_path, handle);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
+JPDF_API int32_t jpdf_guard_jpdfium_layer_promoted_object_count(int64_t doc,
+                                                                int64_t* count) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return jpdfium_layer_promoted_object_count(doc, count);
     } catch (...) {
         jpdf::set_guard_refusal(JPDF_E_INTERNAL);
         return {};

@@ -139,7 +139,11 @@ final class FastKeywordIndex {
         for (int i = 0; i < len; ) {
             int codePoint = normalized.codePointAt(i);
             int folded = foldCodePoint(codePoint, caseSensitive);
-            sb.append(Character.toChars(folded));
+            if (folded <= 0xFFFF) {
+                sb.append((char) folded);
+            } else {
+                sb.append(Character.toChars(folded));
+            }
             i += Character.charCount(codePoint);
         }
         String key = collapseWhitespace(sb.toString());

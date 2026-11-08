@@ -494,6 +494,18 @@ int32_t jpdfium_doc_open_protected(const char* path, const char*, int64_t* handl
     return jpdfium_doc_open(path, handle);
 }
 
+int32_t jpdfium_layer_base_sha256(int64_t, uint8_t* out32) {
+    if (!out32) return JPDFIUM_ERR_INVALID;
+    std::memset(out32, 0, 32);
+    return JPDFIUM_ERR_NATIVE;
+}
+
+int32_t jpdfium_layer_promoted_object_count(int64_t, int64_t* count) {
+    if (!count) return JPDFIUM_ERR_INVALID;
+    *count = 0;
+    return JPDFIUM_OK;
+}
+
 int32_t jpdfium_doc_page_count(int64_t handle, int32_t* count) {
     if (!count) return JPDFIUM_ERR_INVALID;
     auto it = g_docs.find(handle);
