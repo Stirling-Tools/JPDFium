@@ -690,6 +690,12 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_pages_file(const char* in_path,
                                                        const int32_t* pageIndices,
                                                        int32_t pageCount, const char* out_path);
 
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_ranges_files(const char* in_path,
+                                                         const int32_t* firstPages,
+                                                         const int32_t* lastPages,
+                                                         int32_t rangeCount,
+                                                         const char* const* out_paths);
+
 // QPDF In-Process Encryption & Decryption
 #define JPDFIUM_PERM_PRINT_LOW 0x0004
 #define JPDFIUM_PERM_MODIFY 0x0008

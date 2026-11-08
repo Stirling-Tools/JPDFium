@@ -51,6 +51,11 @@ publishing workflows, not library releases, so they are not listed here.
 - `CompressOptions.ccittG4` (default on) re-encodes qualifying 1-bit
   DeviceGray images as CCITT Group 4 and adopts the stream only when smaller.
   A synthetic 2480x3508 bilevel bar scan went from 3,109 B to 1,690 B.
+- `PdfSplit.extractPageRangesToFiles` writes many page ranges of one file from a single qpdf
+  parse instead of one parse per range. Ranges qpdf cannot write, and `MEMORY` storage, go
+  through `extractPageRangeToFile` one at a time. 400 single-page parts of a 4.3 MB PDF take 0.12 s instead of
+  7.3 s, and 400 parts of a 28.7 MB PDF 0.5 s instead of 45 s. Parts match
+  `extractPageRangeToFile` page for page, form fields and page labels included.
 - Native qpdf font-stream replacement. `PdfFontEmbedder.embed(...)` replaces
   `/FontFile2` or `/FontFile3` streams by exact `/BaseFont`, updating
   `/Length1`; Type 1 `/FontFile` streams are rejected. `PdfXOptions.fontData(...)`
