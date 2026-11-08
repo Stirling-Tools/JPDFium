@@ -19,6 +19,7 @@ import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Semaphore;
@@ -318,6 +319,10 @@ public final class QpdfLib {
             "jpdfium_qpdf_extract_pages_file",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_INT, ADDRESS));
 
+    private static final MethodHandle EXTRACT_RANGES_FILES_HANDLE = Symbols.downcallOptionalUnguarded(
+            "jpdfium_qpdf_extract_ranges_files",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, JAVA_INT, ADDRESS));
+
     private static final MethodHandle SANITIZE_FILE_HANDLE = Symbols.downcallOptionalUnguarded(
             "jpdfium_qpdf_sanitize_file", FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_INT));
     private static final MethodHandle ENCRYPT_FILE_HANDLE = Symbols.downcallOptionalUnguarded(
@@ -340,6 +345,10 @@ public final class QpdfLib {
 
     public static boolean isExtractFileSupported() {
         return EXTRACT_PAGES_FILE_HANDLE != null;
+    }
+
+    public static boolean isExtractRangesFilesSupported() {
+        return EXTRACT_RANGES_FILES_HANDLE != null;
     }
 
     public static boolean isSanitizeFileSupported() {
@@ -1045,6 +1054,53 @@ public final class QpdfLib {
             throw new JPDFiumException("qpdf extract pages to file failed", t);
         } finally {
             deleteQuietly(staging);
+            releaseSlot(held);
+        }
+    }
+
+    public static int extractRangesToFiles(Path input, int[] firstPages, int[] lastPages,
+                                           List<Path> outputs, boolean durable) {
+        int count = outputs == null ? 0 : outputs.size();
+        if (EXTRACT_RANGES_FILES_HANDLE == null || input == null || count == 0
+                || firstPages == null || lastPages == null
+                || firstPages.length != count || lastPages.length != count) {
+            return -1;
+        }
+        Semaphore held;
+        try {
+            held = acquireSlot();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new JPDFiumException("qpdf extract interrupted while waiting for a job slot", e);
+        }
+        List<OutputTransaction> transactions = new ArrayList<>(count);
+        try (QpdfCall call = new QpdfCall()) {
+            MemorySegment paths = call.arena.allocate(ADDRESS, count);
+            for (int i = 0; i < count; i++) {
+                rejectAlias(List.of(input), outputs.get(i));
+                OutputTransaction tx = OutputTransaction.begin(outputs.get(i), durable);
+                transactions.add(tx);
+                paths.setAtIndex(ADDRESS, i, call.cString(tx.staging().toAbsolutePath().toString()));
+            }
+            int written = (int) EXTRACT_RANGES_FILES_HANDLE.invokeExact(
+                    call.cString(input.toAbsolutePath().toString()),
+                    call.copyInts(firstPages.clone()), call.copyInts(lastPages.clone()), count, paths);
+            for (int i = 0; i < written; i++) {
+                if (Thread.currentThread().isInterrupted()) {
+                    throw new IOException("qpdf extract interrupted before publication");
+                }
+                transactions.get(i).publish(SaveOptions.ephemeral());
+            }
+            return written;
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw new JPDFiumException("qpdf extract ranges to files failed", t);
+        } finally {
+            for (OutputTransaction tx : transactions) {
+                try {
+                    tx.close();
+                } catch (Exception _) {}
+            }
             releaseSlot(held);
         }
     }
