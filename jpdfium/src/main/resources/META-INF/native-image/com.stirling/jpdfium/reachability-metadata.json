@@ -1996,6 +1996,20 @@
           "jfloat",
           "jfloat"
         ]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": [
+          "void*",
+          "jlong",
+          "jint",
+          "void*",
+          "void*",
+          "void*",
+          "jint",
+          "void*",
+          "void*"
+        ]
       }
     ],
     "upcalls": [
