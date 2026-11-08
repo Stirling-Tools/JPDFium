@@ -21,14 +21,13 @@ import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 @EnabledIfSystemProperty(named = "jpdfium.integration", matches = "true")
 class PdfFontSubsetterTest {
 
     @Test
     void subsetsSuppliedFontProgramsAndPreservesText() throws Exception {
-        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
+        assertTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
         URL url = PdfFontSubsetterTest.class.getResource("/pdfs/general/basic-text.pdf");
         assertTrue(url != null, "basic-text.pdf fixture is missing");
         Path source = Path.of(url.toURI());

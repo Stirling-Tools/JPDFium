@@ -52,18 +52,28 @@ public final class PdfFontSubsetter {
         for (Map.Entry<String, Request> entry : fonts.entrySet()) {
             String baseFont = entry.getKey();
             Request request = entry.getValue();
-            if (baseFont == null || baseFont.isBlank() || request == null
+            String normalizedName = baseFont == null ? "" : baseFont.trim();
+            if (normalizedName.startsWith("/")) normalizedName = normalizedName.substring(1);
+            if (baseFont == null || normalizedName.isBlank() || request == null
                     || request.fontProgram() == null || request.fontProgram().length == 0
                     || request.codepoints() == null || request.codepoints().length == 0) {
                 throw new IllegalArgumentException(
                         "font name, program and codepoints must not be empty");
             }
-            byte[] subset = FontNormalizer.subset(
-                    request.fontProgram(), request.codepoints(), true);
+            byte[] subset;
+            try {
+                subset = FontNormalizer.subset(
+                        request.fontProgram(), request.codepoints(), true);
+            } catch (RuntimeException unsupportedFormat) {
+                // Type1/CFF programs that HarfBuzz cannot subset are left untouched.
+                continue;
+            }
             if (subset != null && subset.length < request.fontProgram().length) {
                 subsets.put(baseFont, subset);
             }
         }
-        return subsets.isEmpty() ? pdf : PdfFontEmbedder.replace(pdf, subsets);
+        if (subsets.isEmpty()) return pdf;
+        byte[] rewritten = PdfFontEmbedder.replace(pdf, subsets);
+        return rewritten.length <= pdf.length ? rewritten : pdf;
     }
 }

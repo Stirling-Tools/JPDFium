@@ -1425,7 +1425,7 @@ int32_t jpdfium_rust_encode_jbig2(const uint8_t*, int64_t, int32_t, int32_t, int
     if (page_len) *page_len = 0;
     if (globals_out) *globals_out = nullptr;
     if (globals_len) *globals_len = 0;
-    return JPDFIUM_ERR_NOT_FOUND;
+    return JPDFIUM_ERR_NATIVE;
 }
 
 void jpdfium_rust_free(uint8_t* p) {
