@@ -374,7 +374,8 @@ public final class PdfCompressor {
                             PdfOptimizer.DECODE_LEVEL_GENERALIZED)
                     : PdfOptimizer.optimize(resultBytes,
                             PdfOptimizer.RECOMPRESS_FLATE | PdfOptimizer.COMPRESS_STREAMS
-                                    | PdfOptimizer.DEDUPLICATE_IMAGES | PdfOptimizer.CCITT_G4,
+                                    | PdfOptimizer.DEDUPLICATE_IMAGES
+                                    | (opts.ccittG4() ? PdfOptimizer.CCITT_G4 : 0),
                             9,
                             PdfOptimizer.OBJECT_STREAMS_GENERATE,
                             PdfOptimizer.STREAM_DATA_COMPRESS,
@@ -394,7 +395,8 @@ public final class PdfCompressor {
             // some inputs (inflating streams instead of recompressing them).
             byte[] opt = PdfOptimizer.optimize(resultBytes,
                     PdfOptimizer.RECOMPRESS_FLATE | PdfOptimizer.COMPRESS_STREAMS
-                            | PdfOptimizer.DEDUPLICATE_IMAGES | PdfOptimizer.CCITT_G4, 9,
+                            | PdfOptimizer.DEDUPLICATE_IMAGES
+                                    | (opts.ccittG4() ? PdfOptimizer.CCITT_G4 : 0), 9,
                     PdfOptimizer.OBJECT_STREAMS_PRESERVE,
                     PdfOptimizer.STREAM_DATA_COMPRESS,
                     PdfOptimizer.DECODE_LEVEL_GENERALIZED);

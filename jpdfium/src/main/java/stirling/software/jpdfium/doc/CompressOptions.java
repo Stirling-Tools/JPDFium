@@ -25,6 +25,7 @@ public final class CompressOptions {
     private final int maxImageEdgePx;     // longest image edge in pixels, 0 = skip
     private final boolean convertPngToJpeg;
     private final boolean jpegProgressive;
+    private final boolean ccittG4;
     private final boolean optimizeStreams;
     private final boolean removeUnusedObjects;
     private final boolean removeMetadata;
@@ -40,6 +41,7 @@ public final class CompressOptions {
         this.maxImageEdgePx = b.maxImageEdgePx;
         this.convertPngToJpeg = b.convertPngToJpeg;
         this.jpegProgressive = b.jpegProgressive;
+        this.ccittG4 = b.ccittG4;
         this.optimizeStreams = b.optimizeStreams;
         this.removeUnusedObjects = b.removeUnusedObjects;
         this.removeMetadata = b.removeMetadata;
@@ -74,6 +76,8 @@ public final class CompressOptions {
      * compatibility.
      */
     public boolean jpegProgressive() { return jpegProgressive; }
+    /** Re-encode qualifying 1-bit DeviceGray images as CCITT G4 when smaller. */
+    public boolean ccittG4() { return ccittG4; }
     public boolean optimizeStreams() { return optimizeStreams; }
     public boolean removeUnusedObjects() { return removeUnusedObjects; }
     public boolean removeMetadata() { return removeMetadata; }
@@ -131,6 +135,7 @@ public final class CompressOptions {
         private int maxImageEdgePx;
         private boolean convertPngToJpeg;
         private boolean jpegProgressive;
+        private boolean ccittG4 = true;
         private boolean optimizeStreams = true;
         private boolean removeUnusedObjects = true;
         private boolean removeMetadata;
@@ -166,6 +171,8 @@ public final class CompressOptions {
          * {@code imageQuality > 0}; baseline remains the default.
          */
         public Builder jpegProgressive(boolean v) { this.jpegProgressive = v; return this; }
+        /** Disable CCITT G4 re-encoding for bilevel images. */
+        public Builder ccittG4(boolean v) { this.ccittG4 = v; return this; }
         /** Generate object streams and cross-reference streams (qpdf). */
         public Builder optimizeStreams(boolean v) { this.optimizeStreams = v; return this; }
         /** Remove unreferenced objects. */
