@@ -331,7 +331,7 @@ void appendLabel(std::vector<QPDFObjectHandle>& nums, long long outputIndex,
         QPDFObjectHandle previous = nums.back();
         bool continuesPrevious =
             previous.getKey("/S").unparse() == label.getKey("/S").unparse() &&
-            previous.getKey("/P").unparse() == label.getKey("/P").unparse() &&
+            previous.getKey("/P").unparseResolved() == label.getKey("/P").unparseResolved() &&
             previous.getKey("/St").isInteger() && label.getKey("/St").isInteger() &&
             label.getKey("/St").getIntValue() - previous.getKey("/St").getIntValue() ==
                 outputIndex - previousIndex.getIntValue();
@@ -545,6 +545,15 @@ void copyFieldsForPages(QPDF& dest, QPDF& source, std::set<QPDFObjGen> const& pa
     dest.getRoot().replaceKey("/AcroForm", dest.makeIndirectObject(form));
 }
 
+QPDFObjectHandle ownedLabel(QPDF& dest, QPDFObjectHandle label) {
+    QPDFObjectHandle owned = QPDFObjectHandle::newDictionary();
+    for (auto const& key : label.getKeys()) {
+        QPDFObjectHandle value = label.getKey(key);
+        owned.replaceKey(key, value.isIndirect() ? dest.copyForeignObject(value) : value);
+    }
+    return owned;
+}
+
 int writeRange(RangeSource& source, int32_t first, int32_t last, const char* out_path) {
     if (first < 0 || last < first || static_cast<size_t>(last) >= source.pages.size()) return -1;
     auto dest = QPDF::create();
@@ -575,7 +584,8 @@ int writeRange(RangeSource& source, int32_t first, int32_t last, const char* out
         }
         if (labelled) {
             long long outputIndex = index - first;
-            appendLabel(labelNums, outputIndex, labelFor(source.labels, index, outputIndex));
+            appendLabel(labelNums, outputIndex,
+                        ownedLabel(*dest, labelFor(source.labels, index, outputIndex)));
         }
     }
     if (labelled) {

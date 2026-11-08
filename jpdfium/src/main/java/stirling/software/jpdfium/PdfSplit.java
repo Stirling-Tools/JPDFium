@@ -5,7 +5,9 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
@@ -481,12 +483,13 @@ public final class PdfSplit {
             if (range == null || range.length != 2 || range[0] < 0 || range[1] < range[0]
                     || range[1] >= totalPages) {
                 throw new IllegalArgumentException("Invalid range %s for document with %d pages"
-                        .formatted(range == null ? "null" : java.util.Arrays.toString(range), totalPages));
+                        .formatted(range == null ? "null" : Arrays.toString(range), totalPages));
             }
             if (outputs.get(i) == null) throw new IllegalArgumentException("output must not be null");
             firstPages[i] = range[0];
             lastPages[i] = range[1];
         }
+        rejectSharedOutputs(input, outputs);
         int written = 0;
         if (options.mode() != StorageOptions.Mode.MEMORY && QpdfLib.isExtractRangesFilesSupported()) {
             written = Math.max(0, QpdfLib.extractRangesToFiles(
@@ -494,6 +497,21 @@ public final class PdfSplit {
         }
         for (int i = written; i < ranges.size(); i++) {
             extractPageRangeToFile(input, firstPages[i], lastPages[i], outputs.get(i), options);
+        }
+    }
+
+    private static void rejectSharedOutputs(Path input, List<Path> outputs) throws IOException {
+        Path source = input.toAbsolutePath().normalize();
+        Set<Path> seen = new HashSet<>();
+        for (Path output : outputs) {
+            Path target = output.toAbsolutePath().normalize();
+            if (target.equals(source) || (Files.exists(target) && Files.isSameFile(source, target))) {
+                throw new IllegalArgumentException("output must not be the input: " + output);
+            }
+            Path resolved = Files.exists(target) ? target.toRealPath() : target;
+            if (!seen.add(resolved)) {
+                throw new IllegalArgumentException("each range needs its own output: " + output);
+            }
         }
     }
 

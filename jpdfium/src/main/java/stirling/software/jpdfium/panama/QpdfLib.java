@@ -1086,6 +1086,9 @@ public final class QpdfLib {
                     call.cString(input.toAbsolutePath().toString()),
                     call.copyInts(firstPages.clone()), call.copyInts(lastPages.clone()), count, paths);
             for (int i = 0; i < written; i++) {
+                if (Thread.currentThread().isInterrupted()) {
+                    throw new IOException("qpdf extract interrupted before publication");
+                }
                 transactions.get(i).publish(SaveOptions.ephemeral());
             }
             return written;

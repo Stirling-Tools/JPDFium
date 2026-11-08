@@ -19,8 +19,9 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Added
 
-- `PdfSplit.extractPageRangesToFiles` writes many page ranges of one file, reading it once
-  instead of once per range. 400 single-page parts of a 4.3 MB PDF take 0.12 s instead of
+- `PdfSplit.extractPageRangesToFiles` writes many page ranges of one file from a single qpdf
+  parse instead of one parse per range. Ranges qpdf cannot write, and `MEMORY` storage, go
+  through `extractPageRangeToFile` one at a time. 400 single-page parts of a 4.3 MB PDF take 0.12 s instead of
   7.3 s, and 400 parts of a 28.7 MB PDF 0.5 s instead of 45 s. Parts match
   `extractPageRangeToFile` page for page, form fields and page labels included.
 - Native qpdf font-stream replacement. `PdfFontEmbedder.embed(...)` replaces
