@@ -300,10 +300,11 @@ struct RustBuffer {
 void encodeBilevelJbig2(QPDF& pdf) {
     QPDFPageDocumentHelper helper{pdf};
     std::map<std::string, QPDFObjectHandle> replacements;
+    std::set<std::string> attempted;
     for (auto& page : helper.getAllPages()) {
-        page.forEachImage(true, [&pdf, &replacements](QPDFObjectHandle& image,
-                                                      QPDFObjectHandle& resources,
-                                                      std::string const& key) {
+        page.forEachImage(true, [&pdf, &replacements, &attempted](QPDFObjectHandle& image,
+                                                                  QPDFObjectHandle& resources,
+                                                                  std::string const& key) {
             try {
                 auto dict = image.getDict();
                 if (hasFilter(dict, "/JBIG2Decode") || hasFilter(dict, "/DCTDecode") ||
@@ -347,6 +348,7 @@ void encodeBilevelJbig2(QPDF& pdf) {
                         resources.replaceKey(key, cached->second);
                         return;
                     }
+                    if (!attempted.insert(objectKey).second) return;
                 }
                 auto decoded = image.getStreamData(qpdf_dl_all);
                 if (!decoded) return;
@@ -402,10 +404,11 @@ void encodeBilevelJbig2(QPDF& pdf) {
 void encodeBilevelImages(QPDF& pdf) {
     QPDFPageDocumentHelper helper{pdf};
     std::map<std::string, QPDFObjectHandle> replacements;
+    std::set<std::string> attempted;
     for (auto& page : helper.getAllPages()) {
-        page.forEachImage(true, [&pdf, &replacements](QPDFObjectHandle& image,
-                                                      QPDFObjectHandle& resources,
-                                                      std::string const& key) {
+        page.forEachImage(true, [&pdf, &replacements, &attempted](QPDFObjectHandle& image,
+                                                                  QPDFObjectHandle& resources,
+                                                                  std::string const& key) {
             try {
                 auto dict = image.getDict();
                 if (hasFilter(dict, "/JBIG2Decode") || hasFilter(dict, "/DCTDecode") ||
@@ -449,6 +452,7 @@ void encodeBilevelImages(QPDF& pdf) {
                         resources.replaceKey(key, cached->second);
                         return;
                     }
+                    if (!attempted.insert(objectKey).second) return;
                 }
                 auto decoded = image.getStreamData(qpdf_dl_all);
                 if (!decoded) return;
