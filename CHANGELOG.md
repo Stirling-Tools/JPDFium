@@ -19,6 +19,10 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Added
 
+- `PdfShadingConverter` rewrites simple `/DeviceRGB` axial and radial
+  shadings whose Type 2 function carries `/C0` and `/C1` arrays to
+  `/DeviceCMYK`. Shadings sampled or expressed as other function types are
+  left unchanged.
 - Native qpdf font-stream replacement. `PdfFontEmbedder.embed(...)` replaces
   `/FontFile2` or `/FontFile3` streams by exact `/BaseFont`, updating
   `/Length1`; Type 1 `/FontFile` streams are rejected. `PdfXOptions.fontData(...)`

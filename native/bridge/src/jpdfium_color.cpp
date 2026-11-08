@@ -1,6 +1,7 @@
 // jpdfium_color.cpp - DeviceCMYK pipeline: CMYK JPEG images and OutputIntent ICC.
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -75,6 +76,55 @@ void RgbToCmyk(uint8_t r, uint8_t g, uint8_t b, bool extract_black, uint8_t* out
     out[2] = y;
     out[3] = k;
 }
+
+#ifdef JPDFIUM_HAS_QPDF
+QPDFObjectHandle ConvertRgbArrayToCmyk(QPDFObjectHandle rgb) {
+    if (!rgb.isArray() || rgb.getArrayNItems() != 3) return QPDFObjectHandle::newNull();
+    double r = std::clamp(rgb.getArrayItem(0).getNumericValue(), 0.0, 1.0);
+    double g = std::clamp(rgb.getArrayItem(1).getNumericValue(), 0.0, 1.0);
+    double b = std::clamp(rgb.getArrayItem(2).getNumericValue(), 0.0, 1.0);
+    uint8_t cmyk[4];
+    RgbToCmyk(static_cast<uint8_t>(std::lround(r * 255.0)),
+              static_cast<uint8_t>(std::lround(g * 255.0)),
+              static_cast<uint8_t>(std::lround(b * 255.0)), true, cmyk);
+    QPDFObjectHandle out = QPDFObjectHandle::newArray();
+    for (uint8_t value : cmyk) {
+        out.appendItem(QPDFObjectHandle::newReal(static_cast<double>(value) / 255.0));
+    }
+    return out;
+}
+
+bool ConvertShadingFunctionToCmyk(QPDFObjectHandle function) {
+    if (!function.isDictionary()) return false;
+    QPDFObjectHandle type = function.getKey("/FunctionType");
+    if (!type.isInteger() || type.getIntValue() != 2) return false;
+    QPDFObjectHandle c0 = function.getKey("/C0");
+    QPDFObjectHandle c1 = function.getKey("/C1");
+    if (!c0.isArray() || !c1.isArray() || c0.getArrayNItems() != 3 || c1.getArrayNItems() != 3) {
+        return false;
+    }
+    function.replaceKey("/C0", ConvertRgbArrayToCmyk(c0));
+    function.replaceKey("/C1", ConvertRgbArrayToCmyk(c1));
+    return true;
+}
+
+// Rewrites the simple /DeviceRGB axial/radial shadings whose Type 2 function
+// carries RGB /C0 and /C1 arrays. Other shading functions are left untouched.
+int32_t ConvertDocumentShadingsToCmyk(QPDF& pdf) {
+    int32_t converted = 0;
+    for (QPDFObjectHandle object : pdf.getAllObjects()) {
+        if (!object.isDictionary()) continue;
+        QPDFObjectHandle shadingType = object.getKey("/ShadingType");
+        if (!shadingType.isInteger()) continue;
+        QPDFObjectHandle colorSpace = object.getKey("/ColorSpace");
+        if (!colorSpace.isName() || colorSpace.getName() != "/DeviceRGB") continue;
+        if (!ConvertShadingFunctionToCmyk(object.getKey("/Function"))) continue;
+        object.replaceKey("/ColorSpace", QPDFObjectHandle::newName("/DeviceCMYK"));
+        converted++;
+    }
+    return converted;
+}
+#endif
 
 void GrayToCmyk(uint8_t v, bool extract_black, uint8_t* out) {
     if (extract_black) {
@@ -1164,6 +1214,46 @@ std::shared_ptr<Buffer> InjectPdfx(const uint8_t* input, size_t input_len, const
 }  // namespace
 
 extern "C" {
+
+JPDFIUM_EXPORT int32_t jpdfium_color_shadings_to_cmyk(const uint8_t* input, int64_t input_len,
+                                                      uint8_t** output, int64_t* output_len) {
+    if (output) *output = nullptr;
+    if (output_len) *output_len = 0;
+    try {
+#ifndef JPDFIUM_HAS_QPDF
+        (void)input;
+        (void)input_len;
+        return JPDFIUM_ERR_NOT_FOUND;
+#else
+        if (!input || input_len <= 0 || !output || !output_len) return JPDFIUM_ERR_INVALID;
+        auto qpdf = QPDF::create();
+        qpdf->processMemoryFile("jpdfium-shading-input", reinterpret_cast<const char*>(input),
+                                input_len);
+        if (ConvertDocumentShadingsToCmyk(*qpdf) == 0) return JPDFIUM_OK;
+
+        QPDFWriter writer{*qpdf};
+        writer.setOutputMemory();
+        jpdfium_qpdf_internal::WriterLock lock{-1};
+        writer.write();
+        std::shared_ptr<Buffer> buffer = writer.getBufferSharedPointer();
+        if (!buffer || buffer->getSize() == 0) return JPDFIUM_ERR_NATIVE;
+        const int64_t length = static_cast<int64_t>(buffer->getSize());
+        auto* copy = static_cast<uint8_t*>(std::malloc(static_cast<size_t>(length)));
+        if (!copy) return JPDFIUM_ERR_NATIVE;
+        std::memcpy(copy, buffer->getBuffer(), static_cast<size_t>(length));
+        *output = copy;
+        *output_len = length;
+        return JPDFIUM_OK;
+#endif
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "jpdfium color shadings: %s\n", e.what());
+        if (output) *output = nullptr;
+        if (output_len) *output_len = 0;
+        return JPDFIUM_ERR_NATIVE;
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
+    }
+}
 
 JPDFIUM_EXPORT uint32_t jpdfium_color_capabilities(void) JPDFIUM_NOEXCEPT {
     uint32_t caps = 0;

@@ -112,6 +112,10 @@ public final class QpdfLib {
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS, ADDRESS, JAVA_LONG,
                     ADDRESS, ADDRESS));
 
+    private static final MethodHandle SHADINGS_TO_CMYK_HANDLE = Symbols.downcallOptionalUnguarded(
+            "jpdfium_color_shadings_to_cmyk",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS, ADDRESS));
+
     /** True when this native build exposes qpdf font-stream replacement. */
     public static boolean isFontReplacementSupported() {
         return REPLACE_FONT_STREAM_HANDLE != null;
@@ -159,6 +163,40 @@ public final class QpdfLib {
             NativeRuntime.rethrowFatal(t);
             if (t instanceof JPDFiumException jpe) throw jpe;
             throw new JPDFiumException("qpdf font stream replacement failed", t);
+        } finally {
+            releaseSlot(held);
+        }
+    }
+
+    /** True when the native build can rewrite simple RGB shadings to CMYK. */
+    public static boolean isShadingConversionSupported() {
+        return SHADINGS_TO_CMYK_HANDLE != null;
+    }
+
+    /**
+     * Rewrite simple Type 2 /DeviceRGB shadings to /DeviceCMYK. Returns the
+     * rewritten PDF, or {@code null} when the document has no convertible
+     * shading or the native build lacks support.
+     */
+    public static byte[] shadingsToCmyk(byte[] input) {
+        if (input == null || input.length == 0 || SHADINGS_TO_CMYK_HANDLE == null) {
+            return null;
+        }
+        Semaphore held = acquireSlotOrThrow("shading conversion");
+        try (QpdfCall call = new QpdfCall()) {
+            int rc = (int) SHADINGS_TO_CMYK_HANDLE.invokeExact(
+                    call.copyBytes(input), (long) input.length, call.outPtr, call.outLen);
+            if (rc == JpdfiumLib.ERR_NOT_FOUND) {
+                return null;
+            }
+            if (rc != 0) {
+                throw new JPDFiumException("qpdf shading conversion failed (rc=" + rc + ")");
+            }
+            return call.copyAndFree("qpdfShadingsToCmyk");
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            if (t instanceof JPDFiumException jpe) throw jpe;
+            throw new JPDFiumException("qpdf shading conversion failed", t);
         } finally {
             releaseSlot(held);
         }

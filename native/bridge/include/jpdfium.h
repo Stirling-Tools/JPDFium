@@ -824,6 +824,12 @@ JPDFIUM_EXPORT int32_t jpdfium_doc_add_image_page(int64_t doc_handle, const uint
 #define JPDFIUM_COLOR_IMAGE_STRICT (0x02)            // fail on the first unconvertible image
 #define JPDFIUM_COLOR_IMAGE_CONVERT_LOSSLESS (0x04)  // convert Flate/other lossless sources
 
+// Rewrites simple /DeviceRGB shadings (Type 2 function with /C0 and /C1
+// arrays) to /DeviceCMYK. Returns JPDFIUM_OK with a null output when no
+// convertible shading exists; the caller keeps the original bytes.
+JPDFIUM_EXPORT int32_t jpdfium_color_shadings_to_cmyk(const uint8_t* input, int64_t input_len,
+                                                      uint8_t** output, int64_t* output_len);
+
 // Probe which CMYK conversion paths this build supports.
 JPDFIUM_EXPORT uint32_t jpdfium_color_capabilities(void) JPDFIUM_NOEXCEPT;
 
