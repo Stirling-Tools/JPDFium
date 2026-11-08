@@ -3,10 +3,15 @@ package stirling.software.jpdfium.doc;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -14,7 +19,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
@@ -77,7 +81,16 @@ public final class PdfFontEmbedder {
                     System.getenv("LOCALAPPDATA") == null ? null
                             : System.getenv("LOCALAPPDATA") + "\\Microsoft\\Windows\\Fonts")
             .filter(Objects::nonNull).map(Path::of).toList();
-    private static final Map<List<Path>, Map<String, Face>> INDEXES = new ConcurrentHashMap<>();
+    private static final int MAX_INDEXES = 16;
+    private static final Map<List<Path>, Map<String, Face>> INDEXES =
+            Collections.synchronizedMap(
+                    new LinkedHashMap<>(MAX_INDEXES, 0.75f, true) {
+                        @Override
+                        protected boolean removeEldestEntry(
+                                Map.Entry<List<Path>, Map<String, Face>> eldest) {
+                            return size() > MAX_INDEXES;
+                        }
+                    });
 
     private PdfFontEmbedder() {}
 
@@ -99,7 +112,7 @@ public final class PdfFontEmbedder {
         for (var entry : fonts.entrySet()) {
             String name = entry.getKey() == null ? "" : entry.getKey().trim().replaceFirst("^/", "");
             byte[] data = entry.getValue();
-            if (name.isBlank() || data == null || data.length == 0) {
+            if (name.isBlank() || name.indexOf('\0') >= 0 || data == null || data.length == 0) {
                 throw new IllegalArgumentException("font name and data must not be empty");
             }
             byte[] previous = normalized.putIfAbsent(name, data);
@@ -194,12 +207,30 @@ public final class PdfFontEmbedder {
         Map<String, Face> index = new HashMap<>();
         for (Path dir : dirs) {
             if (!Files.isDirectory(dir)) continue;
-            try (Stream<Path> files = Files.walk(dir)) {
-                files.filter(p -> p.getFileName().toString().toLowerCase(Locale.ROOT)
-                                .matches(".*\\.(ttf|otf|ttc|otc|pfb|pfa|t1)"))
-                        .sorted().forEach(p -> indexFile(p, index));
+            List<Path> files = new ArrayList<>();
+            try {
+                Files.walkFileTree(
+                        dir,
+                        new SimpleFileVisitor<>() {
+                            @Override
+                            public FileVisitResult visitFile(
+                                    Path file, BasicFileAttributes attrs) {
+                                String name = file.getFileName().toString().toLowerCase(Locale.ROOT);
+                                if (attrs.isRegularFile()
+                                        && name.matches(".*\\.(ttf|otf|ttc|otc|pfb|pfa|t1)")) {
+                                    files.add(file);
+                                }
+                                return FileVisitResult.CONTINUE;
+                            }
+
+                            @Override
+                            public FileVisitResult visitFileFailed(Path file, IOException exc) {
+                                return FileVisitResult.CONTINUE;
+                            }
+                        });
             } catch (IOException | RuntimeException ignored) {
             }
+            for (Path file : files.stream().sorted().toList()) indexFile(file, index);
         }
         return index;
     }
@@ -229,7 +260,12 @@ public final class PdfFontEmbedder {
     private static boolean restricted(ByteBuffer b, int face) {
         for (int i = 0, n = b.getShort(face + 4) & 0xFFFF; i < n; i++) {
             int record = face + 12 + 16 * i;
-            if (b.getInt(record) == 0x4F532F32) return (b.getShort(b.getInt(record + 8) + 8) & 0xF) == 2;
+            if (b.getInt(record) == 0x4F532F32) {
+                int fsType = b.getShort(b.getInt(record + 8) + 8) & 0xFFFF;
+                // Restricted-license embedding and bitmap-only embedding are both unusable
+                // for a program substitution that must keep outlines.
+                return (fsType & 0xF) == 2 || (fsType & 0x0200) != 0;
+            }
         }
         return false;
     }
@@ -247,7 +283,12 @@ public final class PdfFontEmbedder {
                 if (id != 6 && !(id == 4 && english)) continue;
                 byte[] raw = new byte[b.getShort(q + 8) & 0xFFFF];
                 b.get(strings + (b.getShort(q + 10) & 0xFFFF), raw);
-                names.add(new String(raw, platform == 1 ? StandardCharsets.ISO_8859_1 : StandardCharsets.UTF_16BE));
+                names.add(
+                        new String(
+                                raw,
+                                platform == 1
+                                        ? Charset.forName("x-MacRoman")
+                                        : StandardCharsets.UTF_16BE));
             }
         }
         return names;
@@ -272,14 +313,39 @@ public final class PdfFontEmbedder {
 
     private static byte[] extractFace(byte[] collection, int face) {
         ByteBuffer in = ByteBuffer.wrap(collection);
-        int tables = in.getShort(face + 4) & 0xFFFF, header = 12 + 16 * tables, size = header;
-        for (int i = 0; i < tables; i++) size += (in.getInt(face + 12 + 16 * i + 12) + 3) & ~3;
-        ByteBuffer out = ByteBuffer.allocate(size).put(0, collection, face, header);
+        requireRange(in, face, 12);
+        int tables = in.getShort(face + 4) & 0xFFFF;
+        if (tables < 1 || tables > 4096) {
+            throw new IllegalArgumentException("invalid font collection table count: " + tables);
+        }
+        int header = 12 + 16 * tables;
+        requireRange(in, face, header);
+        long size = header;
+        for (int i = 0; i < tables; i++) {
+            int record = face + 12 + 16 * i;
+            int offset = in.getInt(record + 8);
+            int length = in.getInt(record + 12);
+            if (length < 0) throw new IllegalArgumentException("negative font table length");
+            requireRange(in, offset, length);
+            size += (length + 3) & ~3L;
+        }
+        if (size > 64L * 1024 * 1024) {
+            throw new IllegalArgumentException("font face is unreasonably large: " + size);
+        }
+        ByteBuffer out = ByteBuffer.allocate((int) size).put(0, collection, face, header);
         for (int i = 0, pos = header; i < tables; i++) {
-            int record = 12 + 16 * i, length = in.getInt(face + record + 12);
-            out.put(pos, collection, in.getInt(face + record + 8), length).putInt(record + 8, pos);
+            int record = 12 + 16 * i;
+            int offset = in.getInt(face + record + 8);
+            int length = in.getInt(face + record + 12);
+            out.put(pos, collection, offset, length).putInt(record + 8, pos);
             pos += (length + 3) & ~3;
         }
         return out.array();
+    }
+
+    private static void requireRange(ByteBuffer buffer, int offset, int length) {
+        if (offset < 0 || length < 0 || offset > buffer.capacity() - length) {
+            throw new IllegalArgumentException("font table is outside the collection");
+        }
     }
 }
