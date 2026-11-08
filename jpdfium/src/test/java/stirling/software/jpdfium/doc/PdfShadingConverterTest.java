@@ -54,6 +54,25 @@ class PdfShadingConverterTest {
         }
     }
 
+    @Test
+    void pdfx1aOutputConvertsSimpleShading() throws Exception {
+        org.junit.jupiter.api.Assumptions.assumeTrue(
+                PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
+        PdfXOptions options = PdfXOptions.builder()
+                .standard(PdfXStandard.PDF_X_1A)
+                .useCompactCmyk()
+                .title("Shading")
+                .build();
+        byte[] output = PdfXConverter.applyMetadata(axialGradient(), options);
+        try (PDDocument doc = Loader.loadPDF(output)) {
+            PDResources resources = doc.getPage(0).getResources();
+            Iterator<COSName> names = resources.getShadingNames().iterator();
+            assertTrue(names.hasNext(), "PDF/X output has no shading resource");
+            PDShadingType2 shading = (PDShadingType2) resources.getShading(names.next());
+            assertInstanceOf(PDDeviceCMYK.class, shading.getColorSpace());
+        }
+    }
+
     private static byte[] axialGradient() throws IOException {
         try (PDDocument doc = new PDDocument();
                 ByteArrayOutputStream out = new ByteArrayOutputStream()) {

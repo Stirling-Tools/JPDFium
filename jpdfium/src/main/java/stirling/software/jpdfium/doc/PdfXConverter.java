@@ -57,7 +57,10 @@ public final class PdfXConverter {
         prepare(doc, options);
         applyDocumentInfo(doc, options);
         PdfXStandard standard = options.standard();
-        byte[] converted = PdfOutputIntent.applyPdfxMetadata(doc.saveBytes(),
+        byte[] prepared = doc.saveBytes();
+        byte[] withCmykShadings = PdfShadingConverter.toCmyk(prepared);
+        byte[] converted = PdfOutputIntent.applyPdfxMetadata(
+                withCmykShadings != null ? withCmykShadings : prepared,
                 options.outputIntentProfile(),
                 PdfOutputIntent.Spec.pdfx(options.conditionIdentifier(), options.info()),
                 standard.gtsVersion(), standard.gtsConformance());
@@ -91,6 +94,11 @@ public final class PdfXConverter {
                 prepare(source, options);
                 applyDocumentInfo(source, options);
                 source.save(staging);
+            }
+            byte[] staged = Files.readAllBytes(staging);
+            byte[] withCmykShadings = PdfShadingConverter.toCmyk(staged);
+            if (withCmykShadings != null) {
+                Files.write(staging, withCmykShadings);
             }
             PdfXStandard standard = options.standard();
             if (!PdfOutputIntent.applyPdfxMetadata(staging, metadata,
@@ -270,7 +278,10 @@ public final class PdfXConverter {
             prepare(source, options);
             applyDocumentInfo(source, options);
             PdfXStandard standard = options.standard();
-            byte[] converted = PdfOutputIntent.applyPdfxMetadata(source.saveBytes(),
+            byte[] prepared = source.saveBytes();
+            byte[] withCmykShadings = PdfShadingConverter.toCmyk(prepared);
+            byte[] converted = PdfOutputIntent.applyPdfxMetadata(
+                    withCmykShadings != null ? withCmykShadings : prepared,
                     options.outputIntentProfile(),
                     PdfOutputIntent.Spec.pdfx(options.conditionIdentifier(), options.info()),
                     standard.gtsVersion(), standard.gtsConformance());
