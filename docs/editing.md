@@ -212,12 +212,23 @@ if (PdfColorConverter.supportsColorSpace(PdfColorConverter.ColorSpace.CMYK)) {
   only intents of the same subtype are replaced. Recheck rendering after
   changing the print condition.
 
-`PdfXConverter` applies PDF/X-3/-4 metadata and output intents through
-`applyMetadata`. It is not a PDF/X validator or a converter for PDF/X-1a/6; it
-rejects transparency for standards that forbid it but does not flatten it.
-Supply a real printing-condition ICC for production output; the bundled compact
-profile is only a fallback. Run veraPDF or Acrobat preflight before claiming
-compliance.
+`PdfXConverter.applyMetadata` converts to PDF/X-1a, -3, -4 or -6. It rewrites
+colours inside the existing content streams through QPDF, so text runs and
+marked content stay as they were and cost grows linearly with page count:
+
+- DeviceRGB vector colours, images (including soft-masked and lossless ones),
+  Indexed lookups and Separation/DeviceN alternates become output-intent CMYK.
+  PDF/X-1a also converts ICCBased, CalRGB, CalGray and Lab.
+- Neutral vector colours become K only (`neutralsToBlack`, on by default).
+- Lossless images stay lossless; JPEG sources are re-encoded as CMYK JPEG.
+- Printable annotations are flattened and JavaScript is removed.
+- PDF/X-1a and -3 reject transparency (including image soft masks), hidden
+  optional content and JBIG2/JPX images instead of flattening them.
+
+It does not embed missing fonts or flatten transparency, and it is not a
+validator. Supply a real printing-condition ICC for production output; the
+bundled compact profile is only a fallback. veraPDF has no PDF/X profiles, so
+run a PDF/X preflight such as Acrobat or callas before claiming compliance.
 
 ## What is not supported
 

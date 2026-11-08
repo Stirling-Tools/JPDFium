@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <filesystem>
 #include <memory>
 #include <random>
@@ -700,9 +701,32 @@ std::string XmlEscape(const std::string& value) {
     return out;
 }
 
+struct XmpField {
+    const char* ns = nullptr;
+    const char* prefix = nullptr;
+    const char* local = nullptr;
+    std::string value;
+    bool keep_existing = false;
+};
+
+std::string NewUuid() {
+    std::random_device device;
+    std::mt19937_64 rng(device());
+    const uint64_t hi = rng();
+    const uint64_t lo = rng();
+    char buf[48];
+    std::snprintf(buf, sizeof(buf), "uuid:%08x-%04x-4%03x-%04x-%012llx",
+                  static_cast<unsigned>(hi >> 32), static_cast<unsigned>((hi >> 16) & 0xffff),
+                  static_cast<unsigned>(hi & 0x0fff),
+                  static_cast<unsigned>(((lo >> 48) & 0x3fff) | 0x8000),
+                  static_cast<unsigned long long>(lo & 0xffffffffffffULL));
+    return buf;
+}
+
 std::string BuildPdfxXmp(const std::string& version, const std::string& conformance,
                          const std::string& title = "", const std::string& trapped = "",
-                         const std::string& mod_date = "") {
+                         const std::string& mod_date = "",
+                         const std::vector<XmpField>& extra = {}) {
     const std::string v = XmlEscape(version);
     const std::string c = XmlEscape(conformance);
     std::string s =
@@ -715,6 +739,7 @@ std::string BuildPdfxXmp(const std::string& version, const std::string& conforma
         " xmlns:pdf=\"http://ns.adobe.com/pdf/1.3/\""
         " xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\""
         " xmlns:dc=\"http://purl.org/dc/elements/1.1/\""
+        " xmlns:xmpMM=\"http://ns.adobe.com/xap/1.0/mm/\""
         " pdfxid:GTS_PDFXVersion=\"" +
         v +
         "\""
@@ -728,6 +753,11 @@ std::string BuildPdfxXmp(const std::string& version, const std::string& conforma
     }
     if (!mod_date.empty()) {
         s += " xmp:ModifyDate=\"" + XmlEscape(mod_date) + "\"";
+    }
+    for (const XmpField& field : extra) {
+        if (field.value.empty()) continue;
+        s += std::string(" ") + field.prefix + ":" + field.local + "=\"" + XmlEscape(field.value) +
+             "\"";
     }
     if (!title.empty()) {
         s += ">\n"
@@ -759,6 +789,7 @@ constexpr const char* kPdfxIdNs = "http://www.npes.org/pdfx/ns/id/";
 constexpr const char* kPdfNs = "http://ns.adobe.com/pdf/1.3/";
 constexpr const char* kDcNs = "http://purl.org/dc/elements/1.1/";
 constexpr const char* kXmpNs = "http://ns.adobe.com/xap/1.0/";
+constexpr const char* kXmpMmNs = "http://ns.adobe.com/xap/1.0/mm/";
 
 #ifdef JPDFIUM_HAS_PUGIXML
 std::string XmlLocalName(const char* name) {
@@ -907,9 +938,24 @@ pugi::xml_node FindTitleDefaultLi(const pugi::xml_node& node, int depth) {
     return {};
 }
 
+bool XmlHasProperty(const std::vector<pugi::xml_node>& descriptions, const std::string& local,
+                    const std::string& uri) {
+    for (const pugi::xml_node& description : descriptions) {
+        for (pugi::xml_attribute attr : description.attributes()) {
+            if (XmlLocalName(attr.name()) != local) continue;
+            if (XmlNamespaceUri(description, XmlPrefix(attr.name())) == uri) return true;
+        }
+        std::vector<pugi::xml_node> elements;
+        XmlCollectMatchingElements(description, local, uri, {}, 0, &elements);
+        if (!elements.empty()) return true;
+    }
+    return false;
+}
+
 bool EditPdfxXml(pugi::xml_document* document, const std::string& version,
                  const std::string& conformance, const std::string& title = "",
-                 const std::string& trapped = "", const std::string& mod_date = "") {
+                 const std::string& trapped = "", const std::string& mod_date = "",
+                 const std::vector<XmpField>& extra = {}) {
     std::vector<pugi::xml_node> descriptions;
     XmlCollectDescriptions(*document, 0, &descriptions);
     if (descriptions.empty()) return false;
@@ -960,6 +1006,22 @@ bool EditPdfxXml(pugi::xml_document* document, const std::string& version,
     if (!mod_date.empty() && !has_modify_date) {
         const std::string prefix = XmlEnsurePrefix(first, kXmpNs, "xmp");
         first.append_attribute((prefix + ":ModifyDate").c_str()).set_value(mod_date.c_str());
+    }
+    for (const XmpField& field : extra) {
+        if (field.value.empty()) continue;
+        const bool present = XmlHasProperty(descriptions, field.local, field.ns);
+        if (present && field.keep_existing) continue;
+        bool updated = false;
+        if (present) {
+            for (const pugi::xml_node& description : descriptions) {
+                updated |= XmlUpdateProperty(description, field.local, field.ns, {}, field.value);
+            }
+        }
+        if (!updated) {
+            const std::string prefix = XmlEnsurePrefix(first, field.ns, field.prefix);
+            first.append_attribute((prefix + ":" + field.local).c_str())
+                .set_value(field.value.c_str());
+        }
     }
     if (!title.empty()) {
         const std::string dc_prefix = XmlEnsurePrefix(first, kDcNs, "dc");
@@ -1060,6 +1122,7 @@ void UpdateOrCreatePdfxMetadata(QPDF* qpdf, const char* version, const char* con
     std::string title;
     std::string trapped;
     std::string mod_date;
+    std::string create_date;
     QPDFObjectHandle info_dict = qpdf->getTrailer().getKey("/Info");
     if (info_dict.isDictionary()) {
         if (info_dict.hasKey("/Title")) {
@@ -1075,7 +1138,31 @@ void UpdateOrCreatePdfxMetadata(QPDF* qpdf, const char* version, const char* con
         if (info_dict.hasKey("/ModDate")) {
             mod_date = PdfDateToXmp(info_dict.getKey("/ModDate").getUTF8Value());
         }
+        if (info_dict.hasKey("/CreationDate")) {
+            create_date = PdfDateToXmp(info_dict.getKey("/CreationDate").getUTF8Value());
+        }
     }
+    char now[32];
+    {
+        const std::time_t t = std::time(nullptr);
+        std::tm utc{};
+#ifdef _WIN32
+        gmtime_s(&utc, &t);
+#else
+        gmtime_r(&t, &utc);
+#endif
+        std::strftime(now, sizeof(now), "%Y-%m-%dT%H:%M:%SZ", &utc);
+    }
+    if (mod_date.empty()) mod_date = now;
+    if (create_date.empty()) create_date = mod_date;
+    const std::vector<XmpField> extra = {
+        {kXmpNs, "xmp", "CreateDate", create_date, false},
+        {kXmpNs, "xmp", "MetadataDate", now, false},
+        {kXmpMmNs, "xmpMM", "DocumentID", NewUuid(), true},
+        {kXmpMmNs, "xmpMM", "InstanceID", NewUuid(), false},
+        {kXmpMmNs, "xmpMM", "VersionID", "1", true},
+        {kXmpMmNs, "xmpMM", "RenditionClass", "default", true},
+    };
 
     std::string xml;
     QPDFObjectHandle root = qpdf->getRoot();
@@ -1096,7 +1183,7 @@ void UpdateOrCreatePdfxMetadata(QPDF* qpdf, const char* version, const char* con
             // Pathological packet: do not hand it to any parser. Replace it
             // with the minimal PDF/X packet instead of risking stack or heap
             // exhaustion.
-            xml = BuildPdfxXmp(ver, conf, title, trapped, mod_date);
+            xml = BuildPdfxXmp(ver, conf, title, trapped, mod_date, extra);
         } else {
             pugi::xml_document document;
             const pugi::xml_parse_result parsed =
@@ -1105,19 +1192,20 @@ void UpdateOrCreatePdfxMetadata(QPDF* qpdf, const char* version, const char* con
                                          pugi::parse_declaration | pugi::parse_comments,
                                      pugi::encoding_auto);
             std::string edited;
-            if (parsed && EditPdfxXml(&document, ver, conf, title, trapped, mod_date)) {
+            if (parsed && EditPdfxXml(&document, ver, conf, title, trapped, mod_date, extra)) {
                 std::ostringstream serialized;
                 document.save(serialized, "", pugi::format_raw | pugi::format_no_declaration,
                               pugi::encoding_utf8);
                 edited = serialized.str();
             }
-            xml = edited.empty() ? BuildPdfxXmp(ver, conf, title, trapped, mod_date) : edited;
+            xml =
+                edited.empty() ? BuildPdfxXmp(ver, conf, title, trapped, mod_date, extra) : edited;
         }
 #else
-        xml = BuildPdfxXmp(ver, conf, title, trapped, mod_date);
+        xml = BuildPdfxXmp(ver, conf, title, trapped, mod_date, extra);
 #endif
     } else {
-        xml = BuildPdfxXmp(ver, conf, title, trapped, mod_date);
+        xml = BuildPdfxXmp(ver, conf, title, trapped, mod_date, extra);
     }
 
     QPDFObjectHandle metadata = QPDFObjectHandle::newStream(qpdf, xml);

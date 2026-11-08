@@ -203,6 +203,7 @@ if(JPDFIUM_USE_PDFIUM)
         bridge/src/jpdfium_advanced.cpp
         bridge/src/jpdfium_image.cpp
         bridge/src/jpdfium_color.cpp
+        bridge/src/jpdfium_pdfx.cpp
         bridge/src/jpdfium_repair.cpp
         bridge/src/jpdfium_qpdf.cpp
         bridge/src/jpdfium_qpdf_sanitize.cpp

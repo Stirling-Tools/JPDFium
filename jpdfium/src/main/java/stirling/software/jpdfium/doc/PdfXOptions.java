@@ -26,6 +26,7 @@ public final class PdfXOptions {
     private final boolean strictImages;
     private final boolean convertLosslessImages;
     private final boolean requireEmbeddedFonts;
+    private final boolean neutralsToBlack;
     private final String title;
 
     private PdfXOptions(Builder b) {
@@ -45,6 +46,7 @@ public final class PdfXOptions {
         this.strictImages = b.strictImages;
         this.convertLosslessImages = b.convertLosslessImages;
         this.requireEmbeddedFonts = b.requireEmbeddedFonts;
+        this.neutralsToBlack = b.neutralsToBlack;
         this.title = b.title;
     }
 
@@ -115,6 +117,10 @@ public final class PdfXOptions {
         return requireEmbeddedFonts;
     }
 
+    public boolean neutralsToBlack() {
+        return neutralsToBlack;
+    }
+
     /** Optional document title written to the information dictionary. */
     public String title() {
         return title;
@@ -158,6 +164,7 @@ public final class PdfXOptions {
         private boolean strictImages;
         private boolean convertLosslessImages;
         private boolean requireEmbeddedFonts;
+        private boolean neutralsToBlack = true;
         private String title;
 
         private Builder() {}
@@ -249,6 +256,11 @@ public final class PdfXOptions {
         /** Fail when the audit finds a non-embedded font in page text or form XObjects. */
         public Builder requireEmbeddedFonts(boolean value) {
             this.requireEmbeddedFonts = value;
+            return this;
+        }
+
+        public Builder neutralsToBlack(boolean value) {
+            this.neutralsToBlack = value;
             return this;
         }
 

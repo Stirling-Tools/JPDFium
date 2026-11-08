@@ -16,6 +16,7 @@ import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.model.PdfVersion;
 import stirling.software.jpdfium.model.Rect;
+import stirling.software.jpdfium.panama.ColorBindings;
 import stirling.software.jpdfium.panama.DocBindings;
 import stirling.software.jpdfium.panama.QpdfLib;
 
@@ -24,11 +25,14 @@ import stirling.software.jpdfium.panama.QpdfLib;
  * CMYK conversion, a GTS_PDFX output intent, XMP metadata, the standard base
  * PDF version and page trim boxes.
  *
- * <p>This is <strong>not a PDF/X validator</strong>. It writes the base version and
- * missing trim boxes, can reject non-embedded fonts on request, and rejects
- * transparency for standards that forbid it. It does not repair font programs,
- * trapping, /ID, or every remaining RGB object. Use an external preflight
- * (veraPDF or Acrobat) before claiming PDF/X conformance;
+ * <p>Colours are rewritten in the existing content streams, images keep their masks,
+ * printable annotations are flattened and JavaScript is removed. PDF/X-1a and PDF/X-3
+ * reject transparency, hidden optional content and JBIG2/JPX images rather than
+ * flattening them, and the conversion fails if the page count changes.
+ *
+ * <p>This is <strong>not a PDF/X validator</strong>. It does not embed missing fonts
+ * (it can reject them on request) or apply trapping. veraPDF has no PDF/X profiles,
+ * so use a PDF/X preflight such as Acrobat or callas before claiming conformance;
  * {@link #checkMetadata(byte[], PdfXOptions)} only checks the intent/ICC/version
  * wiring written here.
  */
@@ -39,7 +43,7 @@ public final class PdfXConverter {
     /** True when the loaded native library can run the implemented metadata pipeline. */
     public static boolean isSupported() {
         return PdfOutputIntent.pdfxSupported()
-                && PdfColorConverter.supportsColorSpace(PdfColorConverter.ColorSpace.CMYK)
+                && ColorBindings.pdfxPrepareAvailable()
                 && QpdfLib.isForceVersionFileSupported()
                 && QpdfLib.isForceVersionSupported()
                 && DocBindings.EPDF_SetMetaText != null
@@ -52,12 +56,12 @@ public final class PdfXConverter {
         return standard != null && standard.metadataSupported();
     }
 
-    /** Convert colours in place and apply PDF/X intent metadata. */
+    /** Convert colours and apply PDF/X intent metadata into a new document; {@code doc} is not modified. */
     public static PdfDocument applyMetadata(PdfDocument doc, PdfXOptions options) {
         prepare(doc, options);
         applyDocumentInfo(doc, options);
         PdfXStandard standard = options.standard();
-        byte[] converted = PdfOutputIntent.applyPdfxMetadata(doc.saveBytes(),
+        byte[] converted = PdfOutputIntent.applyPdfxMetadata(nativePrepare(doc.saveBytes(), options),
                 options.outputIntentProfile(),
                 PdfOutputIntent.Spec.pdfx(options.conditionIdentifier(), options.info()),
                 standard.gtsVersion(), standard.gtsConformance());
@@ -65,6 +69,7 @@ public final class PdfXConverter {
             converted = PdfFontEmbedder.embed(converted, options.fontData());
         }
         try (PdfDocument metadata = PdfDocument.open(converted)) {
+            requireSamePageCount(doc.pageCount(), metadata.pageCount());
             applyPageBoxes(metadata);
             requireEmbeddedFonts(metadata, options);
             byte[] out = PdfVersionConverter.forceVersion(
@@ -87,11 +92,14 @@ public final class PdfXConverter {
                     output.toAbsolutePath().getParent(), "jpdfium-pdfx-", ".pdf");
             metadata = Files.createTempFile(
                     output.toAbsolutePath().getParent(), "jpdfium-pdfx-meta-", ".pdf");
+            int pages;
             try (PdfDocument source = PdfDocument.open(input)) {
+                pages = source.pageCount();
                 prepare(source, options);
                 applyDocumentInfo(source, options);
                 source.save(staging);
             }
+            nativePrepare(staging, options);
             PdfXStandard standard = options.standard();
             if (!PdfOutputIntent.applyPdfxMetadata(staging, metadata,
                     options.outputIntentProfile(),
@@ -103,6 +111,7 @@ public final class PdfXConverter {
                 applyFontData(metadata, options);
             }
             try (PdfDocument document = PdfDocument.open(metadata)) {
+                requireSamePageCount(pages, document.pageCount());
                 applyPageBoxes(document);
                 requireEmbeddedFonts(document, options);
                 document.save(staging);
@@ -232,6 +241,13 @@ public final class PdfXConverter {
         }
     }
 
+    private static void requireSamePageCount(int expected, int actual) {
+        if (expected != actual) {
+            throw new JPDFiumException("PDF/X conversion produced " + actual + " pages from "
+                    + expected + "; the source page tree could not be rewritten safely");
+        }
+    }
+
     private static void applyPageBoxes(PdfDocument document) {
         for (int i = 0; i < document.pageCount(); i++) {
             try (PdfPage page = document.page(i)) {
@@ -270,7 +286,7 @@ public final class PdfXConverter {
             prepare(source, options);
             applyDocumentInfo(source, options);
             PdfXStandard standard = options.standard();
-            byte[] converted = PdfOutputIntent.applyPdfxMetadata(source.saveBytes(),
+            byte[] converted = PdfOutputIntent.applyPdfxMetadata(nativePrepare(source.saveBytes(), options),
                     options.outputIntentProfile(),
                     PdfOutputIntent.Spec.pdfx(options.conditionIdentifier(), options.info()),
                     standard.gtsVersion(), standard.gtsConformance());
@@ -278,6 +294,7 @@ public final class PdfXConverter {
                 converted = PdfFontEmbedder.embed(converted, options.fontData());
             }
             try (PdfDocument metadata = PdfDocument.open(converted)) {
+                requireSamePageCount(source.pageCount(), metadata.pageCount());
                 applyPageBoxes(metadata);
                 requireEmbeddedFonts(metadata, options);
                 return PdfVersionConverter.forceVersion(
@@ -298,8 +315,8 @@ public final class PdfXConverter {
             throw new JPDFiumException("PDF/X metadata is not supported for " + standard);
         }
         if (!isSupported()) {
-            throw new JPDFiumException("PDF/X metadata application requires vector CMYK support,"
-                    + " source colour-space probes and the QPDF PDF/X metadata bootstrap");
+            throw new JPDFiumException("PDF/X conversion requires the native PDF/X preparation pass"
+                    + " and the QPDF PDF/X metadata bootstrap");
         }
         byte[] profile = options.outputIntentProfile();
         if (profile == null || profile.length == 0) {
@@ -311,9 +328,38 @@ public final class PdfXConverter {
             throw new JPDFiumException(standard + " forbids ICC-based, Lab, and RGB colour spaces; "
                     + "colour conversion cannot be disabled");
         }
-        if (options.convertColors()) {
-            PdfColorConverter.convert(doc, options.colorOptions());
-        }
+    }
+
+    private static byte[] nativePrepare(byte[] pdf, PdfXOptions options) {
+        IccCmykTransform xform = new IccCmykTransform(options.outputIntentProfile());
+        return ColorBindings.pdfxPrepareBytes(pdf, nativeLevel(options.standard()),
+                xform.lutBytes(), IccCmykTransform.lutGrid(), nativeFlags(options),
+                options.jpegQuality());
+    }
+
+    private static void nativePrepare(Path pdf, PdfXOptions options) {
+        IccCmykTransform xform = new IccCmykTransform(options.outputIntentProfile());
+        ColorBindings.pdfxPrepareFile(pdf.toString(), pdf.toString(),
+                nativeLevel(options.standard()), xform.lutBytes(), IccCmykTransform.lutGrid(),
+                nativeFlags(options), options.jpegQuality());
+    }
+
+    private static int nativeLevel(PdfXStandard standard) {
+        return switch (standard) {
+            case PDF_X_1A -> 1;
+            case PDF_X_3 -> 3;
+            case PDF_X_4 -> 4;
+            case PDF_X_6 -> 6;
+        };
+    }
+
+    private static int nativeFlags(PdfXOptions options) {
+        int flags = ColorBindings.PDFX_CONVERT_SPECIAL;
+        if (options.convertColors()) flags |= ColorBindings.PDFX_CONVERT_COLOURS;
+        if (options.convertImages()) flags |= ColorBindings.PDFX_CONVERT_IMAGES;
+        if (options.neutralsToBlack()) flags |= ColorBindings.PDFX_NEUTRALS_TO_BLACK;
+        if (options.strictImages()) flags |= ColorBindings.PDFX_STRICT_IMAGES;
+        return flags;
     }
 
     /**
