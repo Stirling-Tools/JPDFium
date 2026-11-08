@@ -196,6 +196,16 @@ class PdfImageEdgeAndReencodeTest {
                 BufferedImage rendered = page.renderImage(72);
                 assertTrue(rendered.getWidth() > 0 && rendered.getHeight() > 0,
                         "progressive JPEG must render through PDFium");
+                boolean hasInk = false;
+                for (int y = 0; y < rendered.getHeight() && !hasInk; y += 16) {
+                    for (int x = 0; x < rendered.getWidth(); x += 16) {
+                        if ((rendered.getRGB(x, y) & 0x00FFFFFF) != 0x00FFFFFF) {
+                            hasInk = true;
+                            break;
+                        }
+                    }
+                }
+                assertTrue(hasInk, "progressive JPEG must render pixels, not a blank page");
             }
         }
     }
