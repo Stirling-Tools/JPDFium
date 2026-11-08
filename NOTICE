@@ -15,6 +15,7 @@ Native bridge deps (linked at build time):
 - pugixml - MIT
 - libunibreak - zlib
 - mozjpeg-rs - BSD-3-Clause (pure-Rust mozjpeg port used for JPEG encoding)
+- fax - MIT (pure-Rust CCITT Group 4 encoder for bilevel images)
 
 Bundled ICC profile (jpdfium main jar):
 - JPDFiumCompactCmyk.icc - generated generic CMYK fallback, MIT; see

@@ -12,6 +12,8 @@ import org.apache.pdfbox.cos.COSName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 
+import java.awt.Color;
+import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
@@ -45,6 +47,22 @@ class PdfImageEdgeAndReencodeTest {
             BufferedImage image = noisyImage(width, height);
             PDImageXObject img = LosslessFactory.createFromImage(doc, image);
             addImagePage(doc, img, width, height);
+            return save(doc);
+        }
+    }
+
+    private static byte[] bitonalBarsPdf() throws Exception {
+        try (PDDocument doc = new PDDocument()) {
+            BufferedImage image = new BufferedImage(2480, 3508, BufferedImage.TYPE_BYTE_BINARY);
+            Graphics2D graphics = image.createGraphics();
+            graphics.setColor(Color.WHITE);
+            graphics.fillRect(0, 0, image.getWidth(), image.getHeight());
+            graphics.setColor(Color.BLACK);
+            for (int y = 20; y < image.getHeight(); y += 120) {
+                graphics.fillRect(20, y, image.getWidth() - 40, 20);
+            }
+            graphics.dispose();
+            addImagePage(doc, LosslessFactory.createFromImage(doc, image), 2480, 3508);
             return save(doc);
         }
     }
@@ -206,6 +224,38 @@ class PdfImageEdgeAndReencodeTest {
                     }
                 }
                 assertTrue(hasInk, "progressive JPEG must render pixels, not a blank page");
+            }
+        }
+    }
+
+    @Test
+    void reencodesBilevelImagesAsCcittG4WhenSmaller() throws Exception {
+        byte[] input = bitonalBarsPdf();
+        try (PdfDocument doc = PdfDocument.open(input)) {
+            PdfCompressor.CompressResultWithBytes out = PdfCompressor.compress(doc,
+                    CompressOptions.builder()
+                            .maxImageDpi(-1)
+                            .imageQuality(0)
+                            .preservationMode(PreservationMode.DESTRUCTIVE)
+                            .build());
+            assertTrue(out.bytes().length < input.length,
+                    "CCITT G4 must only be adopted when smaller");
+            assertTrue(new String(out.bytes(), StandardCharsets.ISO_8859_1)
+                            .contains("/CCITTFaxDecode"),
+                    "bilevel stream must use CCITT G4");
+            try (PdfDocument reopened = PdfDocument.open(out.bytes());
+                 var page = reopened.page(0)) {
+                BufferedImage rendered = page.renderImage(72);
+                boolean hasInk = false;
+                for (int y = 0; y < rendered.getHeight() && !hasInk; y += 8) {
+                    for (int x = 0; x < rendered.getWidth(); x += 8) {
+                        if ((rendered.getRGB(x, y) & 0x00FFFFFF) != 0x00FFFFFF) {
+                            hasInk = true;
+                            break;
+                        }
+                    }
+                }
+                assertTrue(hasInk, "CCITT G4 page must render pixels");
             }
         }
     }

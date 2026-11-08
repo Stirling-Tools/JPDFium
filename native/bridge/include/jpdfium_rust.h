@@ -133,6 +133,11 @@ JPDFIUM_EXPORT int32_t jpdfium_rust_encode_jpeg_ex(const uint8_t* pixels, int64_
                                                    int32_t progressive, uint8_t** out_ptr,
                                                    int64_t* out_len);
 
+// Encode packed 1-bit pixels (MSB first) as CCITT Group 4 for /CCITTFaxDecode.
+JPDFIUM_EXPORT int32_t jpdfium_rust_encode_ccitt_g4(const uint8_t* pixels, int64_t pixels_len,
+                                                    int32_t width, int32_t height, int32_t invert,
+                                                    uint8_t** out_ptr, int64_t* out_len);
+
 // Free a buffer allocated by any jpdfium_rust_* function.
 //
 // Must be called to release memory returned in out_ptr by the Rust functions.

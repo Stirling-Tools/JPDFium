@@ -28,3 +28,5 @@ jpeg-encoder = { version = "0.7", features = ["simd"] }
 # Pure-Rust mozjpeg port: trellis quantization and deringing give ~15-20%
 # smaller baseline JPEGs than jpeg-encoder at the same quality setting.
 mozjpeg-rs = "0.9.2"
+# CCITT Group 4 encoder for bilevel images (MIT).
+fax = "0.3"

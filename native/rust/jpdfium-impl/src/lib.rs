@@ -840,3 +840,87 @@ pub unsafe extern "C" fn jpdfium_rust_free(ptr: *mut u8) {
         libc::free(ptr as *mut libc::c_void);
     }
 }
+
+/// Encode a packed 1-bit image as CCITT Group 4 (T.6) for PDF
+/// `/CCITTFaxDecode` with `/K -1`.
+///
+/// `pixels` is row-major, MSB-first, one bit per pixel. A set bit is white by
+/// default (DeviceGray convention); `invert` flips that interpretation. The
+/// caller supplies the final `/BlackIs1` value to match.
+///
+/// # Safety
+/// `pixels` must point to `pixels_len` readable bytes; the out pointers must be valid.
+#[no_mangle]
+pub unsafe extern "C" fn jpdfium_rust_encode_ccitt_g4(
+    pixels: *const u8,
+    pixels_len: i64,
+    width: i32,
+    height: i32,
+    invert: i32,
+    out_ptr: *mut *mut u8,
+    out_len: *mut i64,
+) -> i32 {
+    if out_ptr.is_null() || out_len.is_null() {
+        return JPDFIUM_ERR_INVALID;
+    }
+    *out_ptr = std::ptr::null_mut();
+    *out_len = 0;
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        encode_ccitt_g4(pixels, pixels_len, width, height, invert != 0, out_ptr, out_len)
+    }))
+    .unwrap_or(JPDFIUM_ERR_GENERIC)
+}
+
+/// Encoding body for [`jpdfium_rust_encode_ccitt_g4`].
+///
+/// # Safety
+/// `pixels` must point to `pixels_len` readable bytes; the out pointers must be valid.
+unsafe fn encode_ccitt_g4(
+    pixels: *const u8,
+    pixels_len: i64,
+    width: i32,
+    height: i32,
+    invert: bool,
+    out_ptr: *mut *mut u8,
+    out_len: *mut i64,
+) -> i32 {
+    if pixels.is_null()
+        || width <= 0
+        || height <= 0
+        || width > 64 * 1024
+        || height > 64 * 1024
+    {
+        return JPDFIUM_ERR_INVALID;
+    }
+    let row_bytes = (width as usize + 7) / 8;
+    let needed = row_bytes * height as usize;
+    if pixels_len < 0 || needed > pixels_len as usize {
+        return JPDFIUM_ERR_INVALID;
+    }
+    let data = slice::from_raw_parts(pixels, needed);
+    let writer = fax::VecWriter::with_capacity(needed / 8 + 64);
+    let mut encoder = fax::encoder::Encoder::new(writer);
+    for y in 0..height as usize {
+        let row = &data[y * row_bytes..(y + 1) * row_bytes];
+        let line = (0..width as usize).map(|x| {
+            let bit = (row[x / 8] >> (7 - (x % 8))) & 1;
+            let white = if invert { bit == 0 } else { bit == 1 };
+            if white { fax::Color::White } else { fax::Color::Black }
+        });
+        if encoder.encode_line(line, width as u32).is_err() {
+            return JPDFIUM_ERR_GENERIC;
+        }
+    }
+    let writer = match encoder.finish() {
+        Ok(writer) => writer,
+        Err(_) => return JPDFIUM_ERR_GENERIC,
+    };
+    let buffer = writer.finish();
+    let ptr = malloc_copy(&buffer);
+    if ptr.is_null() {
+        return JPDFIUM_ERR_GENERIC;
+    }
+    *out_ptr = ptr;
+    *out_len = buffer.len() as i64;
+    JPDFIUM_OK
+}

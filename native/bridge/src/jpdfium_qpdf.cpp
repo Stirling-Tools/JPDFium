@@ -252,6 +252,87 @@ void deduplicateImages(QPDF& pdf) {
     }
 }
 
+
+extern "C" int32_t jpdfium_rust_encode_ccitt_g4(const uint8_t*, int64_t, int32_t, int32_t,
+                                                int32_t, uint8_t**, int64_t*);
+extern "C" void jpdfium_rust_free(uint8_t*);
+
+// Re-encode 1-bit DeviceGray images as CCITT G4 when the encoded stream is
+// smaller. Only the default (0=black, 1=white) decode is accepted; masks and
+// non-gray color spaces are left untouched so appearance cannot change.
+void encodeBilevelImages(QPDF& pdf) {
+    QPDFPageDocumentHelper helper{pdf};
+    for (auto& page : helper.getAllPages()) {
+        page.forEachImage(true, [&pdf](QPDFObjectHandle& image, QPDFObjectHandle& resources,
+                                      std::string const& key) {
+            try {
+                auto dict = image.getDict();
+                if (!dict.hasKey("/Width") || !dict.hasKey("/Height") ||
+                    !dict.hasKey("/BitsPerComponent")) {
+                    return;
+                }
+                if (dict.getKey("/BitsPerComponent").getIntValue() != 1) return;
+                if (dict.hasKey("/ImageMask") || dict.hasKey("/Mask") ||
+                    dict.hasKey("/SMask")) {
+                    return;
+                }
+                if (!dict.hasKey("/ColorSpace") ||
+                    !dict.getKey("/ColorSpace").isName() ||
+                    dict.getKey("/ColorSpace").getName() != "/DeviceGray") {
+                    return;
+                }
+                if (dict.hasKey("/Decode")) {
+                    auto decode = dict.getKey("/Decode");
+                    if (!decode.isArray() || decode.getArrayNItems() != 2 ||
+                        decode.getArrayItem(0).getIntValue() != 0 ||
+                        decode.getArrayItem(1).getIntValue() != 1) {
+                        return;
+                    }
+                }
+                int width = dict.getKey("/Width").getIntValue();
+                int height = dict.getKey("/Height").getIntValue();
+                if (width <= 0 || height <= 0) return;
+                auto decoded = image.getStreamData(qpdf_dl_all);
+                if (!decoded) return;
+                size_t rowBytes = (static_cast<size_t>(width) + 7) / 8;
+                if (decoded->getSize() < rowBytes * static_cast<size_t>(height)) return;
+
+                uint8_t* out = nullptr;
+                int64_t outLen = 0;
+                if (jpdfium_rust_encode_ccitt_g4(decoded->getBuffer(), decoded->getSize(),
+                                                 width, height, 0, &out, &outLen) != 0 ||
+                    out == nullptr || outLen <= 0) {
+                    if (out) jpdfium_rust_free(out);
+                    return;
+                }
+                auto raw = image.getRawStreamData();
+                if (raw && outLen >= static_cast<int64_t>(raw->getSize())) {
+                    jpdfium_rust_free(out);
+                    return;
+                }
+
+                auto replacement = pdf.newStream();
+                auto replacementDict = dict.shallowCopy();
+                replacementDict.removeKey("/Filter");
+                replacementDict.removeKey("/DecodeParms");
+                auto parms = QPDFObjectHandle::newDictionary();
+                parms.replaceKey("/K", QPDFObjectHandle::newInteger(-1));
+                parms.replaceKey("/Columns", QPDFObjectHandle::newInteger(width));
+                parms.replaceKey("/Rows", QPDFObjectHandle::newInteger(height));
+                parms.replaceKey("/BlackIs1", QPDFObjectHandle::newBool(false));
+                replacement.replaceDict(replacementDict);
+                replacement.replaceStreamData(
+                        std::string(reinterpret_cast<const char*>(out), static_cast<size_t>(outLen)),
+                        QPDFObjectHandle::newName("/CCITTFaxDecode"), parms);
+                jpdfium_rust_free(out);
+                resources.replaceKey(key, replacement);
+            } catch (...) {
+                // A malformed image must not abort the structural pass.
+            }
+        });
+    }
+}
+
 void applyDocumentOptions(QPDF& pdf, const OptimizeOptions& options) {
     if (options.flags & JPDFIUM_QPDF_QDF) {
         if (options.flags & JPDFIUM_QPDF_LINEARIZE) {
@@ -260,6 +341,9 @@ void applyDocumentOptions(QPDF& pdf, const OptimizeOptions& options) {
     }
     if (options.flags & JPDFIUM_QPDF_OPTIMIZE_IMAGES) {
         optimizeImages(pdf, options.jpegQuality);
+    }
+    if (options.flags & JPDFIUM_QPDF_CCITT_G4) {
+        encodeBilevelImages(pdf);
     }
     if (options.flags & JPDFIUM_QPDF_DEDUPLICATE_IMAGES) {
         deduplicateImages(pdf);
