@@ -463,6 +463,40 @@ public final class PdfSplit {
         }
     }
 
+    public static void extractPageRangesToFiles(Path input, List<int[]> ranges, List<Path> outputs,
+                                                StorageOptions options) throws IOException {
+        if (input == null) throw new IllegalArgumentException("input must not be null");
+        if (ranges == null || outputs == null || ranges.size() != outputs.size()) {
+            throw new IllegalArgumentException("ranges and outputs must be the same length");
+        }
+        if (ranges.isEmpty()) return;
+        int totalPages;
+        try (PdfDocument probe = PdfDocument.open(input)) {
+            totalPages = probe.pageCount();
+        }
+        int[] firstPages = new int[ranges.size()];
+        int[] lastPages = new int[ranges.size()];
+        for (int i = 0; i < ranges.size(); i++) {
+            int[] range = ranges.get(i);
+            if (range == null || range.length != 2 || range[0] < 0 || range[1] < range[0]
+                    || range[1] >= totalPages) {
+                throw new IllegalArgumentException("Invalid range %s for document with %d pages"
+                        .formatted(range == null ? "null" : java.util.Arrays.toString(range), totalPages));
+            }
+            if (outputs.get(i) == null) throw new IllegalArgumentException("output must not be null");
+            firstPages[i] = range[0];
+            lastPages[i] = range[1];
+        }
+        int written = 0;
+        if (options.mode() != StorageOptions.Mode.MEMORY && QpdfLib.isExtractRangesFilesSupported()) {
+            written = Math.max(0, QpdfLib.extractRangesToFiles(
+                    input, firstPages, lastPages, outputs, options.durable()));
+        }
+        for (int i = written; i < ranges.size(); i++) {
+            extractPageRangeToFile(input, firstPages[i], lastPages[i], outputs.get(i), options);
+        }
+    }
+
     /**
      * Native-extract into a staging file and replace {@code output} only on
      * success: qpdf must never truncate the input it is still reading when the

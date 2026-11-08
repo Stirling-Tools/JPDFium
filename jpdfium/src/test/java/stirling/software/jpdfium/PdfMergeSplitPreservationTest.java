@@ -37,6 +37,8 @@ import stirling.software.jpdfium.panama.QpdfLib;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -198,6 +200,49 @@ class PdfMergeSplitPreservationTest {
             assertArrayEquals(new String[] {"2"},
                     doc.getDocumentCatalog().getPageLabels().getLabelsByPageIndices());
         }
+    }
+
+    @Test
+    void extractingManyRangesInOnePassMatchesOneRangeAtATime(@TempDir Path tmp) throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real PDFium native library");
+        assumeTrue(QpdfLib.isExtractRangesFilesSupported(), "needs the multi-range qpdf extract symbol");
+        Path source = tmp.resolve("source.pdf");
+        Files.write(source, catalogRichPdf(4, "A"));
+        List<int[]> ranges = List.of(new int[] {0, 0}, new int[] {1, 2}, new int[] {3, 3});
+        List<Path> together = List.of(tmp.resolve("t0.pdf"), tmp.resolve("t1.pdf"), tmp.resolve("t2.pdf"));
+
+        PdfSplit.extractPageRangesToFiles(source, ranges, together, FILE_ONLY);
+
+        for (int i = 0; i < ranges.size(); i++) {
+            Path single = tmp.resolve("s" + i + ".pdf");
+            PdfSplit.extractPageRangeToFile(source, ranges.get(i)[0], ranges.get(i)[1], single, FILE_ONLY);
+            try (PDDocument expected = Loader.loadPDF(single.toFile());
+                 PDDocument actual = Loader.loadPDF(together.get(i).toFile())) {
+                PDDocumentCatalog e = expected.getDocumentCatalog();
+                PDDocumentCatalog a = actual.getDocumentCatalog();
+                assertEquals(expected.getNumberOfPages(), actual.getNumberOfPages());
+                assertEquals(fieldValues(e.getAcroForm()), fieldValues(a.getAcroForm()));
+                assertArrayEquals(e.getPageLabels().getLabelsByPageIndices(),
+                        a.getPageLabels().getLabelsByPageIndices());
+                assertEquals(e.getLanguage(), a.getLanguage());
+                assertEquals(e.getViewerPreferences().displayDocTitle(),
+                        a.getViewerPreferences().displayDocTitle());
+                assertEquals(e.getNames().getDests().getNames().keySet(),
+                        a.getNames().getDests().getNames().keySet());
+            }
+        }
+    }
+
+    @Test
+    void manyRangesRejectARangePastTheLastPage(@TempDir Path tmp) throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real PDFium native library");
+        Path source = tmp.resolve("source.pdf");
+        Files.write(source, catalogRichPdf(2, "A"));
+        Path out = tmp.resolve("out.pdf");
+
+        assertThrows(IllegalArgumentException.class, () -> PdfSplit.extractPageRangesToFiles(
+                source, List.of(new int[] {1, 2}), List.of(out), FILE_ONLY));
+        assertFalse(Files.exists(out));
     }
 
     private static Map<String, String> fieldValues(PDAcroForm form) {
