@@ -20,9 +20,14 @@
 
 namespace jpdfium_staging {
 
+struct StagedFile {
+    std::string path;
+    FILE* file = nullptr;
+};
+
 // Creates a unique sibling of out_path with an exclusive, owner-only create, so a
 // planted or aliased path cannot truncate anything while qpdf streams the input.
-inline std::string CreateUniqueSibling(const std::string& out_path) {
+inline StagedFile OpenUniqueSibling(const std::string& out_path) {
     const std::filesystem::path target(out_path);
     const std::filesystem::path dir =
         target.has_parent_path() ? target.parent_path() : std::filesystem::path(".");
@@ -34,19 +39,56 @@ inline std::string CreateUniqueSibling(const std::string& out_path) {
             (dir / (stem + "." + std::to_string(rng()) + ".jpdfium-tmp")).string();
 #if defined(_WIN32)
         int fd = -1;
-        if (::_sopen_s(&fd, candidate.c_str(), _O_WRONLY | _O_CREAT | _O_EXCL | _O_NOINHERIT,
-                       _SH_DENYRW, _S_IREAD | _S_IWRITE) != 0) {
+        if (::_sopen_s(&fd, candidate.c_str(),
+                       _O_WRONLY | _O_CREAT | _O_EXCL | _O_NOINHERIT | _O_BINARY, _SH_DENYRW,
+                       _S_IREAD | _S_IWRITE) != 0) {
             continue;
         }
-        ::_close(fd);
+        FILE* file = ::_fdopen(fd, "wb");
+        if (!file) {
+            ::_close(fd);
+            std::remove(candidate.c_str());
+            continue;
+        }
 #else
         const int fd = ::open(candidate.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
         if (fd < 0) continue;
-        ::close(fd);
+        FILE* file = ::fdopen(fd, "wb");
+        if (!file) {
+            ::close(fd);
+            std::remove(candidate.c_str());
+            continue;
+        }
 #endif
-        return candidate;
+        return {candidate, file};
     }
     throw std::runtime_error("cannot create a temporary output file");
+}
+
+inline std::string CreateUniqueSibling(const std::string& out_path) {
+    StagedFile staged = OpenUniqueSibling(out_path);
+    std::fclose(staged.file);
+    return staged.path;
+}
+
+inline bool ApplyPublishModeTo(FILE* file, const char* destination) {
+#ifndef _WIN32
+    struct stat st;
+    std::memset(&st, 0, sizeof(st));
+    mode_t mode;
+    if (::stat(destination, &st) == 0) {
+        mode = st.st_mode & 07777;
+    } else {
+        const mode_t mask = ::umask(0);
+        ::umask(mask);
+        mode = static_cast<mode_t>(0666 & ~mask);
+    }
+    return ::fchmod(::fileno(file), mode) == 0;
+#else
+    (void)file;
+    (void)destination;
+    return true;
+#endif
 }
 
 // Preserves an existing destination's mode; a brand-new file keeps the mode

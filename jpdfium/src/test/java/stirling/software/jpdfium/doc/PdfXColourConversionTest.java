@@ -209,10 +209,11 @@ class PdfXColourConversionTest {
             in = save(doc);
         }
         assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
-        assumeTrue(PdfFontEmbedder.embedMissing(in).unresolved().isEmpty(),
-                "no Helvetica substitute in the system font directories");
-        byte[] out = PdfXConverter.applyMetadata(in,
-                options(PdfXStandard.PDF_X_4).requireEmbeddedFonts(true).build());
+        java.util.Optional<java.nio.file.Path> substitute = HELVETICA_SUBSTITUTES.stream()
+                .map(java.nio.file.Path::of).filter(java.nio.file.Files::isRegularFile).findFirst();
+        assumeTrue(substitute.isPresent(), "no known Helvetica substitute installed");
+        byte[] out = PdfXConverter.applyMetadata(in, options(PdfXStandard.PDF_X_4)
+                .requireEmbeddedFonts(true).fontDirectories(substitute.get().getParent()).build());
         try (PdfDocument doc = PdfDocument.open(out)) {
             assertFalse(PdfFontAuditor.hasNonEmbeddedFonts(doc));
         }
@@ -312,6 +313,107 @@ class PdfXColourConversionTest {
         assertThrows(IllegalArgumentException.class,
                 () -> stirling.software.jpdfium.panama.ColorBindings.pdfxPrepareBytes(
                         new byte[] {1}, 4, new byte[10], 17, 0, 90));
+    }
+
+    private static final List<String> HELVETICA_SUBSTITUTES = List.of(
+            "/System/Library/Fonts/Helvetica.ttc",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+            "/usr/share/fonts/liberation-sans/LiberationSans-Regular.ttf",
+            "/usr/share/fonts/truetype/croscore/Arimo-Regular.ttf",
+            "/usr/share/fonts/opentype/urw-base35/NimbusSans-Regular.otf",
+            "C:/Windows/Fonts/arial.ttf");
+
+    @Test
+    void spotInksAreKeptWhileTheirRgbAlternatesBecomeCmyk() throws Exception {
+        byte[] in;
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage();
+            doc.addPage(page);
+            COSDictionary tint = new COSDictionary();
+            tint.setInt(COSName.FUNCTION_TYPE, 2);
+            tint.setItem(COSName.DOMAIN, floats(0, 1));
+            tint.setItem(COSName.C0, floats(1, 1, 1));
+            tint.setItem(COSName.C1, floats(1, 0, 0));
+            tint.setInt(COSName.N, 1);
+            COSArray separation = new COSArray();
+            separation.add(COSName.SEPARATION);
+            separation.add(COSName.getPDFName("Spot1"));
+            separation.add(COSName.DEVICERGB);
+            separation.add(tint);
+            COSStream program = doc.getDocument().createCOSStream();
+            program.setInt(COSName.FUNCTION_TYPE, 4);
+            program.setItem(COSName.DOMAIN, floats(0, 1, 0, 1));
+            program.setItem(COSName.RANGE, floats(0, 1, 0, 1, 0, 1));
+            try (var os = program.createOutputStream()) {
+                os.write("{ pop 1 exch sub dup dup }".getBytes(StandardCharsets.US_ASCII));
+            }
+            COSArray inks = new COSArray();
+            inks.add(COSName.getPDFName("InkA"));
+            inks.add(COSName.getPDFName("InkB"));
+            COSArray deviceN = new COSArray();
+            deviceN.add(COSName.DEVICEN);
+            deviceN.add(inks);
+            deviceN.add(COSName.DEVICERGB);
+            deviceN.add(program);
+            org.apache.pdfbox.pdmodel.PDResources resources = new org.apache.pdfbox.pdmodel.PDResources();
+            COSDictionary spaces = new COSDictionary();
+            spaces.setItem(COSName.getPDFName("Sep"), separation);
+            spaces.setItem(COSName.getPDFName("DN"), deviceN);
+            resources.getCOSObject().setItem(COSName.COLORSPACE, spaces);
+            page.setResources(resources);
+            COSStream content = doc.getDocument().createCOSStream();
+            try (var os = content.createOutputStream()) {
+                os.write(("/Sep cs 0.5 sc 0 0 10 10 re f /DN cs 0.2 0.7 sc 20 0 10 10 re f")
+                        .getBytes(StandardCharsets.US_ASCII));
+            }
+            page.getCOSObject().setItem(COSName.CONTENTS, content);
+            in = save(doc);
+        }
+        byte[] out = convert(in, PdfXStandard.PDF_X_4);
+        try (PDDocument doc = Loader.loadPDF(out)) {
+            COSDictionary spaces = doc.getPage(0).getResources().getCOSObject()
+                    .getCOSDictionary(COSName.COLORSPACE);
+            COSArray sep = (COSArray) spaces.getDictionaryObject(COSName.getPDFName("Sep"));
+            assertEquals(COSName.getPDFName("Spot1"), sep.getObject(1));
+            assertEquals(COSName.DEVICECMYK, sep.getObject(2));
+            assertEquals(4, ((COSArray) ((COSDictionary) sep.getObject(3)).getDictionaryObject(COSName.C1)).size());
+            COSArray dn = (COSArray) spaces.getDictionaryObject(COSName.getPDFName("DN"));
+            assertEquals(2, ((COSArray) dn.getObject(1)).size());
+            assertEquals(COSName.DEVICECMYK, dn.getObject(2));
+            assertEquals(8, ((COSArray) ((COSStream) dn.getObject(3)).getDictionaryObject(COSName.RANGE)).size());
+            List<List<Float>> sc = operands(tokens(doc.getPage(0).getContents().readAllBytes()), "sc");
+            assertEquals(List.of(0.5f), sc.get(0));
+            assertEquals(List.of(0.2f, 0.7f), sc.get(1));
+        }
+    }
+
+    @Test
+    void fileVariantKeepsTheDestinationPermissions() throws Exception {
+        assumeTrue(stirling.software.jpdfium.panama.ColorBindings.pdfxPrepareAvailable(),
+                "PDF/X native pipeline unavailable");
+        assumeTrue(java.nio.file.FileSystems.getDefault().supportedFileAttributeViews().contains("posix"),
+                "POSIX permissions unavailable");
+        java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("pdfx-mode");
+        java.nio.file.Path in = dir.resolve("in.pdf");
+        java.nio.file.Path out = dir.resolve("out.pdf");
+        java.nio.file.Files.write(in, textAndRectangle());
+        java.nio.file.Files.write(out, new byte[] {0});
+        var mode = java.nio.file.attribute.PosixFilePermissions.fromString("rw-r-----");
+        java.nio.file.Files.setPosixFilePermissions(out, mode);
+        stirling.software.jpdfium.panama.ColorBindings.pdfxPrepareFile(
+                in.toString(), out.toString(), 4, null, 0, 0x0f, 90);
+        assertEquals(mode, java.nio.file.Files.getPosixFilePermissions(out));
+        assertTrue(java.nio.file.Files.size(out) > 1);
+        try (var leftovers = java.nio.file.Files.list(dir)) {
+            assertEquals(2, leftovers.count(), "staging file left behind");
+        }
+    }
+
+    private static COSArray floats(float... values) {
+        COSArray array = new COSArray();
+        for (float v : values) array.add(new org.apache.pdfbox.cos.COSFloat(v));
+        return array;
     }
 
     @Test
