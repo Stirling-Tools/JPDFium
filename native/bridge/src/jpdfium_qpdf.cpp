@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <limits>
 #include <map>
 #include <memory>
 #include <set>
@@ -1186,8 +1187,9 @@ bool loadProgram(FT_Library lib, std::span<const uint8_t> data, FontProgram& p) 
 }
 
 std::string subsetProgram(FontProgram const& p, std::set<FT_UInt> const& glyphs) {
-    hb_blob_t* blob =
-        hb_blob_create(p.bytes.data(), p.bytes.size(), HB_MEMORY_MODE_READONLY, nullptr, nullptr);
+    if (p.bytes.size() > std::numeric_limits<unsigned int>::max()) return {};
+    hb_blob_t* blob = hb_blob_create(p.bytes.data(), static_cast<unsigned int>(p.bytes.size()),
+                                     HB_MEMORY_MODE_READONLY, nullptr, nullptr);
     hb_face_t* face = hb_face_create(blob, 0);
     hb_blob_destroy(blob);
     std::string out;
