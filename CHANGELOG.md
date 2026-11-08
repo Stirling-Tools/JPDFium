@@ -39,6 +39,10 @@ publishing workflows, not library releases, so they are not listed here.
 - `CompressOptions.jpegProgressive` writes rewritten images as progressive
   JPEG. Saves 2-11% more depending on image content while remaining a standard
   PDF DCT stream; baseline stays the default for maximum reader compatibility.
+- `PdfFontSubsetter` provides caller-driven font subsetting for text-heavy
+  documents: it subsets a supplied font program with HarfBuzz while retaining
+  glyph IDs, then replaces the matching qpdf font stream only when smaller.
+  It is opt-in because the caller must supply every codepoint the content uses.
 - `CompressOptions.ccittG4` (default on) re-encodes qualifying 1-bit
   DeviceGray images as CCITT Group 4 and adopts the stream only when smaller.
   A synthetic 2480x3508 bilevel bar scan went from 3,109 B to 1,690 B.
