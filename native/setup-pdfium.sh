@@ -1911,6 +1911,51 @@ if [ "$JPDFIUM_BUILD_MODE" = "static" ]; then
     fi
     cp "$SRC" "${TARGET_DIR}/lib/${MAIN_LIB}"
     LIB_COUNT=1
+    if [[ "$GN_ARGS" == *use_custom_libcxx=true* ]]; then
+        LIBCXX_TARGETS=("buildtools/third_party/libc++:libc++")
+        LIBCXX_DIRS=("${OUT_DIR}/obj/buildtools/third_party/libc++/libc++")
+        case "$(uname -s)" in
+            MINGW*|MSYS*|CYGWIN*) ;;
+            *)
+                LIBCXX_TARGETS+=("buildtools/third_party/libc++abi:libc++abi")
+                LIBCXX_DIRS+=("${OUT_DIR}/obj/buildtools/third_party/libc++abi/libc++abi")
+                ;;
+        esac
+        ninja -C "${OUT_DIR}" "${LIBCXX_TARGETS[@]}"
+        LIBCXX_OBJS=()
+        while IFS= read -r obj; do
+            LIBCXX_OBJS+=("$obj")
+        done < <(find "${LIBCXX_DIRS[@]}" -maxdepth 1 -type f \( -name '*.o' -o -name '*.obj' \) | sort)
+        if [ "${#LIBCXX_OBJS[@]}" -eq 0 ]; then
+            echo "  ERROR: no libc++ objects under ${LIBCXX_DIRS[*]}" >&2
+            exit 1
+        fi
+        LLVM_BIN="third_party/llvm-build/Release+Asserts/bin"
+        case "$(uname -s)" in
+            MINGW*|MSYS*|CYGWIN*)
+                LLVM_LIB="${LLVM_BIN}/llvm-lib.exe"
+                [ -x "$LLVM_LIB" ] || LLVM_LIB="$(command -v llvm-lib)"
+                "$LLVM_LIB" "-out:${TARGET_DIR}/lib/${MAIN_LIB}" "${TARGET_DIR}/lib/${MAIN_LIB}" "${LIBCXX_OBJS[@]}"
+                ;;
+            *)
+                LLVM_AR=""
+                for candidate in "${LLVM_BIN}/llvm-ar" "$(command -v llvm-ar || true)" "$(command -v ar || true)"; do
+                    if [ -n "$candidate" ] && [ -x "$candidate" ] && "$candidate" --version >/dev/null 2>&1; then
+                        LLVM_AR="$candidate"
+                        break
+                    fi
+                done
+                if [ -z "$LLVM_AR" ]; then
+                    echo "  ERROR: no working archiver to append libc++ objects" >&2
+                    exit 1
+                fi
+                echo "  Appending libc++ objects with ${LLVM_AR}"
+                "$LLVM_AR" qcs "${TARGET_DIR}/lib/${MAIN_LIB}" "${LIBCXX_OBJS[@]}"
+                ;;
+        esac
+        : > "${TARGET_DIR}/lib/pdfium-bundles-libcxx"
+        echo "  Appended ${#LIBCXX_OBJS[@]} libc++ objects to ${MAIN_LIB}"
+    fi
     echo "  Copied static archive: ${SRC} ($(du -h "$SRC" | cut -f1)) -> ${TARGET_DIR}/lib/${MAIN_LIB}"
 else
     MAIN_LIB="$MAIN_LIB_COMPONENT"

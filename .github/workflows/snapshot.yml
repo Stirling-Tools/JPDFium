@@ -361,11 +361,11 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           TARGET_PLATFORM: ${{ matrix.platform }}
           TARGET_LIBC: ${{ matrix.libc }}
-          # Default to component (fast PR iteration). Manual workflow_dispatch
-          # can override to "static" to sanity-check the release.yml path.
-          # build_mode=skia selects the Skia *renderer*, not a different
-          # asset: every prebuild carries both backends now.
-          JPDFIUM_BUILD_MODE: ${{ inputs.build_mode == 'skia' && 'component' || inputs.build_mode || 'component' }}
+          # Default to static: PDFium and every bundled dependency link into
+          # one bridge library where the prebuild allows it (see
+          # native/ci/fetch-pdfium-for-natives.sh). build_mode=skia selects
+          # the Skia *renderer*, not a different asset.
+          JPDFIUM_BUILD_MODE: ${{ inputs.build_mode == 'skia' && 'static' || inputs.build_mode || 'static' }}
         run: |
           # A missing musl or freebsd prebuild is an expected state until Prebuild PDFium
           # is green. Check whether the release asset actually exists first; if absent,
@@ -376,7 +376,7 @@ jobs:
             SUFFIX=""
             case "$JPDFIUM_BUILD_MODE" in
               component) SUFFIX="" ;;
-              static)    SUFFIX="-static" ;;
+              static)    SUFFIX="" ;;
               v8)        SUFFIX="-v8" ;;
               xfa)       SUFFIX="-xfa" ;;
             esac
@@ -411,7 +411,18 @@ jobs:
               fi
             fi
           fi
-          bash native/fetch-prebuilt-pdfium.sh "$TARGET_PLATFORM"
+          bash native/ci/fetch-pdfium-for-natives.sh "$TARGET_PLATFORM"
+
+      - name: Download bare trimmed ICU .dat (single library)
+        if: env.JPDFIUM_BUILD_MODE == 'static'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.1
+        with:
+          name: icu-data-trimmed
+          path: native/dist/icu-data/
+
+      - name: Prepare single-library build (ICU headers, LLVM toolchain)
+        if: env.JPDFIUM_BUILD_MODE == 'static'
+        run: bash native/ci/prepare-single-library.sh ${{ matrix.platform }}
 
       # musl legs run the ENTIRE native build + smoke inside an Alpine container
       # via docker run from the host (GitHub cannot host JS actions in Alpine
@@ -480,7 +491,7 @@ jobs:
         run: bash native/build-real.sh
 
       - name: Build minimal ICU data (Linux)
-        if: startsWith(matrix.platform, 'linux-') && matrix.libc != 'musl'
+        if: startsWith(matrix.platform, 'linux-') && matrix.libc != 'musl' && env.JPDFIUM_BUILD_MODE != 'static'
         # Strips ~25 MB of unused ICU data (locales, currencies, collations,
         # RBNF, ...) and repackages libicudata.so. The bundler step will then
         # pick up the trimmed lib via ldd on the bridge. JPDFIUM_TARGET_PLATFORM
@@ -495,14 +506,14 @@ jobs:
         # locally; we download the pre-trimmed .dat produced once on Linux
         # by the prep-windows-icu job and wrap it on macOS via clang. The
         # .dat is platform-agnostic.
-        if: startsWith(matrix.platform, 'darwin-')
+        if: startsWith(matrix.platform, 'darwin-') && env.JPDFIUM_BUILD_MODE != 'static'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.1
         with:
           name: icu-data-trimmed
           path: native/dist/icu-data/
 
       - name: Build minimal ICU data (macOS)
-        if: startsWith(matrix.platform, 'darwin-')
+        if: startsWith(matrix.platform, 'darwin-') && env.JPDFIUM_BUILD_MODE != 'static'
         # Wraps the matching icudt<major>l.dat into a libicudata.<major>.dylib
         # via a clang .incbin asm stub. Pre-stages into native/dist/<platform>/
         # so the bundler picks it up instead of brew's full 33 MB copy.

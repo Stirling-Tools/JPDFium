@@ -1,11 +1,13 @@
 package stirling.software.jpdfium.panama;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
@@ -73,5 +75,14 @@ class NativeLoaderPlatformTest {
                 NativeLoader.windowsLoadTier("icudt78.dll")
                         < NativeLoader.windowsLoadTier("icuuc78.dll"),
                 "icudt78.dll must load before icuuc78.dll");
+    }
+
+    @Test
+    void singleLibraryLayoutIsOnlyTheBridge() {
+        assertTrue(NativeLoader.isSingleLibrary(List.of("jpdfium.dll"), "jpdfium.dll"));
+        assertFalse(NativeLoader.isSingleLibrary(
+                List.of("pdfium.dll", "jpdfium.dll"), "jpdfium.dll"));
+        assertFalse(NativeLoader.isSingleLibrary(List.of(), "jpdfium.dll"));
+        assertFalse(NativeLoader.isSingleLibrary(List.of("libpdfium.so"), "libjpdfium.so"));
     }
 }

@@ -179,6 +179,10 @@ if(JPDFIUM_USE_PDFIUM)
         set(PDFIUM_LINK_MODE "static")
         set(PDFIUM_LIB "${PDFIUM_STATIC_LIB}")
         message(STATUS "PDFium link mode: static (${PDFIUM_LIB})")
+        file(STRINGS "${PDFIUM_LIB}" _jpdfium_pdfium_icu_init REGEX "u_init_[0-9]+" LIMIT_COUNT 1)
+        string(REGEX MATCH "u_init_([0-9]+)" _jpdfium_pdfium_icu_init "${_jpdfium_pdfium_icu_init}")
+        set(PDFIUM_ICU_MAJOR "${CMAKE_MATCH_1}")
+        unset(_jpdfium_pdfium_icu_init)
     else()
         find_library(PDFIUM_LIB
             NAMES pdfium embedpdf
@@ -193,6 +197,35 @@ if(JPDFIUM_USE_PDFIUM)
         endif()
         set(PDFIUM_LINK_MODE "component")
         message(STATUS "PDFium link mode: component (${PDFIUM_LIB})")
+    endif()
+
+    if(PDFIUM_LINK_MODE STREQUAL "static")
+        set(_jpdfium_single_default ON)
+    else()
+        set(_jpdfium_single_default OFF)
+    endif()
+    option(JPDFIUM_SINGLE_LIBRARY
+        "Link PDFium and every third-party dependency into one bridge library"
+        ${_jpdfium_single_default})
+    if(JPDFIUM_SINGLE_LIBRARY AND NOT PDFIUM_LINK_MODE STREQUAL "static")
+        message(FATAL_ERROR "JPDFIUM_SINGLE_LIBRARY needs the static PDFium prebuild (JPDFIUM_BUILD_MODE=static)")
+    endif()
+    if(JPDFIUM_SINGLE_LIBRARY)
+        if(NOT PDFIUM_ICU_MAJOR)
+            message(FATAL_ERROR "Could not read the ICU major version from ${PDFIUM_LIB}")
+        endif()
+        set(JPDFIUM_ICU_DATA "${CMAKE_SOURCE_DIR}/dist/icu-data/icudt${PDFIUM_ICU_MAJOR}l.dat"
+            CACHE FILEPATH "Trimmed ICU common data embedded into the single bridge library")
+        if(NOT EXISTS "${JPDFIUM_ICU_DATA}")
+            message(FATAL_ERROR "Trimmed ICU ${PDFIUM_ICU_MAJOR} data not found at ${JPDFIUM_ICU_DATA}")
+        endif()
+        if(MSVC)
+            set(CMAKE_FIND_LIBRARY_SUFFIXES .lib)
+            set(CMAKE_MSVC_RUNTIME_LIBRARY MultiThreaded)
+        else()
+            set(CMAKE_FIND_LIBRARY_SUFFIXES .a)
+        endif()
+        message(STATUS "Single library: PDFium ICU ${PDFIUM_ICU_MAJOR}, data ${JPDFIUM_ICU_DATA}")
     endif()
 
     add_library(jpdfium SHARED
@@ -253,7 +286,9 @@ if(JPDFIUM_USE_PDFIUM)
         # any pdfium-internal symbol not directly referenced by the bridge,
         # including FPDF_* exports the JVM resolves via dlsym at runtime.
         if(APPLE)
-            target_link_options(jpdfium PRIVATE "-Wl,-force_load,${PDFIUM_LIB}")
+            target_link_options(jpdfium PRIVATE "-Wl,-force_load,${PDFIUM_LIB}"
+                "-Wl,-exported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/bridge/jpdfium.exports")
+            set_property(TARGET jpdfium APPEND PROPERTY LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/bridge/jpdfium.exports")
         elseif(MSVC)
             target_link_options(jpdfium PRIVATE "/WHOLEARCHIVE:${PDFIUM_LIB}")
             target_link_libraries(jpdfium PRIVATE "${PDFIUM_LIB}")
@@ -277,6 +312,16 @@ if(JPDFIUM_USE_PDFIUM)
         # get transitively via libpdfium.so's NEEDED entries.
         if(UNIX AND NOT APPLE)
             target_link_libraries(jpdfium PRIVATE pthread ${CMAKE_DL_LIBS} m)
+            if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+                execute_process(
+                    COMMAND ${CMAKE_CXX_COMPILER} --rtlib=compiler-rt --print-libgcc-file-name
+                    OUTPUT_VARIABLE _jpdfium_clang_builtins
+                    OUTPUT_STRIP_TRAILING_WHITESPACE
+                    ERROR_QUIET)
+                if(_jpdfium_clang_builtins AND EXISTS "${_jpdfium_clang_builtins}")
+                    target_link_options(jpdfium PRIVATE "--rtlib=compiler-rt" "--unwindlib=libgcc")
+                endif()
+            endif()
         endif()
         if(APPLE)
             target_link_libraries(jpdfium PRIVATE "-framework CoreFoundation"
@@ -295,7 +340,9 @@ if(JPDFIUM_USE_PDFIUM)
     if(TURBOJPEG_INCLUDE AND TURBOJPEG_LIB)
         target_include_directories(jpdfium PRIVATE "${TURBOJPEG_INCLUDE}")
         target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_TURBOJPEG=1)
-        target_link_libraries(jpdfium PRIVATE "${TURBOJPEG_LIB}")
+        if(NOT JPDFIUM_SINGLE_LIBRARY)
+            target_link_libraries(jpdfium PRIVATE "${TURBOJPEG_LIB}")
+        endif()
     endif()
 
     find_program(CARGO_CMD cargo)
@@ -408,15 +455,28 @@ if(JPDFIUM_USE_PDFIUM)
     pkg_check_modules(PCRE2_32 REQUIRED IMPORTED_TARGET libpcre2-32)
     target_link_libraries(jpdfium PRIVATE PkgConfig::PCRE2_32)
     target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_PCRE2)
+    if(JPDFIUM_SINGLE_LIBRARY AND WIN32)
+        target_compile_definitions(jpdfium PRIVATE PCRE2_STATIC)
+    endif()
 
     # FreeType - font extraction, classification, width repair
-    find_package(Freetype REQUIRED)
-    target_link_libraries(jpdfium PRIVATE Freetype::Freetype)
+    if(JPDFIUM_SINGLE_LIBRARY)
+        pkg_check_modules(FREETYPE_HEADERS REQUIRED freetype2)
+        target_include_directories(jpdfium PRIVATE ${FREETYPE_HEADERS_INCLUDE_DIRS})
+    else()
+        find_package(Freetype REQUIRED)
+        target_link_libraries(jpdfium PRIVATE Freetype::Freetype)
+    endif()
     target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_FREETYPE)
 
     # HarfBuzz - text shaping + hb-subset for font subsetting
-    pkg_check_modules(HARFBUZZ REQUIRED IMPORTED_TARGET harfbuzz harfbuzz-subset)
-    target_link_libraries(jpdfium PRIVATE PkgConfig::HARFBUZZ)
+    if(JPDFIUM_SINGLE_LIBRARY)
+        pkg_check_modules(HARFBUZZ REQUIRED harfbuzz harfbuzz-subset)
+        target_include_directories(jpdfium PRIVATE ${HARFBUZZ_INCLUDE_DIRS})
+    else()
+        pkg_check_modules(HARFBUZZ REQUIRED IMPORTED_TARGET harfbuzz harfbuzz-subset)
+        target_link_libraries(jpdfium PRIVATE PkgConfig::HARFBUZZ)
+    endif()
     target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_HARFBUZZ)
 
     # ICU4C - Unicode normalization, BiDi, sentence segmentation. All of those
@@ -426,8 +486,31 @@ if(JPDFIUM_USE_PDFIUM)
     # dylibs) and the bundler then copied - about 2.6 MB per darwin bundle for
     # no symbols. Linux and Windows already dropped it; with lld and MSVC the
     # unused library never reaches the load commands.
-    pkg_check_modules(ICU REQUIRED IMPORTED_TARGET icu-uc)
-    target_link_libraries(jpdfium PRIVATE PkgConfig::ICU)
+    if(JPDFIUM_SINGLE_LIBRARY)
+        pkg_check_modules(ICU REQUIRED icu-uc)
+        string(REGEX MATCH "^[0-9]+" _jpdfium_icu_header_major "${ICU_VERSION}")
+        if(NOT _jpdfium_icu_header_major STREQUAL PDFIUM_ICU_MAJOR)
+            message(FATAL_ERROR
+                "ICU headers are version ${ICU_VERSION} but PDFium bundles ICU ${PDFIUM_ICU_MAJOR}; "
+                "point PKG_CONFIG_PATH at ICU ${PDFIUM_ICU_MAJOR} headers")
+        endif()
+        target_include_directories(jpdfium PRIVATE ${ICU_INCLUDE_DIRS})
+        target_compile_definitions(jpdfium PRIVATE U_STATIC_IMPLEMENTATION JPDFIUM_EMBEDDED_ICU_DATA)
+        set(_jpdfium_icu_data_cpp "${CMAKE_CURRENT_BINARY_DIR}/jpdfium_icu_data.cpp")
+        add_custom_command(
+            OUTPUT "${_jpdfium_icu_data_cpp}"
+            COMMAND ${CMAKE_COMMAND}
+                -DINPUT=${JPDFIUM_ICU_DATA}
+                -DOUTPUT=${_jpdfium_icu_data_cpp}
+                -P ${CMAKE_SOURCE_DIR}/cmake/embed-icu-data.cmake
+            DEPENDS "${JPDFIUM_ICU_DATA}" "${CMAKE_SOURCE_DIR}/cmake/embed-icu-data.cmake"
+            COMMENT "Embedding ICU data ${JPDFIUM_ICU_DATA}"
+            VERBATIM)
+        target_sources(jpdfium PRIVATE "${_jpdfium_icu_data_cpp}")
+    else()
+        pkg_check_modules(ICU REQUIRED IMPORTED_TARGET icu-uc)
+        target_link_libraries(jpdfium PRIVATE PkgConfig::ICU)
+    endif()
     target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_ICU)
 
     # qpdf - PDF structure manipulation, stream replacement
@@ -437,14 +520,93 @@ if(JPDFIUM_USE_PDFIUM)
     # target to C++20 (last -std= wins). Strip it and keep gnu++23.
     string(REGEX REPLACE "-std=[^ ;]+" "" QPDF_CFLAGS_OTHER "${QPDF_CFLAGS_OTHER}")
     target_include_directories(jpdfium PRIVATE ${QPDF_INCLUDE_DIRS})
-    target_link_directories(jpdfium PRIVATE ${QPDF_LIBRARY_DIRS})
-    target_link_libraries(jpdfium PRIVATE ${QPDF_LIBRARIES})
+    if(JPDFIUM_SINGLE_LIBRARY)
+        if(APPLE)
+            set(_jpdfium_system_libs c c++ m z iconv pthread)
+        elseif(WIN32)
+            set(_jpdfium_system_libs advapi32 bcrypt crypt32 kernel32 user32 ws2_32)
+        else()
+            set(_jpdfium_system_libs c m dl rt pthread stdc++ gcc_s)
+        endif()
+        foreach(_jpdfium_qpdf_dep IN LISTS QPDF_STATIC_LIBRARIES)
+            if(_jpdfium_qpdf_dep STREQUAL "jpeg")
+                continue()
+            endif()
+            if(_jpdfium_qpdf_dep IN_LIST _jpdfium_system_libs)
+                target_link_libraries(jpdfium PRIVATE ${_jpdfium_qpdf_dep})
+                continue()
+            endif()
+            find_library(JPDFIUM_QPDF_DEP_${_jpdfium_qpdf_dep}
+                NAMES ${_jpdfium_qpdf_dep} lib${_jpdfium_qpdf_dep}
+                HINTS ${QPDF_STATIC_LIBRARY_DIRS})
+            if(JPDFIUM_QPDF_DEP_${_jpdfium_qpdf_dep})
+                target_link_libraries(jpdfium PRIVATE "${JPDFIUM_QPDF_DEP_${_jpdfium_qpdf_dep}}")
+            else()
+                target_link_libraries(jpdfium PRIVATE ${_jpdfium_qpdf_dep})
+            endif()
+        endforeach()
+    else()
+        target_link_directories(jpdfium PRIVATE ${QPDF_LIBRARY_DIRS})
+        target_link_libraries(jpdfium PRIVATE ${QPDF_LIBRARIES})
+    endif()
     target_compile_options(jpdfium PRIVATE ${QPDF_CFLAGS_OTHER})
     target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_QPDF)
 
     # Pl_DCT's jpeg_set_quality callback needs libjpeg symbols directly.
     find_package(JPEG REQUIRED)
-    target_link_libraries(jpdfium PRIVATE JPEG::JPEG)
+    if(JPDFIUM_SINGLE_LIBRARY)
+        if(TURBOJPEG_INCLUDE AND TURBOJPEG_LIB)
+            set(_jpdfium_jpeg_archive "${TURBOJPEG_LIB}")
+        else()
+            list(GET JPEG_LIBRARIES 0 _jpdfium_jpeg_archive)
+        endif()
+        if(CMAKE_OSX_ARCHITECTURES)
+            set(_jpdfium_partial_link_flags "-arch;${CMAKE_OSX_ARCHITECTURES}")
+        elseif(CMAKE_CXX_COMPILER_TARGET)
+            set(_jpdfium_partial_link_flags "--target=${CMAKE_CXX_COMPILER_TARGET}")
+        else()
+            set(_jpdfium_partial_link_flags "")
+        endif()
+        if(MSVC)
+            find_program(JPDFIUM_LLVM_NM NAMES llvm-nm HINTS "$ENV{ProgramFiles}/LLVM/bin" REQUIRED)
+            find_program(JPDFIUM_LLVM_OBJCOPY NAMES llvm-objcopy HINTS "$ENV{ProgramFiles}/LLVM/bin" REQUIRED)
+            set(_jpdfium_nm "${JPDFIUM_LLVM_NM}")
+            set(_jpdfium_objcopy "${JPDFIUM_LLVM_OBJCOPY}")
+            set(_jpdfium_jpeg_object "${CMAKE_CURRENT_BINARY_DIR}/jpdfium_jpeg.lib")
+        else()
+            set(_jpdfium_nm "${CMAKE_NM}")
+            set(_jpdfium_objcopy "${CMAKE_OBJCOPY}")
+            set(_jpdfium_jpeg_object "${CMAKE_CURRENT_BINARY_DIR}/jpdfium_jpeg${CMAKE_CXX_OUTPUT_EXTENSION}")
+        endif()
+        add_custom_command(
+            OUTPUT "${_jpdfium_jpeg_object}"
+            COMMAND ${CMAKE_COMMAND}
+                -DARCHIVE=${_jpdfium_jpeg_archive}
+                -DOUTPUT=${_jpdfium_jpeg_object}
+                -DCXX=${CMAKE_CXX_COMPILER}
+                "-DFLAGS=${_jpdfium_partial_link_flags}"
+                -DNM=${_jpdfium_nm}
+                -DOBJCOPY=${_jpdfium_objcopy}
+                -DAPPLE=${APPLE}
+                -DMSVC=${MSVC}
+                "-DKEEP_REGEX=^_?(jpeg_|tj)"
+                "-DDROP_REGEX=^_?jpeg_(simd_|idct_|fdct_)"
+                -P ${CMAKE_SOURCE_DIR}/cmake/localize-static-archive.cmake
+            DEPENDS "${_jpdfium_jpeg_archive}" "${CMAKE_SOURCE_DIR}/cmake/localize-static-archive.cmake"
+            COMMENT "Localizing libjpeg internals from ${_jpdfium_jpeg_archive}"
+            VERBATIM)
+        if(MSVC)
+            add_custom_target(jpdfium_jpeg DEPENDS "${_jpdfium_jpeg_object}")
+            add_dependencies(jpdfium jpdfium_jpeg)
+            target_link_libraries(jpdfium PRIVATE "${_jpdfium_jpeg_object}")
+        else()
+            set_source_files_properties("${_jpdfium_jpeg_object}" PROPERTIES EXTERNAL_OBJECT TRUE GENERATED TRUE)
+            target_sources(jpdfium PRIVATE "${_jpdfium_jpeg_object}")
+        endif()
+        target_include_directories(jpdfium PRIVATE ${JPEG_INCLUDE_DIRS})
+    else()
+        target_link_libraries(jpdfium PRIVATE JPEG::JPEG)
+    endif()
     # Silence qpdf's PointerHolder transition #warning (treated as error by
     # CMAKE_COMPILE_WARNING_AS_ERROR). The bridge uses the modern
     # std::shared_ptr qpdf API (e.g. QPDFWriter::getBufferSharedPointer) and
