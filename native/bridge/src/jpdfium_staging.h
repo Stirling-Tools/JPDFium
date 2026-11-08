@@ -130,6 +130,59 @@ inline bool PublishStaged(const std::string& staging, const char* destination) {
     return false;
 }
 
+inline bool PublishStagedFile(StagedFile* staged, const char* destination, std::string* error) {
+    FILE* file = staged->file;
+    staged->file = nullptr;
+    if (std::fflush(file) != 0) {
+        std::fclose(file);
+        *error = "cannot flush the staging file";
+        return false;
+    }
+#if defined(_WIN32)
+    struct _stat64 own;
+    const bool sized = ::_fstat64(::_fileno(file), &own) == 0 && own.st_size > 0;
+    std::fclose(file);
+    if (!sized) {
+        *error = "the staging file is empty";
+        return false;
+    }
+    if (!PublishStaged(staged->path, destination)) {
+        *error = "cannot publish the staging file";
+        return false;
+    }
+    return true;
+#else
+    struct stat own;
+    struct stat entry;
+    struct stat after;
+    const int fd = ::fileno(file);
+    if (::fstat(fd, &own) != 0 || own.st_size == 0) {
+        std::fclose(file);
+        *error = "the staging file is empty";
+        return false;
+    }
+    if (::lstat(staged->path.c_str(), &entry) != 0 || !S_ISREG(entry.st_mode) ||
+        entry.st_dev != own.st_dev || entry.st_ino != own.st_ino) {
+        std::fclose(file);
+        *error = "the staging file was replaced before publication";
+        return false;
+    }
+    if (std::rename(staged->path.c_str(), destination) != 0) {
+        std::fclose(file);
+        *error = "cannot publish the staging file";
+        return false;
+    }
+    const bool same = ::lstat(destination, &after) == 0 && after.st_dev == own.st_dev &&
+                      after.st_ino == own.st_ino;
+    std::fclose(file);
+    if (!same) {
+        *error = "the destination was replaced during publication";
+        return false;
+    }
+    return true;
+#endif
+}
+
 }  // namespace jpdfium_staging
 
 #endif  // JPDFIUM_STAGING_H

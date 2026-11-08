@@ -1690,6 +1690,17 @@ void CopyMessage(const std::string& text, char* message, int32_t cap) {
     message[n] = '\0';
 }
 
+void DiscardStaged(jpdfium_staging::StagedFile* staged) {
+    if (staged->file) {
+        std::fclose(staged->file);
+        staged->file = nullptr;
+    }
+    if (!staged->path.empty()) {
+        std::error_code ec;
+        std::filesystem::remove(staged->path, ec);
+    }
+}
+
 Options MakeOptions(int32_t level, const uint8_t* lut, int32_t grid, int32_t flags,
                     int32_t quality) {
     Options o;
@@ -1786,49 +1797,45 @@ JPDFIUM_EXPORT int32_t jpdfium_pdfx_prepare_file(const char* in_path, const char
 #else
     if (!in_path || !out_path) return JPDFIUM_ERR_INVALID;
     if (lut && (lut_grid < 2 || lut_grid > 256)) return JPDFIUM_ERR_INVALID;
-    std::string staging;
+    jpdfium_staging::StagedFile staged;
     try {
         Options options = MakeOptions(level, lut, lut_grid, flags, quality);
         {
             auto pdf = QPDF::create();
             pdf->processFile(in_path);
             Normalise(*pdf, options);
-            jpdfium_staging::StagedFile staged = jpdfium_staging::OpenUniqueSibling(out_path);
-            staging = staged.path;
+            staged = jpdfium_staging::OpenUniqueSibling(out_path);
             if (!jpdfium_staging::ApplyPublishModeTo(staged.file, out_path)) {
-                std::fclose(staged.file);
                 throw std::runtime_error("cannot set the permissions of the staging file");
             }
             QPDFWriter writer{*pdf};
             ConfigureWriter(writer);
-            writer.setOutputFile(staging.c_str(), staged.file, true);
+            writer.setOutputFile(staged.path.c_str(), staged.file, false);
             jpdfium_qpdf_internal::WriterLock lock{-1};
             writer.write();
         }
-        std::error_code ec;
-        if (std::filesystem::file_size(staging, ec) == 0 || ec) {
-            std::filesystem::remove(staging, ec);
+        std::string error;
+        if (!jpdfium_staging::PublishStagedFile(&staged, out_path, &error)) {
+            std::error_code ec;
+            std::filesystem::remove(staged.path, ec);
+            CopyMessage(error, message, message_cap);
             return JPDFIUM_ERR_IO;
         }
-        return jpdfium_staging::PublishStaged(staging, out_path) ? JPDFIUM_OK : JPDFIUM_ERR_IO;
+        return JPDFIUM_OK;
     } catch (const PdfxNonconformance& e) {
-        std::error_code ec;
-        std::filesystem::remove(staging, ec);
+        DiscardStaged(&staged);
         CopyMessage(e.what(), message, message_cap);
         return JPDFIUM_ERR_PDFX_NONCONFORMANT;
     } catch (const std::invalid_argument& e) {
-        std::error_code ec;
-        std::filesystem::remove(staging, ec);
+        DiscardStaged(&staged);
         CopyMessage(e.what(), message, message_cap);
         return JPDFIUM_ERR_INVALID;
     } catch (const std::exception& e) {
-        std::error_code ec;
-        std::filesystem::remove(staging, ec);
+        DiscardStaged(&staged);
         CopyMessage(e.what(), message, message_cap);
         return JPDFIUM_ERR_NATIVE;
     } catch (...) {
-        std::error_code ec;
-        std::filesystem::remove(staging, ec);
+        DiscardStaged(&staged);
         return JPDFIUM_ERR_NATIVE;
     }
 #endif
