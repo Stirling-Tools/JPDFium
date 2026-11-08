@@ -515,18 +515,20 @@ public final class PdfSplit {
     }
 
     private static Path canonical(Path path) throws IOException {
-        Path absolute = path.toAbsolutePath().normalize();
-        if (Files.exists(absolute)) return absolute.toRealPath();
-        Path parent = absolute.getParent();
-        Path resolvedParent = parent != null && Files.exists(parent) ? parent.toRealPath() : parent;
-        Path name = absolute.getFileName();
-        Path target = resolvedParent == null ? absolute : resolvedParent.resolve(name);
-        if (Files.isSymbolicLink(target)) {
-            Path link = Files.readSymbolicLink(target);
-            Path linked = target.resolveSibling(link).normalize();
-            return linked.equals(absolute) ? linked : canonical(linked);
+        Set<Path> followed = new HashSet<>();
+        Path current = path.toAbsolutePath().normalize();
+        while (true) {
+            if (Files.exists(current)) return current.toRealPath();
+            Path parent = current.getParent();
+            if (parent != null && Files.exists(parent)) {
+                current = parent.toRealPath().resolve(current.getFileName());
+            }
+            if (!Files.isSymbolicLink(current)) return current;
+            if (!followed.add(current)) {
+                throw new IllegalArgumentException("output is a symlink loop: " + path);
+            }
+            current = current.resolveSibling(Files.readSymbolicLink(current)).normalize();
         }
-        return target;
     }
 
     /**
