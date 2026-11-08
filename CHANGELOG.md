@@ -19,11 +19,11 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Added
 
-- `PdfShadingConverter` rewrites simple `/DeviceRGB` axial and radial
-  shadings whose Type 2 function carries `/C0` and `/C1` arrays to
-  `/DeviceCMYK`. PDF/X metadata application runs the same pass before
-  writing the output intent. Shadings sampled or expressed as other function
-  types are left unchanged.
+- `PdfShadingConverter` rewrites `/DeviceRGB` axial and radial shadings whose
+  function is a Type 0 sampled function, a Type 2 exponential function, or a
+  Type 3 stitch of those to `/DeviceCMYK`. PDF/X metadata application runs the
+  same pass before writing the output intent. PostScript calculator functions
+  are left to the Ghostscript fallback.
 - Native qpdf font-stream replacement. `PdfFontEmbedder.embed(...)` replaces
   `/FontFile2` or `/FontFile3` streams by exact `/BaseFont`, updating
   `/Length1`; Type 1 `/FontFile` streams are rejected. `PdfXOptions.fontData(...)`

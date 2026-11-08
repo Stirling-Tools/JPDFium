@@ -94,22 +94,135 @@ QPDFObjectHandle ConvertRgbArrayToCmyk(QPDFObjectHandle rgb) {
     return out;
 }
 
-bool ConvertShadingFunctionToCmyk(QPDFObjectHandle function) {
-    if (!function.isDictionary()) return false;
-    QPDFObjectHandle type = function.getKey("/FunctionType");
-    if (!type.isInteger() || type.getIntValue() != 2) return false;
+bool ConvertExponentialFunctionToCmyk(QPDFObjectHandle function) {
     QPDFObjectHandle c0 = function.getKey("/C0");
     QPDFObjectHandle c1 = function.getKey("/C1");
-    if (!c0.isArray() || !c1.isArray() || c0.getArrayNItems() != 3 || c1.getArrayNItems() != 3) {
-        return false;
-    }
+    if (!c0.isArray() || !c1.isArray()) return false;
+    if (c0.getArrayNItems() == 4 && c1.getArrayNItems() == 4) return true;
+    if (c0.getArrayNItems() != 3 || c1.getArrayNItems() != 3) return false;
     function.replaceKey("/C0", ConvertRgbArrayToCmyk(c0));
     function.replaceKey("/C1", ConvertRgbArrayToCmyk(c1));
     return true;
 }
 
-// Rewrites the simple /DeviceRGB axial/radial shadings whose Type 2 function
-// carries RGB /C0 and /C1 arrays. Other shading functions are left untouched.
+QPDFObjectHandle NewUnitRange(int components) {
+    QPDFObjectHandle range = QPDFObjectHandle::newArray();
+    for (int i = 0; i < components; ++i) {
+        range.appendItem(QPDFObjectHandle::newReal(0.0));
+        range.appendItem(QPDFObjectHandle::newReal(1.0));
+    }
+    return range;
+}
+
+bool ConvertSampledFunctionToCmyk(QPDFObjectHandle function) {
+    QPDFObjectHandle dict = function.getDict();
+    QPDFObjectHandle range = dict.getKey("/Range");
+    if (!range.isArray() || range.getArrayNItems() % 2 != 0) return false;
+    const int outputs = range.getArrayNItems() / 2;
+    if (outputs == 4) return true;
+    if (outputs != 3) return false;
+
+    QPDFObjectHandle bitsObj = dict.getKey("/BitsPerSample");
+    const int bits = bitsObj.isInteger() ? bitsObj.getIntValue() : 8;
+    // Rewriting arbitrary bit depths would need a second packing pass; leave
+    // those to the Ghostscript fallback.
+    if (bits != 8) return false;
+
+    QPDFObjectHandle size = dict.getKey("/Size");
+    if (!size.isArray() || size.getArrayNItems() < 1 || size.getArrayNItems() > 4) return false;
+    int64_t samples = 1;
+    for (int i = 0; i < size.getArrayNItems(); ++i) {
+        QPDFObjectHandle item = size.getArrayItem(i);
+        if (!item.isInteger() || item.getIntValue() < 1) return false;
+        samples *= item.getIntValue();
+        if (samples > 1 << 24) return false;
+    }
+
+    QPDFObjectHandle orderObj = dict.getKey("/Order");
+    const int order = orderObj.isInteger() ? orderObj.getIntValue() : 1;
+    if (order != 1 && order != 3) return false;
+
+    std::shared_ptr<Buffer> stream = function.getStreamData(qpdf_dl_all);
+    if (!stream || stream->getSize() < static_cast<size_t>(samples) * 3) return false;
+    const uint8_t* input = reinterpret_cast<const uint8_t*>(stream->getBuffer());
+
+    QPDFObjectHandle decodeObj = dict.getKey("/Decode");
+    double decode[6] = {0.0, 1.0, 0.0, 1.0, 0.0, 1.0};
+    if (decodeObj.isArray() && decodeObj.getArrayNItems() == 6) {
+        for (int i = 0; i < 6; ++i) {
+            if (!decodeObj.getArrayItem(i).isNumber()) return false;
+            decode[i] = decodeObj.getArrayItem(i).getNumericValue();
+        }
+    }
+
+    std::vector<uint8_t> output(static_cast<size_t>(samples) * 4);
+    for (int64_t sample = 0; sample < samples; ++sample) {
+        double rgb[3];
+        for (int component = 0; component < 3; ++component) {
+            const int64_t index =
+                order == 1 ? sample * 3 + component : component * samples + sample;
+            const double normalized = static_cast<double>(input[index]) / 255.0;
+            rgb[component] =
+                std::clamp(decode[component * 2] +
+                               normalized * (decode[component * 2 + 1] - decode[component * 2]),
+                           0.0, 1.0);
+        }
+        uint8_t cmyk[4];
+        RgbToCmyk(static_cast<uint8_t>(std::lround(rgb[0] * 255.0)),
+                  static_cast<uint8_t>(std::lround(rgb[1] * 255.0)),
+                  static_cast<uint8_t>(std::lround(rgb[2] * 255.0)), true, cmyk);
+        for (int component = 0; component < 4; ++component) {
+            output[static_cast<size_t>(sample) * 4 + component] = cmyk[component];
+        }
+    }
+
+    dict.replaceKey("/Range", NewUnitRange(4));
+    dict.replaceKey("/Decode", NewUnitRange(4));
+    dict.replaceKey("/Order", QPDFObjectHandle::newInteger(1));
+    function.replaceStreamData(
+        std::string(reinterpret_cast<const char*>(output.data()), output.size()),
+        QPDFObjectHandle::newNull(), QPDFObjectHandle::newNull());
+    return true;
+}
+
+bool ConvertShadingFunctionToCmyk(QPDFObjectHandle function);
+
+bool ConvertStitchingFunctionToCmyk(QPDFObjectHandle function) {
+    QPDFObjectHandle functions = function.getKey("/Functions");
+    if (!functions.isArray() || functions.getArrayNItems() == 0) return false;
+    for (int i = 0; i < functions.getArrayNItems(); ++i) {
+        if (!ConvertShadingFunctionToCmyk(functions.getArrayItem(i))) return false;
+    }
+    QPDFObjectHandle range = function.getKey("/Range");
+    if (!range.isArray() || range.getArrayNItems() % 2 != 0) return false;
+    if (range.getArrayNItems() / 2 == 4) return true;
+    if (range.getArrayNItems() / 2 != 3) return false;
+    function.replaceKey("/Range", NewUnitRange(4));
+    return true;
+}
+
+bool ConvertShadingFunctionToCmyk(QPDFObjectHandle function) {
+    if (!function.isDictionary() && !function.isStream()) return false;
+    QPDFObjectHandle dict = function.isStream() ? function.getDict() : function;
+    QPDFObjectHandle type = dict.getKey("/FunctionType");
+    if (!type.isInteger()) return false;
+    switch (type.getIntValue()) {
+        case 0:
+            return ConvertSampledFunctionToCmyk(function);
+        case 2:
+            return ConvertExponentialFunctionToCmyk(dict);
+        case 3:
+            return ConvertStitchingFunctionToCmyk(dict);
+        default:
+            // PostScript calculator functions are arbitrary programs; the
+            // Ghostscript fallback owns those.
+            return false;
+    }
+}
+
+// Rewrites /DeviceRGB shadings whose function is a Type 0 sampled function,
+// a Type 2 exponential function, or a Type 3 stitch of those. Other shading
+// functions are left untouched.
 int32_t ConvertDocumentShadingsToCmyk(QPDF& pdf) {
     int32_t converted = 0;
     for (QPDFObjectHandle object : pdf.getAllObjects()) {
