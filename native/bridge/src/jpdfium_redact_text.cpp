@@ -198,7 +198,7 @@ void buildNormalizedText(FPDF_TEXTPAGE textPage, int count, std::vector<int>& no
         normIdxMap.reserve(static_cast<size_t>(count));
         for (int i = 0; i < count; ++i) {
             unsigned int uni = FPDFText_GetUnicode(textPage, i);
-            if (uni == 0) continue;
+            if (uni == 0 || isLineEndHyphen(textPage, i, uni)) continue;
             if (uni > 0x10FFFF || (uni >= 0xD800 && uni <= 0xDFFF)) {
                 uni = 0xFFFD;
             }
@@ -212,7 +212,7 @@ void buildNormalizedText(FPDF_TEXTPAGE textPage, int count, std::vector<int>& no
     normIdxMap.reserve(static_cast<size_t>(count));
     for (int i = 0; i < count; ++i) {
         unsigned int uni = FPDFText_GetUnicode(textPage, i);
-        if (uni == 0) continue;
+        if (uni == 0 || isLineEndHyphen(textPage, i, uni)) continue;
         if (uni > 0x10FFFF || (uni >= 0xD800 && uni <= 0xDFFF)) {
             uni = 0xFFFD;
         }
@@ -247,7 +247,7 @@ void buildNormalizedText(FPDF_TEXTPAGE textPage, int count, std::vector<int>& no
     normIdxMap.reserve(static_cast<size_t>(count));
     for (int i = 0; i < count; ++i) {
         unsigned int uni = FPDFText_GetUnicode(textPage, i);
-        if (uni == 0) continue;
+        if (uni == 0 || isLineEndHyphen(textPage, i, uni)) continue;
         if (uni > 0x10FFFF || (uni >= 0xD800 && uni <= 0xDFFF)) {
             uni = 0xFFFD;
         }
@@ -265,14 +265,16 @@ std::u32string buildNormalizedText(FPDF_TEXTPAGE textPage, int count,
     return norm;
 }
 
-// Codepoint fingerprint of the page's printable (non-space, non-U+FFFE)
-// text after removing the redacted spans. After a redaction, re-extracting
-// the page and computing the same fingerprint must yield the identical
-// sequence: a fission that silently drops or mangles glyphs (e.g. a
-// character the font can only render as part of a ligature) changes the
-// fingerprint and is reported as an incomplete redaction instead of being
-// shipped as damaged text.
-std::u32string survivingFingerprint(const std::u32string& normalizedText,
+// Codepoint fingerprint of the page's printable (non-space) text after
+// removing the redacted spans. A line-end hyphen counts as '-' whether or not
+// PDFium reads it as breaking a word, since a redaction can change that
+// reading. After a redaction, re-extracting the page and computing the same
+// fingerprint must yield the identical sequence: a fission that silently
+// drops or mangles glyphs (e.g. a character the font can only render as part
+// of a ligature) changes the fingerprint and is reported as an incomplete
+// redaction instead of being shipped as damaged text.
+std::u32string survivingFingerprint(FPDF_TEXTPAGE textPage, int count,
+                                    const std::u32string& normalizedText,
                                     const std::vector<int>& normIdxMap,
                                     const std::vector<char>& redactSet) {
     std::u32string fp;
@@ -286,6 +288,10 @@ std::u32string survivingFingerprint(const std::u32string& normalizedText,
         // portable meaning - most fonts cannot re-emit them, so fragments
         // legitimately drop them and the fingerprint must not count them.
         if (wc > 0x20 && wc < 0xFFFE && !(wc >= 0xE000 && wc <= 0xF8FF)) fp += wc;
+    }
+    for (int i = 0; i < count; ++i) {
+        if (!redactSet.empty() && redactSet[i]) continue;
+        if (isLineEndHyphen(textPage, i, FPDFText_GetUnicode(textPage, i))) fp += U'-';
     }
     // Order-insensitive comparison: page rotation, mirroring and overlapping
     // objects change the EXTRACTION ORDER of surviving text between the pre
