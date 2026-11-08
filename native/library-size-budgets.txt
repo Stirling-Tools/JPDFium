@@ -33,5 +33,7 @@ libskia*         8000000
 skia.dll         8000000
 libpdfium*      10500000
 pdfium.dll      10500000
-libjpdfium*     13500000
-jpdfium.dll     13500000
+# The bookmark-aware native merge adds code to the shared bridge; the musl
+# build is 13.52 MB, so keep a small but real margin over the current size.
+libjpdfium*     15000000
+jpdfium.dll     15000000
