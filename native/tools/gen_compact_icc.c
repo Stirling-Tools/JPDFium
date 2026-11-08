@@ -12,7 +12,7 @@
 //       native/tools/CGATS001Compat-v2-micro.icc
 int main(int argc,char**argv){
  if(argc!=3)return 2;
- const int GA=5,GB=11,GS=17;
+ const int GA=5,GB=17,GS=17;
  const int agrid=GA*GA*GA*GA,bgrid=GB*GB*GB,sgrid=GS*GS*GS*GS;
  cmsUInt16Number*a2b=calloc((size_t)agrid*3,sizeof(cmsUInt16Number));
  cmsUInt16Number*b2a=calloc((size_t)bgrid*4,sizeof(cmsUInt16Number));
