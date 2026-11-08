@@ -11,6 +11,7 @@ import java.util.stream.Collectors;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.cos.COSDictionary;
 import org.apache.pdfbox.cos.COSName;
+import org.apache.pdfbox.cos.COSObject;
 import org.apache.pdfbox.cos.COSString;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDDocumentCatalog;
@@ -43,6 +44,7 @@ import stirling.software.jpdfium.panama.QpdfLib;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -213,11 +215,13 @@ class PdfMergeSplitPreservationTest {
         assumeTrue(QpdfLib.isExtractRangesFilesSupported(), "needs the multi-range qpdf extract symbol");
         Path source = tmp.resolve("source.pdf");
         try (PDDocument doc = Loader.loadPDF(catalogRichPdf(4, "A"))) {
-            COSString prefix = new COSString("A-");
-            prefix.setDirect(false);
             doc.getDocumentCatalog().getPageLabels().getPageLabelRange(2).getCOSObject()
-                    .setItem(COSName.P, prefix);
+                    .setItem(COSName.P, new COSObject(new COSString("A-")));
             doc.save(source.toFile());
+        }
+        try (PDDocument saved = Loader.loadPDF(source.toFile())) {
+            assertInstanceOf(COSObject.class, saved.getDocumentCatalog().getPageLabels()
+                    .getPageLabelRange(2).getCOSObject().getItem(COSName.P));
         }
         List<int[]> ranges = List.of(new int[] {0, 0}, new int[] {1, 2}, new int[] {3, 3});
         List<Path> together = List.of(tmp.resolve("t0.pdf"), tmp.resolve("t1.pdf"), tmp.resolve("t2.pdf"));
