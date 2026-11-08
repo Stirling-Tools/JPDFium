@@ -39,6 +39,9 @@ publishing workflows, not library releases, so they are not listed here.
 - `CompressOptions.jpegProgressive` writes rewritten images as progressive
   JPEG. Saves 2-11% more depending on image content while remaining a standard
   PDF DCT stream; baseline stays the default for maximum reader compatibility.
+- `CompressOptions.ccittG4` (default on) re-encodes qualifying 1-bit
+  DeviceGray images as CCITT Group 4 and adopts the stream only when smaller.
+  A synthetic 2480x3508 bilevel bar scan went from 3,109 B to 1,690 B.
 - Native qpdf font-stream replacement. `PdfFontEmbedder.embed(...)` replaces
   `/FontFile2` or `/FontFile3` streams by exact `/BaseFont`, updating
   `/Length1`; Type 1 `/FontFile` streams are rejected. `PdfXOptions.fontData(...)`
