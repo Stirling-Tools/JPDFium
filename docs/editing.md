@@ -212,12 +212,16 @@ if (PdfColorConverter.supportsColorSpace(PdfColorConverter.ColorSpace.CMYK)) {
   only intents of the same subtype are replaced. Recheck rendering after
   changing the print condition.
 
-`PdfXConverter` applies PDF/X-3/-4 metadata and output intents through
-`applyMetadata`. It is not a PDF/X validator or a converter for PDF/X-1a/6; it
-rejects transparency for standards that forbid it but does not flatten it.
-Supply a real printing-condition ICC for production output; the bundled compact
-profile is only a fallback. Run veraPDF or Acrobat preflight before claiming
-compliance.
+`PdfXConverter` applies PDF/X metadata and output intents through
+`applyMetadata`. It is not a PDF/X validator. For standards that forbid
+transparency, detected transparent pages are rasterized at 300 dpi before the
+output intent is written; pages that still report transparency afterwards are
+rejected. Rasterizing preserves the source MediaBox, CropBox, TrimBox,
+BleedBox and ArtBox, but makes text on those pages non-selectable. Pages over
+about 64 megapixels at 300 dpi are rejected instead of risking an oversized
+bitmap. Supply a real printing-condition ICC for production output; the bundled
+compact profile is only a fallback. Run veraPDF or Acrobat preflight before
+claiming compliance.
 
 ## What is not supported
 

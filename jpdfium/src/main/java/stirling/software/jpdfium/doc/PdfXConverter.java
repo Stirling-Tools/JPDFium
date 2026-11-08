@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.util.Optional;
 
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
@@ -307,13 +308,30 @@ public final class PdfXConverter {
             throw new JPDFiumException("PDF/X metadata requires an output intent ICC profile");
         }
         validateCmykProfile(profile);
+        validateBeforeFlatten(doc, options);
         flattenTransparency(doc, standard);
+        if (options.convertColors()) {
+            PdfColorConverter.convert(doc, options.colorOptions());
+        }
+    }
+
+    /**
+     * Reject requests that would fail after transparency flattening has already
+     * mutated the document. Keeping these checks ahead of the rasterizer means a
+     * bad option combination leaves the caller's document untouched.
+     */
+    private static void validateBeforeFlatten(PdfDocument doc, PdfXOptions options) {
+        PdfXStandard standard = options.standard();
         if (!standard.allowsIccBasedColors() && !options.convertColors()) {
             throw new JPDFiumException(standard + " forbids ICC-based, Lab, and RGB colour spaces; "
                     + "colour conversion cannot be disabled");
         }
-        if (options.convertColors()) {
-            PdfColorConverter.convert(doc, options.colorOptions());
+        if ((standard == PdfXStandard.PDF_X_1A || standard == PdfXStandard.PDF_X_3)
+                && (options.title() == null || options.title().isBlank())) {
+            PdfMetadata metadata = PdfMetadata.of(doc.rawHandleForRead());
+            if (metadata.title().isEmpty()) {
+                throw new JPDFiumException("Title is required for " + standard.name());
+            }
         }
     }
 
@@ -327,17 +345,48 @@ public final class PdfXConverter {
         if (standard.allowsTransparency()) return;
         for (int i = 0; i < doc.pageCount(); i++) {
             boolean transparent;
+            float pageWidth;
+            float pageHeight;
+            Optional<Rect> mediaBox;
+            Optional<Rect> cropBox;
+            Optional<Rect> trimBox;
+            Optional<Rect> bleedBox;
+            Optional<Rect> artBox;
             try (PdfPage page = doc.page(i)) {
                 transparent = PdfPageObjects.hasTransparencyStrict(page.rawHandleForRead());
+                if (!transparent) continue;
+                var size = page.size();
+                pageWidth = size.width();
+                pageHeight = size.height();
+                mediaBox = Optional.of(page.getMediaBox());
+                cropBox = page.getCropBox();
+                trimBox = page.getTrimBox();
+                bleedBox = page.getBleedBox();
+                artBox = page.getArtBox();
             }
-            if (transparent) {
-                doc.flattenPage(i, FlattenMode.FULL, TRANSPARENCY_FLATTEN_DPI);
+            long width = Math.round(pageWidth * TRANSPARENCY_FLATTEN_DPI / 72.0);
+            long height = Math.round(pageHeight * TRANSPARENCY_FLATTEN_DPI / 72.0);
+            if (width * height > MAX_FLATTEN_PIXELS) {
+                throw new JPDFiumException(standard + " page " + i
+                        + " is too large to flatten at " + TRANSPARENCY_FLATTEN_DPI
+                        + " dpi (" + width + "x" + height + " pixels)");
+            }
+            doc.flattenPage(i, FlattenMode.FULL, TRANSPARENCY_FLATTEN_DPI);
+            try (PdfPage flattened = doc.page(i)) {
+                mediaBox.ifPresent(flattened::setMediaBox);
+                cropBox.ifPresent(flattened::setCropBox);
+                trimBox.ifPresent(flattened::setTrimBox);
+                bleedBox.ifPresent(flattened::setBleedBox);
+                artBox.ifPresent(flattened::setArtBox);
             }
         }
         requireNoTransparency(doc, standard);
     }
 
     private static final int TRANSPARENCY_FLATTEN_DPI = 300;
+
+    /** Refuse rasters over ~64 megapixels; 300 dpi on 50x50in is ~860 MB. */
+    private static final long MAX_FLATTEN_PIXELS = 64_000_000L;
 
     /**
      * Reject transparent page content for standards whose PDF version forbids

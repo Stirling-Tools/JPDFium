@@ -18,10 +18,13 @@ import org.apache.pdfbox.pdmodel.graphics.state.PDExtendedGraphicsState;
 import org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationFreeText;
 import org.apache.pdfbox.pdmodel.interactive.annotation.PDAppearanceDictionary;
 import org.apache.pdfbox.pdmodel.interactive.annotation.PDAppearanceStream;
+import org.apache.pdfbox.rendering.PDFRenderer;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 
+import java.awt.Color;
 import java.awt.color.ICC_Profile;
+import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -547,6 +550,124 @@ class PdfXConverterTest {
     }
 
     @Test
+    void invalidOptionsAreRejectedBeforeTransparencyFlattening() throws Exception {
+        assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
+        byte[] input = pageWithConstantAlpha();
+        PdfXOptions options = PdfXOptions.builder()
+                .standard(PdfXStandard.PDF_X_1A)
+                .useCompactCmyk()
+                .convertColors(false)
+                .title("No colour conversion")
+                .build();
+        try (PdfDocument doc = PdfDocument.open(input)) {
+            JPDFiumException error = assertThrows(JPDFiumException.class,
+                    () -> PdfXConverter.applyMetadata(doc, options));
+            assertTrue(error.getMessage().contains("colour conversion cannot be disabled"),
+                    error.getMessage());
+            assertFalse(doc.isContentModified(),
+                    "option validation must run before the flatten pass");
+        }
+    }
+
+    @Test
+    void missingTitleIsRejectedBeforeTransparencyFlattening() throws Exception {
+        assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
+        byte[] input = pageWithConstantAlpha();
+        PdfXOptions options = PdfXOptions.builder()
+                .standard(PdfXStandard.PDF_X_3)
+                .useCompactCmyk()
+                .build();
+        try (PdfDocument doc = PdfDocument.open(input)) {
+            JPDFiumException error = assertThrows(JPDFiumException.class,
+                    () -> PdfXConverter.applyMetadata(doc, options));
+            assertTrue(error.getMessage().contains("Title is required"), error.getMessage());
+            assertFalse(doc.isContentModified(),
+                    "title validation must run before the flatten pass");
+        }
+    }
+
+    @Test
+    void oversizedTransparentPageIsRejectedBeforeRasterization() throws Exception {
+        assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
+        byte[] input = pageWithConstantAlpha(
+                new org.apache.pdfbox.pdmodel.common.PDRectangle(3600, 3600));
+        PdfXOptions options = PdfXOptions.builder()
+                .standard(PdfXStandard.PDF_X_3)
+                .useCompactCmyk()
+                .title("Too large")
+                .build();
+        try (PdfDocument doc = PdfDocument.open(input)) {
+            JPDFiumException error = assertThrows(JPDFiumException.class,
+                    () -> PdfXConverter.applyMetadata(doc, options));
+            assertTrue(error.getMessage().contains("too large to flatten"), error.getMessage());
+            assertFalse(doc.isContentModified(),
+                    "the raster budget must be checked before flattening");
+        }
+    }
+
+    @Test
+    void flatteningPreservesCustomPageBoxes() throws Exception {
+        assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
+        byte[] input;
+        try (PDDocument pdfbox = new PDDocument()) {
+            PDPage page = new PDPage(new org.apache.pdfbox.pdmodel.common.PDRectangle(612, 792));
+            pdfbox.addPage(page);
+            PDExtendedGraphicsState state = new PDExtendedGraphicsState();
+            state.setNonStrokingAlphaConstant(0.5f);
+            try (PDPageContentStream content = new PDPageContentStream(
+                    pdfbox, page, PDPageContentStream.AppendMode.APPEND, true, true)) {
+                content.setGraphicsStateParameters(state);
+                content.addRect(100, 100, 100, 100);
+                content.fill();
+            }
+            page.setTrimBox(new org.apache.pdfbox.pdmodel.common.PDRectangle(20, 30, 480, 670));
+            page.setBleedBox(new org.apache.pdfbox.pdmodel.common.PDRectangle(10, 15, 550, 745));
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            pdfbox.save(bytes);
+            input = bytes.toByteArray();
+        }
+        PdfXOptions options = PdfXOptions.builder()
+                .standard(PdfXStandard.PDF_X_3)
+                .useCompactCmyk()
+                .title("Boxes")
+                .build();
+        byte[] output = PdfXConverter.applyMetadata(input, options);
+        try (PdfDocument doc = PdfDocument.open(output);
+                PdfPage page = doc.page(0)) {
+            Rect trim = page.getTrimBox().orElseThrow();
+            Rect bleed = page.getBleedBox().orElseThrow();
+            assertEquals(20f, trim.x(), 0.1f);
+            assertEquals(30f, trim.y(), 0.1f);
+            assertEquals(480f, trim.width(), 0.1f);
+            assertEquals(670f, trim.height(), 0.1f);
+            assertEquals(10f, bleed.x(), 0.1f);
+            assertEquals(15f, bleed.y(), 0.1f);
+        }
+    }
+
+    @Test
+    void flattenedTransparentRectangleRemainsVisible() throws Exception {
+        assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
+        byte[] input = pageWithConstantAlpha();
+        PdfXOptions options = PdfXOptions.builder()
+                .standard(PdfXStandard.PDF_X_3)
+                .useCompactCmyk()
+                .title("Visible")
+                .build();
+        byte[] output = PdfXConverter.applyMetadata(input, options);
+        try (PDDocument pdfbox = Loader.loadPDF(output)) {
+            BufferedImage image = new PDFRenderer(pdfbox).renderImageWithDPI(0, 72);
+            int pageHeight = image.getHeight();
+            Color inside = new Color(image.getRGB(150, pageHeight - 150));
+            Color outside = new Color(image.getRGB(450, pageHeight - 450));
+            assertTrue(inside.getRed() < 245 || inside.getGreen() < 245 || inside.getBlue() < 245,
+                    "the flattened rectangle must remain visible");
+            assertTrue(outside.getRed() > 250 && outside.getGreen() > 250 && outside.getBlue() > 250,
+                    "the page background must stay white");
+        }
+    }
+
+    @Test
     void transparencyProbeDoesNotMarkTheDocumentModified() throws Exception {
         assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
         byte[] input = pageWithConstantAlpha();
@@ -668,8 +789,13 @@ class PdfXConverterTest {
     }
 
     private static byte[] pageWithConstantAlpha() throws Exception {
+        return pageWithConstantAlpha(new org.apache.pdfbox.pdmodel.common.PDRectangle(612, 792));
+    }
+
+    private static byte[] pageWithConstantAlpha(
+            org.apache.pdfbox.pdmodel.common.PDRectangle mediaBox) throws Exception {
         try (PDDocument pdfbox = new PDDocument()) {
-            PDPage page = new PDPage();
+            PDPage page = new PDPage(mediaBox);
             pdfbox.addPage(page);
             PDResources resources = new PDResources();
             PDExtendedGraphicsState state = new PDExtendedGraphicsState();
