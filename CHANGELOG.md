@@ -67,6 +67,11 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Fixed
 
+- The bundled `JPDFiumCompactCmyk.icc` fallback now uses a denser 11-point
+  grid and an inverse GCR B2A table. RGB-to-CMYK output from the generic
+  profile is much closer to the source (mean RGB delta on the 64-patch audit
+  chart: 20.14 -> 13.93 under `pdftoppm`) and still matches the AToB table.
+
 - Word and regex redaction finds words PDFium reports hyphenated across a line
   break (`Trace-` / `Monkey`), and removes the hyphen with them; it previously
   missed them, and with eight or more words the keyword prefilter skipped such
