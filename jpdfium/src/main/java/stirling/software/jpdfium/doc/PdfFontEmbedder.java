@@ -113,9 +113,11 @@ public final class PdfFontEmbedder {
         Map<String, byte[]> normalized = new LinkedHashMap<>();
         Map<String, byte[]> originals = new HashMap<>();
         for (var entry : fonts.entrySet()) {
-            String name = entry.getKey() == null ? "" : entry.getKey().trim().replaceFirst("^/", "");
+            String rawName = entry.getKey();
+            String name = rawName == null ? "" : rawName.trim().replaceFirst("^/", "");
             byte[] data = entry.getValue();
-            if (name.isBlank() || name.indexOf('\0') >= 0 || data == null || data.length == 0) {
+            if (name.isBlank() || (rawName != null && rawName.indexOf('\0') >= 0)
+                    || data == null || data.length == 0) {
                 throw new IllegalArgumentException("font name and data must not be empty");
             }
             byte[] previous = originals.putIfAbsent(name, data);
@@ -222,7 +224,9 @@ public final class PdfFontEmbedder {
                             public FileVisitResult visitFile(
                                     Path file, BasicFileAttributes attrs) {
                                 String name = file.getFileName().toString().toLowerCase(Locale.ROOT);
-                                if (attrs.isRegularFile()
+                                if ((attrs.isRegularFile()
+                                                || (attrs.isSymbolicLink()
+                                                    && Files.isRegularFile(file)))
                                         && name.matches(".*\\.(ttf|otf|ttc|otc|pfb|pfa|t1)")) {
                                     files.add(file);
                                 }
