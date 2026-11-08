@@ -37,11 +37,7 @@ fi
 case "${PLATFORM}" in
     linux-*)
         LLVM_VERSION="${LLVM_VERSION:-19}"
-        if ! command -v "clang++-${LLVM_VERSION}" >/dev/null 2>&1 \
-            || ! command -v "ld.lld-${LLVM_VERSION}" >/dev/null 2>&1 \
-            || ! command -v nasm >/dev/null 2>&1; then
-            sudo apt-get install -y "clang-${LLVM_VERSION}" "lld-${LLVM_VERSION}" nasm
-        fi
+        sudo apt-get install -y "clang-${LLVM_VERSION}" "lld-${LLVM_VERSION}" "libclang-rt-${LLVM_VERSION}-dev" nasm
         bash "${NATIVE_DIR}/build-linux-static-deps.sh"
         if [ -n "${GITHUB_ENV:-}" ]; then
             {

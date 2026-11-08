@@ -312,6 +312,16 @@ if(JPDFIUM_USE_PDFIUM)
         # get transitively via libpdfium.so's NEEDED entries.
         if(UNIX AND NOT APPLE)
             target_link_libraries(jpdfium PRIVATE pthread ${CMAKE_DL_LIBS} m)
+            if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+                execute_process(
+                    COMMAND ${CMAKE_CXX_COMPILER} --rtlib=compiler-rt --print-libgcc-file-name
+                    OUTPUT_VARIABLE _jpdfium_clang_builtins
+                    OUTPUT_STRIP_TRAILING_WHITESPACE
+                    ERROR_QUIET)
+                if(_jpdfium_clang_builtins AND EXISTS "${_jpdfium_clang_builtins}")
+                    target_link_options(jpdfium PRIVATE "--rtlib=compiler-rt" "--unwindlib=libgcc")
+                endif()
+            endif()
         endif()
         if(APPLE)
             target_link_libraries(jpdfium PRIVATE "-framework CoreFoundation"
