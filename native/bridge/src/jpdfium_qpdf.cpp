@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <limits>
 #include <map>
 #include <memory>
@@ -1010,6 +1011,7 @@ struct FontProgram {
     FT_Face face = nullptr;
     ProgramKind kind{};
     bool usable = false;
+    bool noSubsetting = false;
     std::string bytes;
     long long length1 = 0, length2 = 0, length3 = 0;
     std::map<std::tuple<ProgramKind, bool, std::set<FT_UInt>>, QPDFObjectHandle> streams;
@@ -1070,6 +1072,17 @@ bool loadProgram(FT_Library lib, std::span<const uint8_t> data, FontProgram& p) 
             return false;
         bool glyf = !FT_Load_Sfnt_Table(p.face, FT_MAKE_TAG('g', 'l', 'y', 'f'), 0, nullptr, &len);
         p.kind = glyf ? ProgramKind::TrueType : ProgramKind::OpenType;
+        FT_ULong os2Len = 0;
+        if (!FT_Load_Sfnt_Table(p.face, FT_MAKE_TAG('O', 'S', '/', '2'), 0, nullptr, &os2Len) &&
+            os2Len >= 10) {
+            std::vector<uint8_t> os2(os2Len);
+            if (!FT_Load_Sfnt_Table(p.face, FT_MAKE_TAG('O', 'S', '/', '2'), 0, os2.data(),
+                                    &os2Len) &&
+                os2Len >= 10) {
+                uint16_t fsType = uint16_t(os2[8] << 8 | os2[9]);
+                p.noSubsetting = (fsType & 0x0100) != 0;
+            }
+        }
     } else if (format == "CFF") {
         p.kind = ProgramKind::BareCff;
     } else if (format == "Type 1") {
@@ -1165,8 +1178,10 @@ SimpleEncoding parseEncoding(QPDFObjectHandle const& font) {
          differences.isArray() ? differences.getArrayAsVector() : std::vector<QPDFObjectHandle>{}) {
         if (item.isInteger())
             code = item.getIntValueAsInt();
-        else if (item.isName())
-            enc.differences[code++] = item.getName().substr(1);
+        else if (item.isName()) {
+            if (code >= 0 && code <= 255) enc.differences[code] = item.getName().substr(1);
+            if (code <= 255) ++code;
+        }
     }
     return enc;
 }
@@ -1343,6 +1358,29 @@ EmbedFontsResult embedFonts(std::span<const uint8_t> input, std::vector<FontSour
         qpdf->processMemoryFile("font-in", reinterpret_cast<const char*>(input.data()),
                                 input.size());
 
+        auto hasSignatureValue = [](QPDFObjectHandle const& field) {
+            if (!field.isDictionary()) return false;
+            auto value = field.getKey("/V");
+            return field.hasKey("/ByteRange") ||
+                   (value.isDictionary() && value.hasKey("/ByteRange"));
+        };
+        std::function<bool(QPDFObjectHandle const&)> signedField =
+            [&](QPDFObjectHandle const& field) {
+                if (!field.isDictionary()) return false;
+                if (hasSignatureValue(field)) return true;
+                for (auto const& child : field.getKey("/Fields").isArray()
+                                             ? field.getKey("/Fields").getArrayAsVector()
+                                             : std::vector<QPDFObjectHandle>{}) {
+                    if (signedField(child)) return true;
+                }
+                for (auto const& child : field.getKey("/Kids").isArray()
+                                             ? field.getKey("/Kids").getArrayAsVector()
+                                             : std::vector<QPDFObjectHandle>{}) {
+                    if (signedField(child)) return true;
+                }
+                return false;
+            };
+
         std::vector<QPDFObjectHandle> fonts;
         auto collectFromResources = [&](QPDFObjectHandle const& res) {
             auto fontDict = res.isDictionary() ? res.getKey("/Font") : QPDFObjectHandle();
@@ -1353,17 +1391,24 @@ EmbedFontsResult embedFonts(std::span<const uint8_t> input, std::vector<FontSour
         for (auto& object : qpdf->getAllObjects()) {
             auto dict = object.isStream() ? object.getDict() : object;
             if (!dict.isDictionary()) continue;
-            auto ft = dict.getKey("/FT");
-            if (dict.hasKey("/ByteRange") || (ft.isName() && ft.getName() == "/Sig") ||
-                (dict.getKey("/V").isDictionary() && dict.getKey("/V").hasKey("/ByteRange"))) {
+            if (hasSignatureValue(dict)) {
                 return {nullptr, "document is signed; refusing to rewrite", -3};
             }
             auto type = dict.getKey("/Type");
-            if (type.isName() && type.getName() == "/Font") fonts.push_back(dict);
+            auto subtypeName = dict.getKey("/Subtype");
+            bool cidDescendant =
+                subtypeName.isName() && (subtypeName.getName() == "/CIDFontType0" ||
+                                         subtypeName.getName() == "/CIDFontType2");
+            if (type.isName() && type.getName() == "/Font" && !cidDescendant) fonts.push_back(dict);
             collectFromResources(dict.getKey("/Resources"));
         }
-        if (qpdf->getRoot().getKey("/AcroForm").isDictionary())
-            collectFromResources(qpdf->getRoot().getKey("/AcroForm").getKey("/DR"));
+        auto acroForm = qpdf->getRoot().getKey("/AcroForm");
+        if (acroForm.isDictionary()) {
+            if (signedField(acroForm)) {
+                return {nullptr, "document is signed; refusing to rewrite", -3};
+            }
+            collectFromResources(acroForm.getKey("/DR"));
+        }
 
         for (size_t i = 0; i < sources.size(); ++i) {
             programs[i].usable = loadProgram(lib, sources[i].data, programs[i]);
@@ -1386,6 +1431,7 @@ EmbedFontsResult embedFonts(std::span<const uint8_t> input, std::vector<FontSour
         int embedded = 0;
         bool openType = false;
         std::set<QPDFObjGen> seen;
+        std::map<QPDFObjGen, QPDFObjGen> descriptorTargets;
         for (auto& font : fonts) {
             if (font.isIndirect() && !seen.insert(font.getObjGen()).second) continue;
             auto descendants = font.getKey("/DescendantFonts");
@@ -1406,6 +1452,15 @@ EmbedFontsResult embedFonts(std::span<const uint8_t> input, std::vector<FontSour
             if (cid && program.kind == ProgramKind::Type1) {
                 return {nullptr, "a Type 1 program cannot back a CIDFont: " + fontName, -4};
             }
+            if (font.getKey("/Encoding").isDictionary()
+                    ? font.getKey("/Encoding")
+                          .getKey("/BaseEncoding")
+                          .isNameAndEquals("/MacExpertEncoding")
+                    : font.getKey("/Encoding").isNameAndEquals("/MacExpertEncoding")) {
+                if (onlyMissing) continue;
+                return {nullptr,
+                        "MacExpertEncoding fonts cannot be substituted safely: " + fontName, -4};
+            }
             auto descriptor = target.getKey("/FontDescriptor");
             bool hasProgram = descriptor.isDictionary() &&
                               (descriptor.hasKey("/FontFile") || descriptor.hasKey("/FontFile2") ||
@@ -1419,13 +1474,20 @@ EmbedFontsResult embedFonts(std::span<const uint8_t> input, std::vector<FontSour
             if (!descriptor.isDictionary()) {
                 descriptor = newDescriptor(*qpdf, target, program.face, symbolic);
                 target.replaceKey("/FontDescriptor", descriptor);
+            } else if (descriptor.isIndirect()) {
+                auto identity = descriptor.getObjGen();
+                auto [it, fresh] = descriptorTargets.try_emplace(identity, target.getObjGen());
+                if (!fresh && it->second != target.getObjGen()) {
+                    descriptor = QPDFObjectHandle::newDictionary(descriptor.getDictAsMap());
+                    target.replaceKey("/FontDescriptor", descriptor);
+                }
             }
             if (!cid && !target.getKey("/Widths").isArray())
                 addWidths(target, program.face, symbolic);
             std::set<FT_UInt> glyphs;
             std::string subset;
-            if (!hasProgram && !cid && !symbolic && program.kind != ProgramKind::BareCff &&
-                program.kind != ProgramKind::Type1) {
+            if (!hasProgram && !cid && !symbolic && !program.noSubsetting &&
+                program.kind != ProgramKind::BareCff && program.kind != ProgramKind::Type1) {
                 auto enc = parseEncoding(target);
                 bool resolvable = std::ranges::all_of(enc.differences, [&](auto const& entry) {
                     return entry.second == ".notdef" || glyphForName(program.face, entry.second);
@@ -1451,7 +1513,7 @@ EmbedFontsResult embedFonts(std::span<const uint8_t> input, std::vector<FontSour
                                                                          : program.kind;
             bool glyf = kind == ProgramKind::TrueType;
             bool trueTypeFont = current == "/TrueType" || current == "/CIDFontType2";
-            if (kind != ProgramKind::OpenType && glyf != trueTypeFont) {
+            if (glyf != trueTypeFont) {
                 target.replaceKey("/Subtype", QPDFObjectHandle::newName(
                                                   cid ? (glyf ? "/CIDFontType2" : "/CIDFontType0")
                                                       : (glyf ? "/TrueType" : "/Type1")));
