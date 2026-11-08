@@ -218,6 +218,47 @@ struct FileWriteContext : FPDF_FILEWRITE {
     }
 };
 
+// Streams PDFium's serialization into a fresh sibling staging file. On success
+// |stagingOut| holds a complete PDF and |bytesWritten| is its size; the caller
+// publishes it. On failure the staging file is removed and the save fails.
+int32_t streamDocumentToStaging(FPDF_DOCUMENT doc, const char* path, int64_t max_bytes,
+                                std::string& stagingOut, int64_t& bytesWritten) {
+    FILE* f = open_staging_sibling(path, stagingOut);
+    if (!f) return JPDFIUM_ERR_IO;
+
+    FileWriteContext ctx;
+    ctx.version = 1;
+    ctx.WriteBlock = FileWriteContext::Write;
+    ctx.file = f;
+    ctx.max_bytes = max_bytes > 0 ? static_cast<std::uint64_t>(max_bytes) : 0;
+
+    // PDFium's own outcome and the sink's are recorded separately: a save can
+    // return true while the sink failed, or fail while everything written so
+    // far was fine. Reporting only one of them would misattribute the cause.
+    const int pdfium_ok = FPDF_SaveAsCopy(doc, &ctx, FPDF_NO_INCREMENTAL);
+    const int flushRc = std::fflush(f);
+    const int closeRc = std::fclose(f);
+    ctx.file = nullptr;
+
+    if (!pdfium_ok || ctx.failed || flushRc != 0 || closeRc != 0) {
+        // Never publish a partial destination: a truncated PDF is worse than
+        // no output, so the staging file is discarded and the stage that
+        // failed is what gets reported. The destination is never opened, so
+        // an existing file at that path survives untouched.
+        std::remove(stagingOut.c_str());
+        if (ctx.budget_exceeded) return JPDFIUM_ERR_TOO_LARGE;
+        return JPDFIUM_ERR_IO;
+    }
+    // An empty result is not a valid PDF, so treat it as a failure rather than
+    // reporting a zero-byte success.
+    if (ctx.bytes_written == 0) {
+        std::remove(stagingOut.c_str());
+        return JPDFIUM_ERR_IO;
+    }
+    bytesWritten = static_cast<int64_t>(ctx.bytes_written);
+    return JPDFIUM_OK;
+}
+
 }  // namespace
 
 bool g_jpdfiumUseSkia = false;
@@ -462,6 +503,21 @@ int32_t applySanitizeStage(DocWrapper* w, std::vector<uint8_t>& bytes) {
     return JPDFIUM_OK;
 }
 
+// Every post-serialization stage, in order: erased gray images back to
+// /DeviceGray (best effort: PDFium's bytes are already complete), then the
+// opt-in sanitize pass. Only the buffered save path uses this; a gray-only
+// file save streams through the file-backed compaction instead.
+int32_t applySaveStages(DocWrapper* w, std::vector<uint8_t>& bytes) {
+    compactErasedGrayImages(*w->core, bytes);
+    return applySanitizeStage(w, bytes);
+}
+
+// True when a save needs the whole serialization for the in-memory sanitize
+// stage. Gray compaction is not a reason: it has a file-to-file path.
+bool needsBufferedSaveStages(const DocCore& core) {
+    return core.contentRedacted && core.sanitizeOnSave;
+}
+
 }  // namespace
 namespace {
 // Alias protection helper: saving over the document's own backing file would
@@ -506,20 +562,31 @@ int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_byte
         if (w->core->hasUnappliedRedactMarks()) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
         if (out_bytes) *out_bytes = 0;
 
-        // Alias protection first: both the sanitize branch (staging + rename
-        // over the source) and the streaming branch would destroy the input
-        // PDFium is still reading from. Checked before any output is opened.
+        // Alias protection first: every save branch stages and renames over the
+        // source, which would destroy the input PDFium is still reading from.
+        // Checked before any output is opened.
         if (isSaveAlias(w->core->sourcePath, path)) {
             return JPDFIUM_ERR_INVALID;
         }
 
-        // Opt-in sanitize pass needs the whole serialization post-hoc, so it
-        // keeps the buffered path. The common case streams with no large buffer.
-        if (w->core->contentRedacted && w->core->sanitizeOnSave) {
+        // The sanitize stage mutates the whole serialization after PDFium
+        // writes it, so it keeps the buffered path. Everything else, including
+        // gray-image compaction, stays file-backed.
+        if (needsBufferedSaveStages(*w->core)) {
+            // The budget applies to PDFium's output too, so an oversized save
+            // stops instead of first buffering the whole document. The stages
+            // only shrink or scrub, so this refuses nothing the streaming
+            // branch would have accepted for the same content.
             struct BufWriter : FPDF_FILEWRITE {
                 std::vector<uint8_t> buf;
+                std::uint64_t max_bytes = 0;
+                bool budget_exceeded = false;
                 static int Write(FPDF_FILEWRITE* self, const void* data, unsigned long size) {
                     auto* bw = static_cast<BufWriter*>(self);
+                    if (bw->max_bytes > 0 && bw->buf.size() + size > bw->max_bytes) {
+                        bw->budget_exceeded = true;
+                        return 0;
+                    }
                     try {
                         auto* src = static_cast<const uint8_t*>(data);
                         bw->buf.insert(bw->buf.end(), src, src + size);
@@ -531,9 +598,12 @@ int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_byte
             } bw;
             bw.version = 1;
             bw.WriteBlock = BufWriter::Write;
+            bw.max_bytes = max_bytes > 0 ? static_cast<std::uint64_t>(max_bytes) : 0;
 
-            if (!FPDF_SaveAsCopy(w->core->doc, &bw, FPDF_NO_INCREMENTAL)) return JPDFIUM_ERR_IO;
-            int32_t sanitizeRc = applySanitizeStage(w, bw.buf);
+            if (!FPDF_SaveAsCopy(w->core->doc, &bw, FPDF_NO_INCREMENTAL)) {
+                return bw.budget_exceeded ? JPDFIUM_ERR_TOO_LARGE : JPDFIUM_ERR_IO;
+            }
+            int32_t sanitizeRc = applySaveStages(w, bw.buf);
             if (sanitizeRc != JPDFIUM_OK) return sanitizeRc;
             // Same code as the streaming branch so callers see one error
             // category for "output exceeded the budget".
@@ -557,47 +627,70 @@ int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_byte
             return JPDFIUM_OK;
         }
 
+        // Gray compaction rewrites the serialized PDF, but it does not need a
+        // buffer: PDFium streams to one staging file and qpdf compacts that
+        // file into a second. The compacted file is published only when the
+        // rewrite succeeds; otherwise the first file (already a complete
+        // redaction) is published. Two byte buffers never coexist.
+        if (!w->core->erasedGrayImages.empty()) {
+            std::string staging;
+            int64_t written = 0;
+            int32_t writeRc =
+                streamDocumentToStaging(w->core->doc, path, max_bytes, staging, written);
+            if (writeRc != JPDFIUM_OK) return writeRc;
+
+            std::string compacted;
+            FILE* compactedFile = open_staging_sibling(path, compacted);
+            bool useCompacted = false;
+            int64_t compactedBytes = 0;
+            if (compactedFile) {
+                useCompacted =
+                    compactErasedGrayImagesFile(*w->core, staging.c_str(), compactedFile);
+                const int closeRc = std::fclose(compactedFile);
+                if (useCompacted && closeRc == 0) {
+                    std::error_code ec;
+                    const auto size = std::filesystem::file_size(compacted, ec);
+                    // The first file already fits the budget; only prefer the
+                    // compacted file when it does too and really has content.
+                    if (ec || size == 0 ||
+                        (max_bytes > 0 && static_cast<int64_t>(size) > max_bytes)) {
+                        useCompacted = false;
+                    } else {
+                        compactedBytes = static_cast<int64_t>(size);
+                    }
+                } else {
+                    useCompacted = false;
+                }
+            }
+
+            if (useCompacted) {
+                if (!publish_staged(compacted, path)) {
+                    std::remove(compacted.c_str());
+                    std::remove(staging.c_str());
+                    return JPDFIUM_ERR_IO;
+                }
+                std::remove(staging.c_str());
+                if (out_bytes) *out_bytes = compactedBytes;
+                return JPDFIUM_OK;
+            }
+            if (!compacted.empty()) std::remove(compacted.c_str());
+            if (!publish_staged(staging, path)) {
+                std::remove(staging.c_str());
+                return JPDFIUM_ERR_IO;
+            }
+            if (out_bytes) *out_bytes = written;
+            return JPDFIUM_OK;
+        }
+
         std::string staging;
-        FILE* f = open_staging_sibling(path, staging);
-        if (!f) return JPDFIUM_ERR_IO;
-
-        FileWriteContext ctx;
-        ctx.version = 1;
-        ctx.WriteBlock = FileWriteContext::Write;
-        ctx.file = f;
-        ctx.max_bytes = max_bytes > 0 ? static_cast<std::uint64_t>(max_bytes) : 0;
-
-        // PDFium's own outcome and the sink's are recorded separately: a save can
-        // return true while the sink failed, or fail while everything written so
-        // far was fine. Reporting only one of them would misattribute the cause.
-        const int pdfium_ok = FPDF_SaveAsCopy(w->core->doc, &ctx, FPDF_NO_INCREMENTAL);
-        const int flushRc = std::fflush(f);
-        const int closeRc = std::fclose(f);
-        ctx.file = nullptr;
-
-        if (!pdfium_ok || ctx.failed || flushRc != 0 || closeRc != 0) {
-            // Never publish a partial destination: a truncated PDF is worse than
-            // no output, so the staging file is discarded and the stage that
-            // failed is what gets reported. The destination is never opened, so
-            // an existing file at that path survives untouched.
-            std::remove(staging.c_str());
-            if (ctx.budget_exceeded) return JPDFIUM_ERR_TOO_LARGE;
-            if (!pdfium_ok) return JPDFIUM_ERR_IO;
-            if (flushRc != 0) return JPDFIUM_ERR_IO;  // flush failure
-            if (closeRc != 0) return JPDFIUM_ERR_IO;  // close failure
-            return JPDFIUM_ERR_IO;                    // sink failure
-        }
-        // An empty result is not a valid PDF, so treat it as a failure rather than
-        // reporting a zero-byte success.
-        if (ctx.bytes_written == 0) {
-            std::remove(staging.c_str());
-            return JPDFIUM_ERR_IO;
-        }
+        int64_t written = 0;
+        int32_t writeRc = streamDocumentToStaging(w->core->doc, path, max_bytes, staging, written);
+        if (writeRc != JPDFIUM_OK) return writeRc;
         if (!publish_staged(staging, path)) {
             std::remove(staging.c_str());
             return JPDFIUM_ERR_IO;
         }
-        if (out_bytes) *out_bytes = static_cast<int64_t>(ctx.bytes_written);
+        if (out_bytes) *out_bytes = written;
         return JPDFIUM_OK;
     } catch (...) {
         // Never let a C++ exception cross the FFM boundary.
@@ -635,7 +728,7 @@ int32_t jpdfium_doc_save_bytes(int64_t doc, uint8_t** data, int64_t* len) {
 
     if (!FPDF_SaveAsCopy(w->core->doc, &bw, FPDF_NO_INCREMENTAL)) return JPDFIUM_ERR_IO;
 
-    int32_t sanitizeRc = applySanitizeStage(w, bw.buf);
+    int32_t sanitizeRc = applySaveStages(w, bw.buf);
     if (sanitizeRc != JPDFIUM_OK) return sanitizeRc;
 
     size_t sz = bw.buf.size();

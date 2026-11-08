@@ -54,7 +54,7 @@ jobs:
           distribution: 'temurin'
           java-version: '25'
 
-      - uses: gradle/actions/setup-gradle@1cff18a4cfab5cd8d4c49a8ccf11c1ad18bb30b9 # v6.3.0
+      - uses: gradle/actions/setup-gradle@c8a326d85724fce2ae59a38810306f4a058f26a4 # v6.3.0
 
       - id: prep
         run: |
@@ -193,7 +193,7 @@ jobs:
           distribution: 'temurin'
           java-version: '25'
 
-      - uses: gradle/actions/setup-gradle@1cff18a4cfab5cd8d4c49a8ccf11c1ad18bb30b9 # v6.3.0
+      - uses: gradle/actions/setup-gradle@c8a326d85724fce2ae59a38810306f4a058f26a4 # v6.3.0
 
       - name: Restore corpus
         uses: actions/cache/restore@3edfce9056124e459a23f683a21433670d47daca # v6.1.0

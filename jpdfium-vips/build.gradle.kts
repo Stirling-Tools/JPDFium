@@ -36,6 +36,7 @@ dependencies {
     api(project(":jpdfium"))
     implementation(libs.vips.ffm)
     implementation(libs.xz)
+    testImplementation(libs.pdfbox)
     // Bring the bundled vips natives onto the TEST runtime classpath only, so
     // VipsNatives finds /natives/vips-<platform>/ and the vipsSmokeTest (and
     // the other vips tests) exercise the exact bundled libvips being shipped.

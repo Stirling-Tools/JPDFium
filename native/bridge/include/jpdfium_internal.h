@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <set>
@@ -126,18 +127,41 @@ class RasterFrame {
     int32_t height_ = 0;
 };
 
+// A gray image a redaction erase stored. SetBitmap can only write gray as
+// 8-bit /Indexed over a 256-entry gray ramp, so the save stage
+// (compactErasedGrayImages) finds each one again by size and the hash of its
+// samples and rewrites it as /DeviceGray: 1 bit per pixel when only black and
+// white remain (a scan), else 8.
+struct ErasedGrayImage {
+    uint32_t width = 0;
+    uint32_t height = 0;
+    uint64_t hash = 0;  // FNV-1a over the row-packed samples
+};
+
+// The area a redaction covered: its rect, and its quads when the mark had them
+// (rotated or wrapped text), which then bound the area more tightly.
+struct RedactArea {
+    FS_RECTF rect{};
+    std::vector<FS_QUADPOINTSF> quads;
+};
+
 // Shared document state.
 struct DocCore {
     FPDF_DOCUMENT doc = nullptr;
     bool contentRedacted = false;
     bool sanitizeOnSave = false;
     // Pages on which a redaction mutated content and then stopped
-    // (JPDFIUM_ERR_REDACT_INCOMPLETE): the applied boxes already removed content
-    // while the rest of the match is still extractable, so every save path
-    // refuses while this set is not empty. Only a later successful redaction
-    // commit that really applies rectangles on the SAME page removes that page's
-    // entry, so a commit on another page can never clear the failure.
-    std::set<int32_t> incompleteRedactPages{};
+    // (JPDFIUM_ERR_REDACT_INCOMPLETE), with the areas those redactions covered:
+    // the applied boxes already removed content while the rest of the match is
+    // still extractable, so every save path refuses while this is not empty. A
+    // later successful commit on the SAME page removes the entry only once no
+    // recorded area there still holds text, so neither a commit on another page
+    // nor an unrelated commit on this one can clear the failure.
+    std::map<int32_t, std::vector<RedactArea>> incompleteRedactPages{};
+    // Pages whose strict-crop audit failed. Unlike incompleteRedactPages, a
+    // later redaction commit cannot clear this: only a full strict-crop audit
+    // that passes on the same page may remove the entry.
+    std::set<int32_t> strictCropIncompletePages{};
     int32_t unappliedRedactMarksCount = 0;
     // Structural generation: bumped whenever native state is freed and
     // replaced (document reload, page raster replacement). Pages capture it
@@ -153,6 +177,7 @@ struct DocCore {
     std::vector<std::string> touchedFontNames{};
     std::string sanitizeReport{};
     std::vector<FPDF_FONT> loadedFonts{};
+    std::vector<ErasedGrayImage> erasedGrayImages{};
 
     // Filesystem path this document was opened from, or empty for in-memory
     // documents. Retained only so save can refuse to write over its own input:
@@ -187,7 +212,7 @@ struct DocCore {
     // not resolved by a later successful commit on that same page - see
     // incompleteRedactPages.
     bool hasIncompleteRedaction() const {
-        return !incompleteRedactPages.empty();
+        return !incompleteRedactPages.empty() || !strictCropIncompletePages.empty();
     }
 
     void addRedactLiteral(const char* s) {
@@ -458,6 +483,19 @@ void jpdfium_ensure_library();
 // Returns 0 and fills out/reportJson on success; -1 on failure.
 int sanitizeRedactedPdf(const uint8_t* input, size_t inputLen, const DocCore& core,
                         std::vector<uint8_t>& out, std::string& reportJson);
+
+// Save stage for DocCore::erasedGrayImages (jpdfium_redact_image.cpp): a qpdf
+// pass that rewrites those images in place, losslessly. Returns true when it
+// replaced |bytes|; false leaves them as PDFium wrote them (nothing matched,
+// qpdf unavailable, or the pass failed), which is still a complete redaction.
+bool compactErasedGrayImages(const DocCore& core, std::vector<uint8_t>& bytes);
+
+// File-backed form of the same stage: reads |inputPath| and, when an image is
+// rewritten, writes the complete PDF to |output|. The caller owns |output| and
+// closes it; false means |output| is incomplete and must be discarded. No
+// document-sized buffer is held: qpdf streams from the input file and writes
+// straight to the output file.
+bool compactErasedGrayImagesFile(const DocCore& core, const char* inputPath, std::FILE* output);
 
 // Abandon a pending progressive render for a raw FPDF_PAGE without reporting
 // (jpdfium_render.cpp). Called when the owning page is closed while a session

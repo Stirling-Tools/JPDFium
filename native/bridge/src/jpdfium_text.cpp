@@ -3,10 +3,13 @@
 #include <fpdf_text.h>
 #include <fpdfview.h>
 
+#include <bit>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "jpdfium.h"
@@ -190,6 +193,105 @@ int32_t jpdfium_text_get_chars(int64_t page, char** json) {
         *json = out;
         return JPDFIUM_OK;
 
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
+    }
+}
+
+namespace {
+
+static_assert(std::endian::native == std::endian::little,
+              "jpdfium_text_get_chars_packed writes host byte order and documents little-endian");
+
+constexpr int64_t kPackedRecordBytes = 32;
+constexpr int64_t kPackedMaxBytes = std::numeric_limits<int32_t>::max();
+
+void appendI32(std::vector<uint8_t>& out, int32_t v) {
+    uint8_t b[4];
+    std::memcpy(b, &v, 4);
+    out.insert(out.end(), b, b + 4);
+}
+
+void appendF32(std::vector<uint8_t>& out, float v) {
+    uint8_t b[4];
+    std::memcpy(b, &v, 4);
+    out.insert(out.end(), b, b + 4);
+}
+
+}  // namespace
+
+int32_t jpdfium_text_get_chars_packed(int64_t page, uint8_t** data, int64_t* len) {
+    try {
+        PageWrapper* pw = decodePage(page);
+        if (!pw || !pw->page) return JPDFIUM_ERR_INVALID;
+        if (!data || !len) return JPDFIUM_ERR_INVALID;
+
+        UniqueTextPage tp(FPDFText_LoadPage(pw->page));
+        if (!tp) return JPDFIUM_ERR_NATIVE;
+
+        int count = FPDFText_CountChars(tp.get());
+        if (8 + static_cast<int64_t>(count > 0 ? count : 0) * kPackedRecordBytes >
+            kPackedMaxBytes) {
+            return JPDFIUM_ERR_TOO_LARGE;
+        }
+        std::vector<uint8_t> records;
+        records.reserve(static_cast<size_t>(count > 0 ? count : 0) * kPackedRecordBytes);
+        std::unordered_map<std::string, int32_t> fontIds;
+        std::vector<std::string> fonts;
+        int32_t emitted = 0;
+
+        char fontbuf[256];
+        for (int i = 0; i < count; ++i) {
+            unsigned int uni = FPDFText_GetUnicode(tp.get(), i);
+            if (uni == 0) continue;
+
+            double l = 0, r = 0, b = 0, t = 0;
+            if (!FPDFText_GetCharBox(tp.get(), i, &l, &r, &b, &t)) {
+                l = r = b = t = 0.0;
+            }
+            std::memset(fontbuf, 0, sizeof(fontbuf));
+            FPDFText_GetFontInfo(tp.get(), i, fontbuf, sizeof(fontbuf), nullptr);
+            fontbuf[sizeof(fontbuf) - 1] = '\0';
+            float size = static_cast<float>(FPDFText_GetFontSize(tp.get(), i));
+
+            auto [it, inserted] = fontIds.try_emplace(fontbuf, static_cast<int32_t>(fonts.size()));
+            if (inserted) fonts.emplace_back(fontbuf);
+
+            appendI32(records, i);
+            appendI32(records, static_cast<int32_t>(uni));
+            appendF32(records, static_cast<float>(l));
+            appendF32(records, static_cast<float>(b));
+            appendF32(records, static_cast<float>(r - l));
+            appendF32(records, static_cast<float>(t - b));
+            appendF32(records, size);
+            appendI32(records, it->second);
+            ++emitted;
+        }
+
+        int64_t total = 8 + static_cast<int64_t>(records.size());
+        for (const std::string& f : fonts) total += 4 + static_cast<int64_t>(f.size());
+        if (total > kPackedMaxBytes) return JPDFIUM_ERR_TOO_LARGE;
+
+        std::vector<uint8_t> header;
+        appendI32(header, emitted);
+        appendI32(header, static_cast<int32_t>(fonts.size()));
+        auto* buf = static_cast<uint8_t*>(malloc(static_cast<size_t>(total)));
+        if (!buf) return JPDFIUM_ERR_NATIVE;
+        uint8_t* cursor = buf;
+        std::memcpy(cursor, header.data(), header.size());
+        cursor += header.size();
+        if (!records.empty()) std::memcpy(cursor, records.data(), records.size());
+        cursor += records.size();
+        for (const std::string& f : fonts) {
+            int32_t length = static_cast<int32_t>(f.size());
+            std::memcpy(cursor, &length, 4);
+            cursor += 4;
+            std::memcpy(cursor, f.data(), f.size());
+            cursor += f.size();
+        }
+        *data = buf;
+        *len = total;
+        return JPDFIUM_OK;
     } catch (...) {
         return JPDFIUM_ERR_NATIVE;
     }

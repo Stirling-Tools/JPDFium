@@ -15,12 +15,30 @@ JPDFium is built and tested against Java 25. Earlier releases are not supported.
 
 | Platform | Architectures | Notes |
 |---|---|---|
-| Linux (glibc) | x64, arm64 | Tested on Ubuntu. |
+| Linux (glibc) | x64, arm64 | Targets Ubuntu 24.04's system libraries. |
 | Linux musl | x64, arm64 | For Alpine and similar. Requires the `linux-musl` artifacts, which are experimental. |
 | macOS | x64, arm64 | Tested on macOS 14 and macOS 15. |
 | Windows | x64, arm64 | Tested on Windows Server 2022 and Windows 11 arm64. |
 
 Graphics processing uses the CPU. There is no GPU rendering path.
+
+### Linux native build baseline
+
+The glibc native bundles target Ubuntu 24.04: glibc 2.39, GLIBCXX_3.4.33
+and CXXABI_1.3.15 or earlier. Ubuntu 22.04 is below this baseline. Other
+distributions need compatible glibc and C++ runtimes for their architecture.
+
+PDFium and vips prebuild producers pin the build environment to Ubuntu 24.04.
+Shared-library prebuilds and final bundles are checked before publication.
+Static archives are checked after linking the final bundle. Snapshot and
+release workflows run native loading, merge/extract preservation and vips codec tests
+against the staged artifacts in Ubuntu 24.04 and 26.04 containers on both
+Linux architectures.
+
+A newer CI host or application Docker image does not require a newer native
+build baseline. Keep the compatibility container or sysroot fixed when
+upgrading the host. Native libraries built against newer system libraries
+can fail to load on older runtimes, even when the Java code is unchanged.
 
 ## Redaction
 
