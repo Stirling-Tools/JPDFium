@@ -22,15 +22,16 @@
   the program through its `/Encoding` and `/Differences` (ISO 32000-1 9.6.6).
 - `/Subtype` follows the outlines (ISO 32000-2 9.9): glyf outlines make
   `/TrueType` or `/CIDFontType2`, CFF and Type 1 make `/Type1` or
-  `/CIDFontType0`. An existing OpenType program keeps its subtype.
+  `/CIDFontType0`, including inside an OpenType wrapper.
 - A simple font that becomes `/TrueType` gets its mapping pinned: an explicit
   `/Encoding` (WinAnsi plus `/Differences`) when it relied on the implicit
   StandardEncoding, and a `/ToUnicode` when it had none. Without these,
   viewers read the codes differently once the font is TrueType.
 - A simple non-symbolic font that had no program is embedded as a subset of
   the glyphs its 256 codes can reach, with glyph IDs retained and a subset tag
-  added to its name. Symbolic fonts, CIDFonts, and fonts with `/Differences`
-  names the program cannot resolve are embedded whole.
+  added to its name. Type 1 and bare CFF programs, programs whose OS/2
+  `fsType` forbids subsetting, symbolic fonts, CIDFonts, and fonts with
+  `/Differences` names the program cannot resolve are embedded whole.
 - Existing `/Widths`, `/ToUnicode`, CMaps and `/CIDToGIDMap` are kept, so text
   never moves.
 
@@ -56,8 +57,13 @@ synthesised: `Arial,Bold` with no bold face installed stays unresolved.
 
 ## Verification
 
-`PdfFontEmbedderRoundTripTest` strips every embedded program from each PDF,
-embeds the same programs again and requires PDFium to render the result pixel
-for pixel like the original; it also runs `embedMissing` on each PDF and
-requires the extracted text to be unchanged. Point it at any directory with
+`PdfFontEmbedderRoundTripTest` strips the embedded programs it can re-embed
+from each PDF (skipping fonts whose program is missing, unreadable or differs
+between fonts of the same name, and programs the embedder rejects), embeds the
+same programs again and requires PDFium to render the first eight renderable
+pages pixel for pixel like the original. It also runs `embedMissing` on each
+PDF and requires the extracted text of the first eight pages to be unchanged,
+except for characters that were unreadable before; that text check is skipped
+when a Type 0 font gains a `/ToUnicode`. Rendering differences after
+`embedMissing` are reported, not asserted. Point it at any directory with
 `-Djpdfium.test.fontCorpus=<dir>`.

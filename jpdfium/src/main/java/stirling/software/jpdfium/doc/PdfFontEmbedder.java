@@ -44,7 +44,9 @@ import stirling.software.jpdfium.panama.QpdfLib;
  * <p>A font without a descriptor or {@code /Widths} gains them from the program, and the
  * subtype follows the program's outlines with the code-to-glyph mapping pinned by an explicit
  * encoding and {@code /ToUnicode}; existing widths are kept, so text never moves. A simple
- * non-symbolic font is embedded as a subset of the glyphs its codes can reach. Signed
+ * non-symbolic font backed by a TrueType or OpenType program that permits subsetting is
+ * embedded as a subset of the glyphs its codes can reach; Type 1 and bare CFF programs are
+ * embedded whole. Signed
  * documents are refused because the rewrite invalidates their signatures, and a CIDFont keeps
  * its CID-to-glyph mapping, so its program must use the original glyph order.
  */
@@ -109,15 +111,19 @@ public final class PdfFontEmbedder {
         if (pdf == null || pdf.length == 0) throw new IllegalArgumentException("pdf must not be empty");
         if (fonts == null || fonts.isEmpty()) return pdf;
         Map<String, byte[]> normalized = new LinkedHashMap<>();
+        Map<String, byte[]> originals = new HashMap<>();
         for (var entry : fonts.entrySet()) {
             String name = entry.getKey() == null ? "" : entry.getKey().trim().replaceFirst("^/", "");
             byte[] data = entry.getValue();
             if (name.isBlank() || name.indexOf('\0') >= 0 || data == null || data.length == 0) {
                 throw new IllegalArgumentException("font name and data must not be empty");
             }
-            byte[] previous = normalized.putIfAbsent(name, data);
-            if (previous != null && !Arrays.equals(previous, data)) {
-                throw new IllegalArgumentException("conflicting font data for /BaseFont " + name);
+            byte[] previous = originals.putIfAbsent(name, data);
+            if (previous != null) {
+                if (!Arrays.equals(previous, data)) {
+                    throw new IllegalArgumentException("conflicting font data for /BaseFont " + name);
+                }
+                continue;
             }
             normalized.put(name, singleFace(data, name));
         }

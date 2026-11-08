@@ -28,7 +28,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -99,11 +98,12 @@ class PdfFontEmbedderRoundTripTest {
             }
             ambiguous.forEach(programs::remove);
             assumeFalse(programs.isEmpty(), "no unambiguous embedded font program");
+            programs = usable(reference, programs);
             programs.keySet().forEach(n -> descriptors.get(n).forEach(d -> PROGRAM_KEYS.forEach(d::removeItem)));
             stripped = save(doc);
         }
 
-        byte[] output = embedUsable(stripped, programs);
+        byte[] output = PdfFontEmbedder.embed(stripped, programs);
         try (PdfDocument expected = PdfDocument.open(reference); PdfDocument actual = PdfDocument.open(output)) {
             assertEquals(expected.pageCount(), actual.pageCount());
             for (int i = 0; i < Math.min(expected.pageCount(), 8); i++) {
@@ -224,14 +224,15 @@ class PdfFontEmbedderRoundTripTest {
         }
     }
 
-    private static byte[] embedUsable(byte[] pdf, Map<String, byte[]> programs) {
+    private static Map<String, byte[]> usable(byte[] pdf, Map<String, byte[]> programs) {
         try {
-            return PdfFontEmbedder.embed(pdf, programs);
+            PdfFontEmbedder.embed(pdf, programs);
+            return programs;
         } catch (JPDFiumException e) {
             assumeFalse(e.getMessage().contains("signed") || e.getMessage().contains("password"), e.getMessage());
             if (!e.getMessage().contains("unusable")) throw e;
         }
-        Map<String, byte[]> usable = new HashMap<>(programs);
+        Map<String, byte[]> usable = new LinkedHashMap<>(programs);
         for (var entry : programs.entrySet()) {
             try {
                 PdfFontEmbedder.embed(pdf, Map.of(entry.getKey(), entry.getValue()));
@@ -240,7 +241,7 @@ class PdfFontEmbedderRoundTripTest {
             }
         }
         assumeFalse(usable.isEmpty(), "every embedded program is unusable");
-        return PdfFontEmbedder.embed(pdf, usable);
+        return usable;
     }
 
     private static PDDocument load(Path pdf) {
@@ -306,7 +307,7 @@ class PdfFontEmbedderRoundTripTest {
     }
 
         private static String style(String name) {
-        String lower = name.toLowerCase(java.util.Locale.ROOT);
+        String lower = name.replaceFirst("^[A-Z]{6}\\+", "").toLowerCase(java.util.Locale.ROOT);
         return (lower.matches(".*(bold|black|heavy|negrita|negreta|fett|grassetto|gras).*") ? "bold" : "")
                 + (lower.matches(".*(italic|oblique|cursiva|kursiv|corsivo|italique|cursiva).*") ? "italic" : "");
     }
