@@ -15,6 +15,18 @@ Native bridge deps (linked at build time):
 - pugixml - MIT
 - libunibreak - zlib
 
+Single-library natives (darwin-arm64, darwin-x64, linux-x64):
+libjpdfium is one shared library that statically links all of the above
+plus the code PDFium bundles (Skia, Abseil, PartitionAlloc, FreeType,
+HarfBuzz, ICU with trimmed ICU data, libpng, zlib, Brotli, OpenJPEG,
+Little CMS, libjpeg-turbo) and libjpeg-turbo/TurboJPEG (with libspng and
+zlib) for QPDF and the bridge. Every component is under a permissive licence
+whose notice travels in the natives jar's licenses/ directory; static
+linking adds no further obligation. Chromium's libc++, linked where a
+platform's PDFium build uses it, is Apache-2.0 WITH LLVM-exception, which
+waives attribution for compiled object code. libjpeg-turbo: this software is
+based in part on the work of the Independent JPEG Group.
+
 Bundled ICC profile (jpdfium main jar):
 - JPDFiumCompactCmyk.icc - generated generic CMYK fallback, MIT; see
   jpdfium/src/main/resources/icc/JPDFiumCompactCmyk.NOTICE.txt

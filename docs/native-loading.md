@@ -6,6 +6,12 @@ Packaging depends on your deployment model; see [deployment.md](deployment.md). 
 
 > A native module must match the operating system and architecture your application runs on. Dependency selection is explicit. A platform missing from the declared set fails at load time with `NativeNotFoundException`.
 
+## Library layout
+
+On darwin-arm64, darwin-x64 and linux-x64 the natives jar holds a single library, `libjpdfium`, with PDFium and every third-party dependency linked in statically, ICU data included. The loader extracts, verifies and loads that one file.
+
+The other platforms still ship PDFium's component libraries and the bridge's dependencies as separate files. Their static PDFium prebuild does not yet include Chromium's libc++, which those builds use. On Windows the loader loads each of those libraries by absolute path, dependencies first, before loading the bridge. Natives jars from earlier releases use the same multi-library layout and still load.
+
 ## Downloading at runtime
 
 As an alternative to bundling, JPDFium can download the matching native artifact from Maven Central the first time it runs and reuse the cached copy afterwards.

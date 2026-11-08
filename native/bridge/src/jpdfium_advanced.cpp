@@ -1052,6 +1052,8 @@ int32_t jpdfium_xmp_redact_patterns(int64_t, const char**, int32_t, int32_t* f) 
 #include <unicode/ubidi.h>
 #include <unicode/unistr.h>
 
+void ensureIcuInit();
+
 int32_t jpdfium_icu_normalize_nfc(const char* text, char** result) {
     try {
         if (!text || !result) return JPDFIUM_ERR_INVALID;
@@ -1080,6 +1082,7 @@ int32_t jpdfium_icu_break_sentences(const char* text, char** json_result) {
     try {
         if (!text || !json_result) return JPDFIUM_ERR_INVALID;
 
+        ensureIcuInit();
         UErrorCode status = U_ZERO_ERROR;
         std::unique_ptr<icu::BreakIterator> bi(
             icu::BreakIterator::createSentenceInstance(icu::Locale::getDefault(), status));

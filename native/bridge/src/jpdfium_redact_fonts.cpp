@@ -51,10 +51,18 @@
 #endif
 
 #ifdef JPDFIUM_HAS_ICU
+#ifdef JPDFIUM_EMBEDDED_ICU_DATA
+extern "C" const unsigned char jpdfium_icu_common_data[];
+#endif
+
 void ensureIcuInit() {
     static std::once_flag s_icu_once;
     std::call_once(s_icu_once, [] {
         UErrorCode status = U_ZERO_ERROR;
+#ifdef JPDFIUM_EMBEDDED_ICU_DATA
+        udata_setCommonData(jpdfium_icu_common_data, &status);
+        status = U_ZERO_ERROR;
+#endif
         u_init(&status);
         if (U_SUCCESS(status)) return;
 

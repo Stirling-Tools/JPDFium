@@ -283,31 +283,8 @@ public final class NativeLoader {
                 }
             }
 
-            // On Linux/macOS, RUNPATH=$ORIGIN in pdfium.so/.dylib makes the
-            // dynamic linker find its sibling component libs in the same dir.
-            // Windows has no equivalent - LoadLibrary doesn't search the
-            // loaded DLL's own directory. So pre-load every dependency by
-            // absolute path here. Once a DLL is loaded by name, subsequent
-            // references by name (from pdfium.dll's import table) resolve
-            // against the already-loaded module instead of re-searching disk.
-            //
-            // Multi-pass: deps have their own inter-dependencies and we don't
-            // know the topological order at runtime. Keep retrying failed
-            // loads until either all succeed or a pass makes no progress.
-            // Pre-load bundled dependencies in tmpDir before loading pdfium and bridge.
-            // On Windows this ensures LoadLibrary finds sibling DLLs.
-            // On Linux/macOS, RUNPATH=$ORIGIN / @loader_path resolves sibling dependencies
-            // hermetically; preloading via System.load causes host symbol collisions (e.g. ICU).
-            boolean isWindows =
-                    System.getProperty("os.name").toLowerCase().contains("win");
-            if (isWindows && !libs.isEmpty()) {
-                preloadDependencies(tmpDir, libs, pdfiumName, bridgeName);
-            }
-
-            // Order matters: pdfium first so the bridge resolves against it.
-            Path pdfiumPath = tmpDir.resolve(pdfiumName);
-            if (Files.exists(pdfiumPath)) {
-                System.load(pdfiumPath.toAbsolutePath().toString());
+            if (!isSingleLibrary(libs, bridgeName)) {
+                loadLegacyDependencies(tmpDir, libs, pdfiumName, bridgeName);
             }
 
             Path bridge = tmpDir.resolve(bridgeName);
@@ -318,6 +295,22 @@ public final class NativeLoader {
             verifyBridgeAbi();
         } catch (IOException e) {
             throw new NativeLoadException("Failed to extract native library", e);
+        }
+    }
+
+    static boolean isSingleLibrary(List<String> libs, String bridgeName) {
+        return libs.size() == 1 && libs.getFirst().equals(bridgeName);
+    }
+
+    private static void loadLegacyDependencies(
+            Path tmpDir, List<String> libs, String pdfiumName, String bridgeName) {
+        boolean isWindows = System.getProperty("os.name").toLowerCase().contains("win");
+        if (isWindows && !libs.isEmpty()) {
+            preloadDependencies(tmpDir, libs, pdfiumName, bridgeName);
+        }
+        Path pdfiumPath = tmpDir.resolve(pdfiumName);
+        if (Files.exists(pdfiumPath)) {
+            System.load(pdfiumPath.toAbsolutePath().toString());
         }
     }
 

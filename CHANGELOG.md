@@ -41,6 +41,14 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Changed
 
+- The darwin-arm64, darwin-x64 and linux-x64 natives ship one library,
+  `libjpdfium`, instead of PDFium, its component libraries and every
+  third-party dependency as separate files. PDFium, FreeType, HarfBuzz, ICU
+  (with its trimmed data embedded), qpdf, PCRE2, pugixml, libunibreak and
+  libjpeg-turbo are linked statically, which cuts the files the loader
+  extracts, verifies and opens on first use. The loader still reads older
+  multi-library natives jars. Windows, linux-arm64, musl and FreeBSD keep the
+  previous layout until their static PDFium prebuild bundles Chromium's libc++.
 - `PdfMerge.mergeFilesToFile` and `PdfSplit.extractPageRangeToFile` write their
   staging file without fsync and flush once when they publish the output, which
   now gets the destination's permissions as other saves do. They previously
@@ -67,6 +75,10 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Fixed
 
+- Redaction's NFKC folding, which lets an ASCII pattern match full-width or
+  compatibility characters, now works on hosts without a system ICU data file.
+  The trimmed ICU data shipped with the natives lacked `nfkc.nrm`, so the
+  normalizer silently fell back to unnormalized text.
 - Word and regex redaction finds words PDFium reports hyphenated across a line
   break (`Trace-` / `Monkey`), and removes the hyphen with them; it previously
   missed them, and with eight or more words the keyword prefilter skipped such

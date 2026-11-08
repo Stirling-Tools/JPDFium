@@ -110,7 +110,7 @@ echo "Total items in source : $TOTAL"
 KEEP=(
     '^cnvalias\.icu$' '^ulayout\.icu$'
     '^brkitr/.*\.res$' '^brkitr/sent\.brk$' '^brkitr/sent_el\.brk$'
-    '^root\.res$' '^en\.res$'
+    '^root\.res$' '^en\.res$' '^nfkc\.nrm$'
 )
 
 : > "$WORK/keep.lst"

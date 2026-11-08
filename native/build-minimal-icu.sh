@@ -149,6 +149,7 @@ echo "Extracted   : $DAT_FILE ($(du -h "$DAT_FILE" | cut -f1)) from icudt${ICU_V
 KEEP=(
     '^cnvalias\.icu$'
     '^ulayout\.icu$'
+    '^nfkc\.nrm$'
     '^brkitr/.*\.res$'
     '^brkitr/sent\.brk$'
     '^brkitr/sent_el\.brk$'
