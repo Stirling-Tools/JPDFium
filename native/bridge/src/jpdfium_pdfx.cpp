@@ -1804,7 +1804,7 @@ JPDFIUM_EXPORT int32_t jpdfium_pdfx_prepare_file(const char* in_path, const char
             auto pdf = QPDF::create();
             pdf->processFile(in_path);
             Normalise(*pdf, options);
-            staged = jpdfium_staging::OpenUniqueSibling(out_path);
+            jpdfium_staging::OpenUniqueSibling(out_path, &staged);
             if (!jpdfium_staging::ApplyPublishModeTo(staged.file, out_path)) {
                 throw std::runtime_error("cannot set the permissions of the staging file");
             }

@@ -27,7 +27,7 @@ struct StagedFile {
 
 // Creates a unique sibling of out_path with an exclusive, owner-only create, so a
 // planted or aliased path cannot truncate anything while qpdf streams the input.
-inline StagedFile OpenUniqueSibling(const std::string& out_path) {
+inline void OpenUniqueSibling(const std::string& out_path, StagedFile* staged) {
     const std::filesystem::path target(out_path);
     const std::filesystem::path dir =
         target.has_parent_path() ? target.parent_path() : std::filesystem::path(".");
@@ -60,13 +60,16 @@ inline StagedFile OpenUniqueSibling(const std::string& out_path) {
             continue;
         }
 #endif
-        return {candidate, file};
+        staged->path = candidate;
+        staged->file = file;
+        return;
     }
     throw std::runtime_error("cannot create a temporary output file");
 }
 
 inline std::string CreateUniqueSibling(const std::string& out_path) {
-    StagedFile staged = OpenUniqueSibling(out_path);
+    StagedFile staged;
+    OpenUniqueSibling(out_path, &staged);
     std::fclose(staged.file);
     return staged.path;
 }

@@ -1,7 +1,9 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iterator>
+#include <memory>
 #include <string>
 
 #include "jpdfium_staging.h"
@@ -27,11 +29,60 @@ void Write(const std::filesystem::path& path, const std::string& text) {
     out << text;
 }
 
-jpdfium_staging::StagedFile Stage(const std::filesystem::path& dest, const std::string& text) {
-    jpdfium_staging::StagedFile staged = jpdfium_staging::OpenUniqueSibling(dest.string());
+bool PublishText(const std::filesystem::path& dest, const std::string& text,
+                 const std::function<void(const std::string&)>& before_publish, bool apply_mode) {
+    jpdfium_staging::StagedFile staged;
+    jpdfium_staging::OpenUniqueSibling(dest.string(), &staged);
+    const std::unique_ptr<jpdfium_staging::StagedFile, void (*)(jpdfium_staging::StagedFile*)>
+        guard(&staged, [](jpdfium_staging::StagedFile* open) {
+            if (open->file) std::fclose(open->file);
+        });
     std::fwrite(text.data(), 1, text.size(), staged.file);
-    return staged;
+    if (apply_mode && !jpdfium_staging::ApplyPublishModeTo(staged.file, dest.c_str())) {
+        return false;
+    }
+    before_publish(staged.path);
+    std::string error;
+    const bool ok = jpdfium_staging::PublishStagedFile(&staged, dest.c_str(), &error);
+    if (!ok) std::filesystem::remove(staged.path);
+    return ok;
 }
+
+#if !defined(_WIN32)
+int Run() {
+    const std::filesystem::path dir =
+        std::filesystem::temp_directory_path() / ("jpdfium-staging-" + std::to_string(::getpid()));
+    std::filesystem::create_directories(dir);
+    const std::filesystem::path dest = dir / "out.pdf";
+    const auto nothing = [](const std::string&) {};
+
+    Expect(PublishText(dest, "generated", nothing, false), "normal publish");
+    Expect(Read(dest) == "generated", "published content");
+
+    const std::filesystem::path victim = dir / "victim.txt";
+    Write(victim, "keep me");
+    Write(dest, "previous");
+    const auto swap = [&victim](const std::string& staging) {
+        std::filesystem::remove(staging);
+        std::filesystem::create_symlink(victim, staging);
+    };
+    Expect(!PublishText(dest, "generated", swap, false),
+           "publish refuses a replaced staging entry");
+    Expect(Read(victim) == "keep me", "replacement target untouched");
+    Expect(Read(dest) == "previous", "destination untouched after refused publish");
+
+    const auto mode = std::filesystem::perms::owner_read | std::filesystem::perms::owner_write |
+                      std::filesystem::perms::group_read;
+    std::filesystem::permissions(dest, mode);
+    Expect(PublishText(dest, "generated", nothing, true), "publish with mode");
+    Expect((std::filesystem::status(dest).permissions() & std::filesystem::perms::all) == mode,
+           "destination mode preserved");
+
+    std::filesystem::remove_all(dir);
+    if (failures == 0) std::printf("staging_publish: ok\n");
+    return failures == 0 ? 0 : 1;
+}
+#endif
 
 }  // namespace
 
@@ -39,41 +90,14 @@ int main() {
 #if defined(_WIN32)
     return 0;
 #else
-    const std::filesystem::path dir =
-        std::filesystem::temp_directory_path() / ("jpdfium-staging-" + std::to_string(::getpid()));
-    std::filesystem::create_directories(dir);
-    const std::filesystem::path dest = dir / "out.pdf";
-    std::string error;
-
-    jpdfium_staging::StagedFile normal = Stage(dest, "generated");
-    Expect(jpdfium_staging::PublishStagedFile(&normal, dest.c_str(), &error), "normal publish");
-    Expect(Read(dest) == "generated", "published content");
-
-    const std::filesystem::path victim = dir / "victim.txt";
-    Write(victim, "keep me");
-    Write(dest, "previous");
-    jpdfium_staging::StagedFile swapped = Stage(dest, "generated");
-    std::filesystem::remove(swapped.path);
-    std::filesystem::create_symlink(victim, swapped.path);
-    Expect(!jpdfium_staging::PublishStagedFile(&swapped, dest.c_str(), &error),
-           "publish refuses a replaced staging entry");
-    Expect(Read(victim) == "keep me", "replacement target untouched");
-    Expect(Read(dest) == "previous", "destination untouched after refused publish");
-    std::filesystem::remove(swapped.path);
-
-    std::filesystem::permissions(dest, std::filesystem::perms::owner_read |
-                                           std::filesystem::perms::owner_write |
-                                           std::filesystem::perms::group_read);
-    jpdfium_staging::StagedFile moded = Stage(dest, "generated");
-    Expect(jpdfium_staging::ApplyPublishModeTo(moded.file, dest.c_str()), "mode applied");
-    Expect(jpdfium_staging::PublishStagedFile(&moded, dest.c_str(), &error), "moded publish");
-    const auto perms = std::filesystem::status(dest).permissions() & std::filesystem::perms::all;
-    Expect(perms == (std::filesystem::perms::owner_read | std::filesystem::perms::owner_write |
-                     std::filesystem::perms::group_read),
-           "destination mode preserved");
-
-    std::filesystem::remove_all(dir);
-    if (failures == 0) std::printf("staging_publish: ok\n");
-    return failures == 0 ? 0 : 1;
+    try {
+        return Run();
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "FAIL: %s\n", e.what());
+        return 1;
+    } catch (...) {
+        std::fprintf(stderr, "FAIL: unknown exception\n");
+        return 1;
+    }
 #endif
 }
