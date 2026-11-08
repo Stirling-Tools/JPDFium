@@ -343,7 +343,7 @@ void appendLabel(std::vector<QPDFObjectHandle>& nums, long long outputIndex,
         QPDFObjectHandle previous = nums.back();
         bool continuesPrevious =
             previous.getKey("/S").unparse() == label.getKey("/S").unparse() &&
-            previous.getKey("/P").unparse() == label.getKey("/P").unparse() &&
+            previous.getKey("/P").unparseResolved() == label.getKey("/P").unparseResolved() &&
             previous.getKey("/St").isInteger() && label.getKey("/St").isInteger() &&
             label.getKey("/St").getIntValue() - previous.getKey("/St").getIntValue() ==
                 outputIndex - previousIndex.getIntValue();
@@ -521,6 +521,110 @@ QpdfResult mergePdfs(const uint8_t* const* inputs, const int64_t* inputLens, int
         return {w.getBufferSharedPointer(), ""};
     } catch (const std::exception& e) {
         return {nullptr, e.what()};
+    }
+}
+
+struct RangeSource {
+    QPDF& pdf;
+    std::vector<QPDFObjectHandle> const& pages;
+    QPDFAcroFormDocumentHelper forms;
+    QPDFPageLabelDocumentHelper labels;
+};
+
+QPDFObjectHandle copyInto(QPDF& dest, QPDF& source, QPDFObjectHandle value) {
+    if (value.isIndirect()) return dest.copyForeignObject(value);
+    return dest.copyForeignObject(source.makeIndirectObject(value));
+}
+
+void copyFieldsForPages(QPDF& dest, QPDF& source, std::set<QPDFObjGen> const& pageFields) {
+    QPDFObjectHandle acroForm = source.getRoot().getKey("/AcroForm");
+    if (!acroForm.isDictionary()) return;
+    QPDFObjectHandle fields = acroForm.getKey("/Fields");
+    if (!fields.isArray()) return;
+    std::vector<QPDFObjectHandle> kept;
+    for (auto const& field : fields.getArrayAsVector()) {
+        if (field.isIndirect() && pageFields.count(field.getObjGen())) {
+            kept.push_back(dest.copyForeignObject(field));
+        }
+    }
+    if (kept.empty()) return;
+    QPDFObjectHandle form = QPDFObjectHandle::newDictionary();
+    for (auto const& key : acroForm.getKeys()) {
+        if (key == "/Fields" || key == "/XFA") continue;
+        form.replaceKey(key, copyInto(dest, source, acroForm.getKey(key)));
+    }
+    form.replaceKey("/Fields", QPDFObjectHandle::newArray(kept));
+    dest.getRoot().replaceKey("/AcroForm", dest.makeIndirectObject(form));
+}
+
+QPDFObjectHandle ownedLabel(QPDF& dest, QPDFObjectHandle label) {
+    QPDFObjectHandle owned = QPDFObjectHandle::newDictionary();
+    for (auto const& key : label.getKeys()) {
+        QPDFObjectHandle value = label.getKey(key);
+        owned.replaceKey(key, value.isIndirect() ? dest.copyForeignObject(value) : value);
+    }
+    return owned;
+}
+
+int writeRange(RangeSource& source, int32_t first, int32_t last, const char* out_path) {
+    if (first < 0 || last < first || static_cast<size_t>(last) >= source.pages.size()) return -1;
+    auto dest = QPDF::create();
+    dest->emptyPDF();
+    QPDFObjectHandle srcRoot = source.pdf.getRoot();
+    QPDFObjectHandle destRoot = dest->getRoot();
+    for (auto const& key : srcRoot.getKeys()) {
+        if (key == "/Type" || key == "/Pages" || key == "/AcroForm" || key == "/PageLabels" ||
+            key == "/Outlines" || key == "/StructTreeRoot" || key == "/MarkInfo" ||
+            key == "/NeedsRendering" || key == "/Perms") {
+            continue;
+        }
+        destRoot.replaceKey(key, copyInto(*dest, source.pdf, srcRoot.getKey(key)));
+    }
+    QPDFObjectHandle info = source.pdf.getTrailer().getKey("/Info");
+    if (info.isDictionary()) {
+        dest->getTrailer().replaceKey("/Info", copyInto(*dest, source.pdf, info));
+    }
+
+    bool labelled = source.labels.hasPageLabels();
+    std::set<QPDFObjGen> pageFields;
+    std::vector<QPDFObjectHandle> labelNums;
+    for (int32_t index = first; index <= last; ++index) {
+        QPDFObjectHandle page = source.pages[static_cast<size_t>(index)];
+        dest->addPage(page, false);
+        for (auto& field : source.forms.getFormFieldsForPage(QPDFPageObjectHelper{page})) {
+            pageFields.insert(field.getObjectHandle().getObjGen());
+        }
+        if (labelled) {
+            long long outputIndex = index - first;
+            appendLabel(labelNums, outputIndex,
+                        ownedLabel(*dest, labelFor(source.labels, index, outputIndex)));
+        }
+    }
+    if (labelled) {
+        destRoot.replaceKey("/PageLabels", QPDFObjectHandle::newDictionary(
+                                               {{"/Nums", QPDFObjectHandle::newArray(labelNums)}}));
+    }
+    copyFieldsForPages(*dest, source.pdf, pageFields);
+    nullPagesOutsideTree(*dest);
+
+    FILE* out = createOutputFile(out_path);
+    if (!out) {
+        std::fprintf(stderr, "jpdfium qpdf file: cannot open output %s\n", out_path);
+        return -1;
+    }
+    bool writerOwnsFile = false;
+    try {
+        QPDFWriter w{*dest};
+        w.setOutputFile("jpdfium-out", out, true);
+        writerOwnsFile = true;
+        configureAssembledWriter(w);
+        w.setMinimumPDFVersion(source.pdf.getPDFVersion(), source.pdf.getExtensionLevel());
+        WriterLock lock{-1};
+        w.write();
+        return 0;
+    } catch (...) {
+        if (!writerOwnsFile) std::fclose(out);
+        throw;
     }
 }
 
@@ -1960,6 +2064,42 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_pages_file(const char* in_path,
     }
 }
 
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_ranges_files(const char* in_path,
+                                                         const int32_t* firstPages,
+                                                         const int32_t* lastPages,
+                                                         int32_t rangeCount,
+                                                         const char* const* out_paths) {
+    if (!in_path || !firstPages || !lastPages || rangeCount <= 0 || !out_paths) return -1;
+    std::shared_ptr<QPDF> src;
+    try {
+        src = QPDF::create();
+        src->processFile(in_path);
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "jpdfium qpdf extract ranges: %s\n", e.what());
+        return -1;
+    } catch (...) {
+        std::fprintf(stderr, "jpdfium qpdf extract ranges: unknown error\n");
+        return -1;
+    }
+    int32_t written = 0;
+    try {
+        std::vector<QPDFObjectHandle> srcPages = src->getAllPages();
+        RangeSource source{*src, srcPages, QPDFAcroFormDocumentHelper{*src},
+                           QPDFPageLabelDocumentHelper{*src}};
+        for (; written < rangeCount; ++written) {
+            if (!out_paths[written] || writeRange(source, firstPages[written], lastPages[written],
+                                                  out_paths[written]) != 0) {
+                break;
+            }
+        }
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "jpdfium qpdf extract ranges: %s\n", e.what());
+    } catch (...) {
+        std::fprintf(stderr, "jpdfium qpdf extract ranges: unknown error\n");
+    }
+    return written;
+}
+
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_pages(const uint8_t* input, int64_t inputLen,
                                                   const int32_t* pageIndices, int32_t pageCount,
                                                   uint8_t** output, int64_t* outputLen) {
@@ -2320,6 +2460,12 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_optimize_file(const char* in_path, const cha
 
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_pages_file(const char*, const int32_t*, int32_t,
                                                        const char*) {
+    return -1;
+}
+
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_ranges_files(const char*, const int32_t*,
+                                                         const int32_t*, int32_t,
+                                                         const char* const*) {
     return -1;
 }
 
