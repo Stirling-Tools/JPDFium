@@ -1424,10 +1424,12 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_merge_files(const char* const* paths, int32_
         sources.reserve(static_cast<size_t>(count));
         std::vector<PageSelection> selections;
 
+        // Parsing stays sequential: an A/B measurement on 5–10 input files
+        // showed no gain from overlapping qpdf parses (the page-copy/writer
+        // phase dominates), so avoid the thread-safety and fan-out risk.
         for (int32_t i = 0; i < count; ++i) {
             const char* path = paths[i];
             if (!path || !*path) continue;
-
             auto src = QPDF::create();
             src->processFile(path);
             sources.push_back(src);

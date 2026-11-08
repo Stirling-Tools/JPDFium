@@ -120,6 +120,10 @@ public final class RedactionSession implements AutoCloseable {
      * closing the session will NOT close the document.
      */
     public static RedactionSession wrap(PdfDocument document) {
+        if (document.isLayerDocument()) {
+            throw new IllegalArgumentException(
+                    "redaction sessions cannot wrap a layer document; compact it first");
+        }
         return new RedactionSession(document, false);
     }
 

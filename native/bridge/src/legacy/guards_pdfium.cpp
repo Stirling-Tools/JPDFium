@@ -11,6 +11,7 @@
 #include <epdf_font.h>
 #include <epdf_form.h>
 #include <epdf_named_pages.h>
+#include <epdf_ppo.h>
 #include <epdf_redact.h>
 #include <epdf_text.h>
 #include <epdf_view.h>
@@ -326,6 +327,18 @@ JPDF_API unsigned long jpdf_guard_EPDFAnnot_GetRichContent(FPDF_ANNOTATION annot
     }
 }
 
+JPDF_API unsigned long jpdf_guard_EPDFAnnot_GetRichTextJSON(FPDF_ANNOTATION annot, char* buffer,
+                                                            unsigned long buflen) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return EPDFAnnot_GetRichTextJSON(annot, buffer, buflen);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
 JPDF_API FPDF_BOOL jpdf_guard_EPDFAnnot_GetRotate(FPDF_ANNOTATION annot, float* rotation) noexcept {
     jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
     if (!guard.admitted()) return {};
@@ -606,6 +619,30 @@ JPDF_API FPDF_BOOL jpdf_guard_EPDFAnnot_SetReplyType(FPDF_ANNOTATION annot,
     }
 }
 
+JPDF_API FPDF_BOOL jpdf_guard_EPDFAnnot_SetRichTextJSON(FPDF_ANNOTATION annot,
+                                                        FPDF_BYTESTRING json_utf8) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return EPDFAnnot_SetRichTextJSON(annot, json_utf8);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
+JPDF_API FPDF_BOOL jpdf_guard_EPDFAnnot_SetRichTextXHTML(FPDF_ANNOTATION annot,
+                                                         FPDF_WIDESTRING xhtml) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return EPDFAnnot_SetRichTextXHTML(annot, xhtml);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
 JPDF_API FPDF_BOOL jpdf_guard_EPDFAnnot_SetRotate(FPDF_ANNOTATION annot, float rotation) noexcept {
     jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
     if (!guard.admitted()) return {};
@@ -688,6 +725,21 @@ JPDF_API int jpdf_guard_EPDFDoc_GetFontEmbeddingPolicy(FPDF_DOCUMENT document) n
     }
 }
 
+JPDF_API unsigned long jpdf_guard_EPDFDoc_GetImportFieldRoots(FPDF_DOCUMENT document,
+                                                              const int* page_indices,
+                                                              unsigned long length,
+                                                              uint32_t* buffer,
+                                                              unsigned long buffer_count) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return EPDFDoc_GetImportFieldRoots(document, page_indices, length, buffer, buffer_count);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
 JPDF_API unsigned long jpdf_guard_EPDFDoc_GetNamedPageAt(FPDF_DOCUMENT document, int tree,
                                                          int index, FPDF_WCHAR* buffer,
                                                          unsigned long buflen,
@@ -720,6 +772,20 @@ JPDF_API unsigned int jpdf_guard_EPDFDoc_GetPageObjectNumberByIndex(FPDF_DOCUMEN
     if (!guard.admitted()) return {};
     try {
         return EPDFDoc_GetPageObjectNumberByIndex(document, page_index);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
+JPDF_API FPDF_BOOL jpdf_guard_EPDFDoc_ImportPages(FPDF_DOCUMENT dest_doc, FPDF_DOCUMENT src_doc,
+                                                  const int* page_indices, unsigned long length,
+                                                  int index,
+                                                  const uint32_t* page_objnums) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return EPDFDoc_ImportPages(dest_doc, src_doc, page_indices, length, index, page_objnums);
     } catch (...) {
         jpdf::set_guard_refusal(JPDF_E_INTERNAL);
         return {};
@@ -954,6 +1020,17 @@ JPDF_API void jpdf_guard_EPDFForm_CloseModel(EPDF_FORM_MODEL model) noexcept {
     }
 }
 
+JPDF_API int jpdf_guard_EPDFForm_CountFieldValues(EPDF_FORM_MODEL model, int field_index) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return EPDFForm_CountFieldValues(model, field_index);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
 JPDF_API int jpdf_guard_EPDFForm_CountFieldWidgets(EPDF_FORM_MODEL model,
                                                    int field_index) noexcept {
     jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
@@ -992,11 +1069,50 @@ JPDF_API FPDF_BOOL jpdf_guard_EPDFForm_DeleteField(FPDF_DOCUMENT document, uint3
     }
 }
 
+JPDF_API unsigned long jpdf_guard_EPDFForm_GetFieldAlternateName(EPDF_FORM_MODEL model,
+                                                                 int field_index,
+                                                                 FPDF_WCHAR* buffer,
+                                                                 unsigned long buflen) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return EPDFForm_GetFieldAlternateName(model, field_index, buffer, buflen);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
 JPDF_API int jpdf_guard_EPDFForm_GetFieldFamily(EPDF_FORM_MODEL model, int field_index) noexcept {
     jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
     if (!guard.admitted()) return {};
     try {
         return EPDFForm_GetFieldFamily(model, field_index);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
+JPDF_API uint32_t jpdf_guard_EPDFForm_GetFieldFlags(EPDF_FORM_MODEL model,
+                                                    int field_index) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return EPDFForm_GetFieldFlags(model, field_index);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
+JPDF_API unsigned long jpdf_guard_EPDFForm_GetFieldName(EPDF_FORM_MODEL model, int field_index,
+                                                        FPDF_WCHAR* buffer,
+                                                        unsigned long buflen) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return EPDFForm_GetFieldName(model, field_index, buffer, buflen);
     } catch (...) {
         jpdf::set_guard_refusal(JPDF_E_INTERNAL);
         return {};
@@ -1015,12 +1131,36 @@ JPDF_API uint32_t jpdf_guard_EPDFForm_GetFieldObjNum(EPDF_FORM_MODEL model,
     }
 }
 
+JPDF_API unsigned long jpdf_guard_EPDFForm_GetFieldValueAt(EPDF_FORM_MODEL model, int field_index,
+                                                           int value_index, FPDF_WCHAR* buffer,
+                                                           unsigned long buflen) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return EPDFForm_GetFieldValueAt(model, field_index, value_index, buffer, buflen);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
 JPDF_API uint32_t jpdf_guard_EPDFForm_GetFieldWidgetObjNum(EPDF_FORM_MODEL model, int field_index,
                                                            int widget_index) noexcept {
     jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
     if (!guard.admitted()) return {};
     try {
         return EPDFForm_GetFieldWidgetObjNum(model, field_index, widget_index);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
+JPDF_API int jpdf_guard_EPDFForm_GetFormKind(EPDF_FORM_MODEL model) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return EPDFForm_GetFormKind(model);
     } catch (...) {
         jpdf::set_guard_refusal(JPDF_E_INTERNAL);
         return {};

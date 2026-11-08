@@ -120,13 +120,24 @@ public final class PdfRedactor {
 
     static RedactResult redact(PdfDocument doc, RedactOptions options,
                                RedactionPipelineProfiler profiler) {
+        if (doc.isLayerDocument()) {
+            throw new IllegalArgumentException(
+                    "redaction requires a full document; a layer retains the pre-redaction base");
+        }
         long t0 = System.nanoTime();
         int totalPages = doc.pageCount();
         doc.setSanitizeOnSave(options.sanitizeStructure());
 
         long setupStart = System.nanoTime();
         FontNormalizer.Result fontResult = null;
-        if (options.normalizeFonts()) {
+        // Font repair only affects text matching. Metadata-only or flatten-only
+        // runs have nothing to match, so paying a FreeType/HarfBuzz pass over
+        // every page would be pure setup cost.
+        boolean needsContentMatching = !options.words().isEmpty()
+                || !options.piiPatterns().isEmpty()
+                || !options.entities().isEmpty()
+                || options.semanticRedact();
+        if (options.normalizeFonts() && needsContentMatching) {
             fontResult = runFontNormalization(doc, options);
         }
 

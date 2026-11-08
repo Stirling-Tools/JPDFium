@@ -229,6 +229,75 @@ public final class EmbedPdfAnnotations {
     }
 
     /**
+     * Read the annotation's rich-text model as UTF-8 JSON.
+     *
+     * <p>Works for FreeText annotations ({@code /RC}) and rich-text fields
+     * ({@code /RV}). When no rich text exists the native model is synthesised
+     * from {@code /Contents}.
+     *
+     * @return the JSON model, or empty when the symbol is unavailable
+     */
+    public static Optional<String> getRichTextJson(MemorySegment page, int index) {
+        MethodHandle getter = EmbedPdfAnnotationBindings.EPDFAnnot_GetRichTextJSON;
+        if (getter == null) return Optional.empty();
+        MemorySegment annot = openAnnot(page, index);
+        try (Arena arena = Arena.ofConfined()) {
+            long needed = (long) getter.invokeExact(annot, MemorySegment.NULL, 0L);
+            if (needed <= 1) return Optional.empty();
+            MemorySegment buffer = arena.allocate(needed);
+            long written = (long) getter.invokeExact(annot, buffer, needed);
+            if (written <= 1) return Optional.empty();
+            int length = (int) Math.min(written - 1, needed - 1);
+            byte[] json = new byte[length];
+            MemorySegment.copy(buffer, ValueLayout.JAVA_BYTE, 0, json, 0, length);
+            return Optional.of(new String(json, java.nio.charset.StandardCharsets.UTF_8));
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw new JPDFiumException(t);
+        } finally {
+            closeAnnot(annot);
+        }
+    }
+
+    /**
+     * Replace a FreeText annotation's rich text from the JSON model returned by
+     * {@link #getRichTextJson(MemorySegment, int)}.
+     */
+    public static void setRichTextJson(MemorySegment page, int index, String json) {
+        MethodHandle setter = EmbedPdfAnnotationBindings.EPDFAnnot_SetRichTextJSON;
+        if (setter == null) throw new JPDFiumException("EPDFAnnot_SetRichTextJSON unavailable");
+        MemorySegment annot = openAnnot(page, index);
+        try (Arena arena = Arena.ofConfined()) {
+            int ok = (int) setter.invokeExact(annot, arena.allocateFrom(json));
+            if (ok == 0) throw new JPDFiumException("EPDFAnnot_SetRichTextJSON failed");
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw new JPDFiumException(t);
+        } finally {
+            closeAnnot(annot);
+        }
+    }
+
+    /**
+     * Replace a FreeText annotation's rich text from the XFA rich-text XHTML
+     * subset.
+     */
+    public static void setRichTextXhtml(MemorySegment page, int index, String xhtml) {
+        MethodHandle setter = EmbedPdfAnnotationBindings.EPDFAnnot_SetRichTextXHTML;
+        if (setter == null) throw new JPDFiumException("EPDFAnnot_SetRichTextXHTML unavailable");
+        MemorySegment annot = openAnnot(page, index);
+        try (Arena arena = Arena.ofConfined()) {
+            int ok = (int) setter.invokeExact(annot, FfmHelper.toWideString(arena, xhtml));
+            if (ok == 0) throw new JPDFiumException("EPDFAnnot_SetRichTextXHTML failed");
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw new JPDFiumException(t);
+        } finally {
+            closeAnnot(annot);
+        }
+    }
+
+    /**
      * Get overlay text from a Redact annotation.
      */
     public static Optional<String> getOverlayText(MemorySegment page, int index) {

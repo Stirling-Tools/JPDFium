@@ -150,6 +150,79 @@ inline void bgraToRgbaInPlace(uint8_t* __restrict buf, int w, int h, int stride)
     }
 }
 
+// Pack straight RGBA8 into 32-bit AWT pixels. The Java side converts every
+// allocating render this way, so it is the one O(width*height) loop outside the
+// native renderer. vld4q_u8 deinterleaves 16 pixels per iteration; the shifts
+// build four 0xAARRGGBB / 0x00RRGGBB words at a time. Byte order follows the
+// host, matching the int[] raster AWT stores natively. The caller may pass the
+// same buffer as src and dst: every block is loaded before it is stored back.
+#if defined(__aarch64__)
+inline uint32x4_t packArgb4(uint16x4_t r, uint16x4_t g, uint16x4_t b, uint16x4_t a) {
+    uint32x4_t v = vorrq_u32(vshll_n_u16(r, 16), vshll_n_u16(g, 8));
+    v = vorrq_u32(v, vmovl_u16(b));
+    return vorrq_u32(v, vshll_n_u16(a, 24));
+}
+
+inline uint32x4_t packRgb4(uint16x4_t r, uint16x4_t g, uint16x4_t b) {
+    return vorrq_u32(vorrq_u32(vshll_n_u16(r, 16), vshll_n_u16(g, 8)), vmovl_u16(b));
+}
+#endif
+
+inline void rgbaToArgb32(const uint8_t* src, uint32_t* dst, int total) {
+    int i = 0;
+#if defined(__aarch64__)
+    for (; i + 16 <= total; i += 16) {
+        const uint8x16x4_t px = vld4q_u8(src + static_cast<std::size_t>(i) * 4);
+        const uint16x8_t rl = vmovl_u8(vget_low_u8(px.val[0]));
+        const uint16x8_t gl = vmovl_u8(vget_low_u8(px.val[1]));
+        const uint16x8_t bl = vmovl_u8(vget_low_u8(px.val[2]));
+        const uint16x8_t al = vmovl_u8(vget_low_u8(px.val[3]));
+        const uint16x8_t rh = vmovl_high_u8(px.val[0]);
+        const uint16x8_t gh = vmovl_high_u8(px.val[1]);
+        const uint16x8_t bh = vmovl_high_u8(px.val[2]);
+        const uint16x8_t ah = vmovl_high_u8(px.val[3]);
+        vst1q_u32(dst + i, packArgb4(vget_low_u16(rl), vget_low_u16(gl), vget_low_u16(bl),
+                                     vget_low_u16(al)));
+        vst1q_u32(dst + i + 4, packArgb4(vget_high_u16(rl), vget_high_u16(gl), vget_high_u16(bl),
+                                         vget_high_u16(al)));
+        vst1q_u32(dst + i + 8, packArgb4(vget_low_u16(rh), vget_low_u16(gh), vget_low_u16(bh),
+                                         vget_low_u16(ah)));
+        vst1q_u32(dst + i + 12, packArgb4(vget_high_u16(rh), vget_high_u16(gh), vget_high_u16(bh),
+                                          vget_high_u16(ah)));
+    }
+#endif
+    for (; i < total; ++i) {
+        const std::size_t off = static_cast<std::size_t>(i) * 4;
+        dst[i] = (static_cast<uint32_t>(src[off + 3]) << 24) |
+                 (static_cast<uint32_t>(src[off]) << 16) |
+                 (static_cast<uint32_t>(src[off + 1]) << 8) | src[off + 2];
+    }
+}
+
+inline void rgbaToRgb32(const uint8_t* src, uint32_t* dst, int total) {
+    int i = 0;
+#if defined(__aarch64__)
+    for (; i + 16 <= total; i += 16) {
+        const uint8x16x4_t px = vld4q_u8(src + static_cast<std::size_t>(i) * 4);
+        const uint16x8_t rl = vmovl_u8(vget_low_u8(px.val[0]));
+        const uint16x8_t gl = vmovl_u8(vget_low_u8(px.val[1]));
+        const uint16x8_t bl = vmovl_u8(vget_low_u8(px.val[2]));
+        const uint16x8_t rh = vmovl_high_u8(px.val[0]);
+        const uint16x8_t gh = vmovl_high_u8(px.val[1]);
+        const uint16x8_t bh = vmovl_high_u8(px.val[2]);
+        vst1q_u32(dst + i, packRgb4(vget_low_u16(rl), vget_low_u16(gl), vget_low_u16(bl)));
+        vst1q_u32(dst + i + 4, packRgb4(vget_high_u16(rl), vget_high_u16(gl), vget_high_u16(bl)));
+        vst1q_u32(dst + i + 8, packRgb4(vget_low_u16(rh), vget_low_u16(gh), vget_low_u16(bh)));
+        vst1q_u32(dst + i + 12, packRgb4(vget_high_u16(rh), vget_high_u16(gh), vget_high_u16(bh)));
+    }
+#endif
+    for (; i < total; ++i) {
+        const std::size_t off = static_cast<std::size_t>(i) * 4;
+        dst[i] = (static_cast<uint32_t>(src[off]) << 16) |
+                 (static_cast<uint32_t>(src[off + 1]) << 8) | src[off + 2];
+    }
+}
+
 // Single-pixel unpremultiply plus the optional RGB/BGR swap. Extracted so the vector
 // fast path below can fall back to exactly the same arithmetic for mixed blocks.
 inline void unpremulSwapPixel(uint8_t* __restrict r, bool reverse_byte_order) {
@@ -464,6 +537,18 @@ int32_t jpdfium_render_page_into(void* fpdf_page, uint8_t* target, uint64_t targ
     } catch (...) {
         return JPDFIUM_ERR_NATIVE;
     }
+}
+
+int32_t jpdfium_rgba_to_argb32(const uint8_t* src, uint32_t* dst, int32_t pixels) JPDFIUM_NOEXCEPT {
+    if (!src || !dst || pixels < 0) return JPDFIUM_ERR_INVALID;
+    rgbaToArgb32(src, dst, pixels);
+    return JPDFIUM_OK;
+}
+
+int32_t jpdfium_rgba_to_rgb32(const uint8_t* src, uint32_t* dst, int32_t pixels) JPDFIUM_NOEXCEPT {
+    if (!src || !dst || pixels < 0) return JPDFIUM_ERR_INVALID;
+    rgbaToRgb32(src, dst, pixels);
+    return JPDFIUM_OK;
 }
 
 int32_t jpdfium_render_page_form_into(void* fpdf_page, void* form, uint8_t* target,

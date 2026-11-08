@@ -1,5 +1,7 @@
 // jpdfium_document.cpp - Library lifecycle, document and page management.
 
+#include <epdf_layer.h>
+#include <epdf_save.h>
 #include <fpdf_doc.h>
 #include <fpdf_edit.h>
 #include <fpdf_ppo.h>
@@ -13,7 +15,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <memory>
+#include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #if defined(_WIN32)
@@ -33,6 +38,86 @@
 #include "runtime/domain.h"
 
 namespace {
+
+struct LayerBaseEntry {
+    EPDF_BASE_DOCUMENT base = nullptr;
+    std::vector<uint8_t> bytes;
+
+    ~LayerBaseEntry() {
+        if (base) EPDF_ReleaseBaseDocument(base);
+    }
+};
+
+std::mutex g_layerBaseMutex;
+std::unordered_map<std::string, std::weak_ptr<LayerBaseEntry>> g_layerBases;
+
+struct CachedBase {
+    std::shared_ptr<LayerBaseEntry> entry;
+    int32_t error = 0;
+};
+
+// A base is immutable for the lifetime of a layer. Cache it by the exact file
+// identity so many sessions opening the same base share one parse and one copy
+// of the bytes; the weak map lets the entry die once the last layer closes.
+CachedBase acquireLayerBase(const char* path) {
+    std::string key;
+    std::error_code ec;
+    auto absolute = std::filesystem::absolute(path, ec);
+    if (ec) return {nullptr, JPDFIUM_ERR_IO};
+    auto size = std::filesystem::file_size(absolute, ec);
+    if (ec) return {nullptr, JPDFIUM_ERR_IO};
+    auto mtime = std::filesystem::last_write_time(absolute, ec);
+    if (ec) return {nullptr, JPDFIUM_ERR_IO};
+    key = absolute.string() + "|" + std::to_string(size) + "|" +
+          std::to_string(static_cast<long long>(mtime.time_since_epoch().count()));
+
+    {
+        std::lock_guard<std::mutex> lock(g_layerBaseMutex);
+        auto it = g_layerBases.find(key);
+        if (it != g_layerBases.end()) {
+            if (auto entry = it->second.lock()) return {std::move(entry), 0};
+            g_layerBases.erase(it);
+        }
+    }
+
+    std::FILE* in = std::fopen(path, "rb");
+    if (!in) return {nullptr, JPDFIUM_ERR_IO};
+    if (std::fseek(in, 0, SEEK_END) != 0) {
+        std::fclose(in);
+        return {nullptr, JPDFIUM_ERR_IO};
+    }
+    long rawLen = std::ftell(in);
+    if (rawLen <= 0) {
+        std::fclose(in);
+        return {nullptr, JPDFIUM_ERR_INVALID};
+    }
+    std::rewind(in);
+    auto entry = std::make_shared<LayerBaseEntry>();
+    entry->bytes.resize(static_cast<size_t>(rawLen));
+    if (std::fread(entry->bytes.data(), 1, entry->bytes.size(), in) != entry->bytes.size()) {
+        std::fclose(in);
+        return {nullptr, JPDFIUM_ERR_IO};
+    }
+    std::fclose(in);
+    entry->base = EPDF_LoadMemBaseDocument64(entry->bytes.data(), entry->bytes.size(), nullptr);
+    if (!entry->base) return {nullptr, JPDFIUM_ERR_NATIVE};
+
+    {
+        std::lock_guard<std::mutex> lock(g_layerBaseMutex);
+        g_layerBases[key] = entry;
+        // Weak entries for bases no longer in use would otherwise accumulate
+        // for every distinct file the process has ever opened.
+        if (g_layerBases.size() > 64) {
+            for (auto it = g_layerBases.begin(); it != g_layerBases.end();) {
+                if (it->second.expired())
+                    it = g_layerBases.erase(it);
+                else
+                    ++it;
+            }
+        }
+    }
+    return {std::move(entry), 0};
+}
 
 // Exclusive, no-follow creation for staging files. The sibling name carries
 // only the PID plus a counter, so another local user with write access to the
@@ -525,6 +610,94 @@ int32_t jpdfium_doc_open_protected(const char* path, const char* password, int64
     } catch (...) {
         return JPDFIUM_ERR_NATIVE;
     }
+}
+
+int32_t jpdfium_layer_open(const char* base_path, const char* delta_path, int64_t* handle) {
+    if (!base_path || !*base_path || !handle) return JPDFIUM_ERR_INVALID;
+    CachedBase cached = acquireLayerBase(base_path);
+    if (!cached.entry) return cached.error;
+    EPDF_BASE_DOCUMENT base = cached.entry->base;
+    EPDFLayerOpenStatus status = EPDFLayerOpenStatus_kOpenFailed;
+    FPDF_DOCUMENT layer = nullptr;
+    if (delta_path && *delta_path) {
+        layer = EPDFLayer_OpenLayerArtifactFromPath(base, delta_path, nullptr, &status);
+    } else {
+        layer = EPDFLayer_OpenLayer(base, nullptr, nullptr, &status);
+    }
+    if (!layer) return JPDFIUM_ERR_NATIVE;
+
+    auto w = std::make_unique<DocWrapper>();
+    w->core = makeDocCore(layer);
+    w->core->layerBase = base;
+    w->core->layerBaseBytes = cached.entry->bytes.data();
+    w->core->layerBaseLen = cached.entry->bytes.size();
+    w->core->layerBaseOwner = cached.entry;
+    auto* raw = w.release();
+    DocHandleRegistry::instance().add(raw);
+    *handle = encodeHandle(raw);
+    jpdf::Domain::instance().document_opened(layer);
+    return JPDFIUM_OK;
+}
+
+namespace {
+int32_t save_layer_delta(FPDF_DOCUMENT doc, const char* path, bool* changedOut) {
+    std::FILE* out = std::fopen(path, "wb");
+    if (!out) return JPDFIUM_ERR_IO;
+    FileWriteContext ctx;
+    ctx.version = 1;
+    ctx.WriteBlock = FileWriteContext::Write;
+    ctx.file = out;
+    EPDFLayerSaveStatus status = EPDFLayerSaveStatus_kSuccess;
+    FPDF_BOOL changed = 0;
+    // The artifact streams its delta through the runtime's temporary file,
+    // so a large delta is never held whole in memory (unlike the owned-buffer
+    // variant used before).
+    const bool ok = EPDFLayer_SaveLayerArtifactEx(doc, &ctx, &status, &changed);
+    const bool flushed = std::fflush(out) == 0;
+    const bool closed = std::fclose(out) == 0;
+    if (changedOut) *changedOut = changed != 0;
+    if (!ok || ctx.failed || !flushed || !closed || status != EPDFLayerSaveStatus_kSuccess) {
+        return status == EPDFLayerSaveStatus_kAppendOnlyOffsetTooLarge ? JPDFIUM_ERR_TOO_LARGE
+                                                                       : JPDFIUM_ERR_IO;
+    }
+    return JPDFIUM_OK;
+}
+}  // namespace
+
+int32_t jpdfium_layer_save_delta(int64_t doc, const char* path, int32_t* changed) {
+    DocWrapper* w = decodeDoc(doc);
+    if (!w || !w->core || !w->core->layerBase || !path || !*path) return JPDFIUM_ERR_INVALID;
+    bool didChange = false;
+    int32_t rc = save_layer_delta(w->core->doc, path, &didChange);
+    if (changed) *changed = didChange ? 1 : 0;
+    return rc;
+}
+
+int32_t jpdfium_layer_materialize(int64_t doc, const char* path) {
+    DocWrapper* w = decodeDoc(doc);
+    if (!w || !w->core || !w->core->layerBase || !path || !*path) return JPDFIUM_ERR_INVALID;
+    std::FILE* out = std::fopen(path, "wb");
+    if (!out) return JPDFIUM_ERR_IO;
+    bool ok = std::fwrite(w->core->layerBaseBytes, 1, w->core->layerBaseLen, out) ==
+              w->core->layerBaseLen;
+    FileWriteContext ctx;
+    ctx.version = 1;
+    ctx.WriteBlock = FileWriteContext::Write;
+    ctx.file = out;
+    EPDFLayerSaveStatus status = EPDFLayerSaveStatus_kSuccess;
+    FPDF_BOOL changed = 0;
+    // Stream the delta straight after the base; the old path materialised the
+    // whole delta in an owned buffer first only to copy it into the file.
+    if (ok) {
+        ok = EPDFLayer_SaveDeltaEx(w->core->doc, &ctx, &status, &changed);
+    }
+    if (ok) ok = !ctx.failed && std::fflush(out) == 0;
+    if (std::fclose(out) != 0) ok = false;
+    if (!ok) {
+        return status == EPDFLayerSaveStatus_kAppendOnlyOffsetTooLarge ? JPDFIUM_ERR_TOO_LARGE
+                                                                       : JPDFIUM_ERR_IO;
+    }
+    return JPDFIUM_OK;
 }
 
 int32_t jpdfium_doc_page_count(int64_t doc, int32_t* count) {

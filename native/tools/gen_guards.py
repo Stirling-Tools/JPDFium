@@ -40,7 +40,8 @@ OUT_PDFIUM = BRIDGE / "src" / "legacy" / "guards_pdfium.cpp"
 # leaking the native object.
 UNGUARDED_BRIDGE = re.compile(
     r"^jpdfium_(qpdf_\w+|rust_\w+|abi_\w+|pcre2_\w+|icu_\w+|flashtext_\w+|brotli_\w+"
-    r"|luhn_validate|font_classify|font_subset|free_buffer|free_string|init|init_ex|destroy|has_rust)$"
+    r"|luhn_validate|font_classify|font_subset|rgba_to_argb32|rgba_to_rgb32"
+    r"|free_buffer|free_string|init|init_ex|destroy|has_rust)$"
 )
 TEARDOWN = re.compile(r"(Close|close|Destroy|destroy|Exit|Free|free|Release|release|abandon|forget)")
 PDFIUM_SYMBOL = re.compile(r"^(FPDF|EPDF|FORM_|FSDK_)\w+$")

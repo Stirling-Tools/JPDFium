@@ -15,6 +15,7 @@ import org.openjdk.jmh.annotations.Warmup;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfSplit;
 import stirling.software.jpdfium.doc.PdfOptimizer;
+import stirling.software.jpdfium.doc.RenderOptions;
 import stirling.software.jpdfium.model.StorageOptions;
 import stirling.software.jpdfium.panama.JpdfiumLib;
 
@@ -352,6 +353,25 @@ public class PdfOperationBenchmark {
             }
             page.renderInto(renderBuffer, w, h);
             return (long) w * h;
+        }
+    }
+
+    /**
+     * Full-control render (RenderOptions). With the native packer the page's
+     * pixels stay in native memory and only the final int[] raster is copied;
+     * with {@code -Djpdfium.render.scalar=true} the old RGBA byte[] is
+     * materialised and the scalar pack loop runs. Run both settings for an
+     * identical-input A/B.
+     */
+    @Benchmark
+    public long renderOptions() {
+        try (var page = doc.page(0)) {
+            var size = page.size();
+            BufferedImage img = RenderOptions.builder()
+                    .dpi(150)
+                    .build()
+                    .render(page.rawHandle(), size.width(), size.height());
+            return img.getWidth() * (long) img.getHeight() + img.getRGB(0, 0);
         }
     }
 

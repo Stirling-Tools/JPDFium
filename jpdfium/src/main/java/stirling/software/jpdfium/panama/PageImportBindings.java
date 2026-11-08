@@ -26,6 +26,15 @@ public final class PageImportBindings {
     public static final MethodHandle FPDF_ImportPagesByIndex = downcall("FPDF_ImportPagesByIndex",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, JAVA_LONG, JAVA_INT));
 
+    /** Form-aware page import (EmbedPDF extension). */
+    public static final MethodHandle EPDFDoc_ImportPages = downcall("EPDFDoc_ImportPages",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, JAVA_LONG, JAVA_INT, ADDRESS));
+
+    /** Top-level form fields an import of these pages would bring (EmbedPDF extension). */
+    public static final MethodHandle EPDFDoc_GetImportFieldRoots = Symbols.downcallOptional(
+            "EPDFDoc_GetImportFieldRoots",
+            FunctionDescriptor.of(JAVA_LONG, ADDRESS, ADDRESS, JAVA_LONG, ADDRESS, JAVA_LONG));
+
     public static final MethodHandle FPDF_ImportNPagesToOne = downcall("FPDF_ImportNPagesToOne",
             FunctionDescriptor.of(ADDRESS, ADDRESS, JAVA_FLOAT, JAVA_FLOAT, JAVA_LONG, JAVA_LONG));
 

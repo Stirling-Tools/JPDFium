@@ -103,8 +103,11 @@ public final class PdfNamedPages {
             if (c <= 0) return Collections.emptyList();
 
             List<NamedPageEntry> result = new ArrayList<>(c);
-            for (int i = 0; i < c; i++) {
-                try (Arena arena = Arena.ofConfined()) {
+            // One confined arena for the whole walk: the native call consumes
+            // each buffer synchronously, so per-entry arena creation is pure
+            // overhead.
+            try (Arena arena = Arena.ofConfined()) {
+                for (int i = 0; i < c; i++) {
                     long req = (long) EmbedPdfNamedPageBindings.EPDFDoc_GetNamedPageAt.invokeExact(
                             rawDoc, tree.nativeVal, i, MemorySegment.NULL, 0L, MemorySegment.NULL, MemorySegment.NULL);
                     // req <= 2 means the native side returned only the null terminator (or
@@ -124,10 +127,10 @@ public final class PdfNamedPages {
                         int kindVal = kindSeg.get(ValueLayout.JAVA_INT, 0);
                         result.add(new NamedPageEntry(name, objNum, Kind.fromNative(kindVal)));
                     }
-                } catch (Throwable t) {
-                    NativeRuntime.rethrowFatal(t);
-                    throw new JPDFiumException("Failed to read named page entry at index " + i, t);
                 }
+            } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
+                throw new JPDFiumException("Failed to walk named page entries", t);
             }
             return result;
         });

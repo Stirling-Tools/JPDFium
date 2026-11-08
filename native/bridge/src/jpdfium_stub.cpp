@@ -422,6 +422,26 @@ int32_t jpdfium_doc_open(const char* path, int64_t* handle) {
     return JPDFIUM_OK;
 }
 
+int32_t jpdfium_layer_open(const char* base_path, const char* delta_path, int64_t* handle) {
+    (void)base_path;
+    (void)delta_path;
+    (void)handle;
+    return JPDFIUM_ERR_NATIVE;
+}
+
+int32_t jpdfium_layer_save_delta(int64_t doc, const char* path, int32_t* changed) {
+    (void)doc;
+    (void)path;
+    (void)changed;
+    return JPDFIUM_ERR_NATIVE;
+}
+
+int32_t jpdfium_layer_materialize(int64_t doc, const char* path) {
+    (void)doc;
+    (void)path;
+    return JPDFIUM_ERR_NATIVE;
+}
+
 int32_t jpdfium_doc_open_bytes(const uint8_t* data, int64_t len, int64_t* handle) {
     if (!data || !handle || len <= 0) return JPDFIUM_ERR_INVALID;
     if (!stub_is_pdf(data, len)) return JPDFIUM_ERR_INVALID;
@@ -768,6 +788,27 @@ int32_t jpdfium_render_page_form_into(void* page, void*, uint8_t* target, uint64
                                       int32_t width, int32_t height, int32_t stride,
                                       int32_t flags) {
     return jpdfium_render_page_into(page, target, target_capacity, width, height, stride, flags);
+}
+
+int32_t jpdfium_rgba_to_argb32(const uint8_t* src, uint32_t* dst, int32_t pixels) JPDFIUM_NOEXCEPT {
+    if (!src || !dst || pixels < 0) return JPDFIUM_ERR_INVALID;
+    for (int32_t i = 0; i < pixels; ++i) {
+        const std::size_t off = static_cast<std::size_t>(i) * 4;
+        dst[i] = (static_cast<uint32_t>(src[off + 3]) << 24) |
+                 (static_cast<uint32_t>(src[off]) << 16) |
+                 (static_cast<uint32_t>(src[off + 1]) << 8) | src[off + 2];
+    }
+    return JPDFIUM_OK;
+}
+
+int32_t jpdfium_rgba_to_rgb32(const uint8_t* src, uint32_t* dst, int32_t pixels) JPDFIUM_NOEXCEPT {
+    if (!src || !dst || pixels < 0) return JPDFIUM_ERR_INVALID;
+    for (int32_t i = 0; i < pixels; ++i) {
+        const std::size_t off = static_cast<std::size_t>(i) * 4;
+        dst[i] = (static_cast<uint32_t>(src[off]) << 16) |
+                 (static_cast<uint32_t>(src[off + 1]) << 8) | src[off + 2];
+    }
+    return JPDFIUM_OK;
 }
 
 int32_t jpdfium_render_page_progressive_start(void*, uint8_t* target, uint64_t target_capacity,

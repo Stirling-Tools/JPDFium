@@ -3,6 +3,7 @@ package stirling.software.jpdfium.doc;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.lang.invoke.MethodHandle;
 import java.nio.charset.StandardCharsets;
 
 import stirling.software.jpdfium.exception.JPDFiumException;
@@ -45,6 +46,22 @@ public final class PdfPageImporter {
      */
     public static boolean importPages(MemorySegment destinationDocSegment, MemorySegment sourceDocSegment,
                                        String pageRange, int insertAt) {
+        if (pageRange == null && PageImportBindings.EPDFDoc_ImportPages != null
+                && hasImportableFormFields(sourceDocSegment, null)) {
+            boolean ok = PdfiumRuntime.execute(() -> {
+                try {
+                    int success = (int) PageImportBindings.EPDFDoc_ImportPages.invokeExact(
+                            destinationDocSegment, sourceDocSegment, MemorySegment.NULL, 0L,
+                            insertAt, MemorySegment.NULL);
+                    return success != 0;
+                } catch (Throwable t) {
+                    NativeRuntime.rethrowFatal(t);
+                    return false;
+                }
+            });
+            if (ok) return true;
+            // Fall back to FPDF_ImportPages for documents the extension refuses.
+        }
         if (PageImportBindings.FPDF_ImportPages == null) return true;
         if (pageRange == null) {
             return PdfiumRuntime.execute(() -> {
@@ -75,6 +92,37 @@ public final class PdfPageImporter {
     }
 
     /**
+     * True when importing these source pages would bring form fields. The
+     * form-aware extension is only needed then: it copies a page once per
+     * page-tree reference, so a shared or cyclic page tree would otherwise
+     * inflate the destination, while the plain importer copies each page once.
+     */
+    private static boolean hasImportableFormFields(MemorySegment sourceDocSegment,
+                                                   int[] pageIndices) {
+        MethodHandle roots = PageImportBindings.EPDFDoc_GetImportFieldRoots;
+        if (roots == null) return false;
+        if (pageIndices != null && pageIndices.length == 0) return false;
+        return PdfiumRuntime.execute(() -> {
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment indices = MemorySegment.NULL;
+                long count = 0L;
+                if (pageIndices != null) {
+                    indices = arena.allocate(ValueLayout.JAVA_INT, pageIndices.length);
+                    MemorySegment.copy(pageIndices, 0, indices, ValueLayout.JAVA_INT,
+                            0, pageIndices.length);
+                    count = pageIndices.length;
+                }
+                long fields = (long) roots.invokeExact(sourceDocSegment, indices, count,
+                        MemorySegment.NULL, 0L);
+                return fields > 0;
+            } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
+                return false;
+            }
+        });
+    }
+
+    /**
      * Import specific pages by their 0-based indices.
      *
      * @param destinationDocSegment raw FPDF_DOCUMENT destination
@@ -86,12 +134,21 @@ public final class PdfPageImporter {
     public static boolean importPagesByIndex(MemorySegment destinationDocSegment, MemorySegment sourceDocSegment,
                                               int[] pageIndices, int insertAt) {
         if (PageImportBindings.FPDF_ImportPagesByIndex == null) return true;
+        boolean formAware = PageImportBindings.EPDFDoc_ImportPages != null
+                && hasImportableFormFields(sourceDocSegment, pageIndices);
         return PdfiumRuntime.execute(() -> {
             try (Arena arena = Arena.ofConfined()) {
                 MemorySegment indicesSegment = arena.allocate(
                         ValueLayout.JAVA_INT, pageIndices.length);
-                for (int i = 0; i < pageIndices.length; i++) {
-                    indicesSegment.setAtIndex(ValueLayout.JAVA_INT, i, pageIndices[i]);
+                // Bulk copy: the FFM copy is an intrinsic and lets the VM use
+                // its vectorized move path instead of a per-element setter loop.
+                MemorySegment.copy(pageIndices, 0, indicesSegment, ValueLayout.JAVA_INT,
+                        0, pageIndices.length);
+                if (formAware) {
+                    int ok = (int) PageImportBindings.EPDFDoc_ImportPages.invokeExact(
+                            destinationDocSegment, sourceDocSegment, indicesSegment,
+                            (long) pageIndices.length, insertAt, MemorySegment.NULL);
+                    if (ok != 0) return true;
                 }
                 int success = (int) PageImportBindings.FPDF_ImportPagesByIndex.invokeExact(
                         destinationDocSegment, sourceDocSegment, indicesSegment, (long) pageIndices.length, insertAt);

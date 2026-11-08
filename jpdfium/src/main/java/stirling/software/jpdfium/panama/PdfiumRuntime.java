@@ -171,7 +171,7 @@ public final class PdfiumRuntime {
         return LIVE_SESSIONS.get();
     }
 
-    static void documentOpened() {
+    public static void documentOpened() {
         LIVE_DOCUMENTS.incrementAndGet();
     }
 
