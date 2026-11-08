@@ -129,6 +129,18 @@ class PdfBookmarkEditorTest {
     }
 
     @Test
+    void memoryMergePreservesOutlineHierarchy() throws Exception {
+        assumeTrue(QpdfLib.isMergeSupported(), "QPDF memory merge unavailable");
+        try (PdfDocument a = PdfDocument.open(hierarchicalBookmarkedPdf("A", 2));
+             PdfDocument b = PdfDocument.open(hierarchicalBookmarkedPdf("B", 2));
+             PdfDocument merged = PdfMerge.merge(List.of(a, b),
+                     StorageOptions.builder().memory().build())) {
+            assertEquals(4, merged.pageCount());
+            assertHierarchy(merged.bookmarks());
+        }
+    }
+
+    @Test
     void bytesOverloadKeepsDocumentInfo() throws Exception {
         byte[] withBookmarks = PdfBookmarkEditor.setBookmarks(bookmarkedPdf("A", 3),
                 PdfBookmarkEditor.BookmarkTree.builder().add("Only", 1).build());

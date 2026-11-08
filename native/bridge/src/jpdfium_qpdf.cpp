@@ -327,26 +327,66 @@ using OutputPageMap = std::map<QPDF*, std::map<QPDFObjGen, int32_t>>;
 
 constexpr int kMaxOutlineDepth = 100;
 
-OutlineNode collectOutlineNode(QPDFOutlineObjectHelper item, QPDF* source, int depth) {
+QPDFObjectHandle outlineDestPage(QPDFObjectHandle const& item, QPDFOutlineDocumentHelper& helper) {
+    QPDFObjectHandle dest = item.getKey("/Dest");
+    if (dest.isNull()) {
+        QPDFObjectHandle action = item.getKey("/A");
+        if (action.isDictionary() && action.getKey("/S").isNameAndEquals("/GoTo")) {
+            dest = action.getKey("/D");
+        }
+    }
+    if (dest.isName() || dest.isString()) dest = helper.resolveNamedDest(dest);
+    if (dest.isArray() && dest.getArrayNItems() > 0 && dest.getArrayItem(0).isIndirect()) {
+        return dest.getArrayItem(0);
+    }
+    return QPDFObjectHandle::newNull();
+}
+
+OutlineNode collectOutlineNode(QPDFObjectHandle const& item, QPDF* source,
+                               QPDFOutlineDocumentHelper& helper, int depth,
+                               std::set<QPDFObjGen>& seen) {
     OutlineNode node;
     node.source = source;
-    node.title = item.getTitle();
-    QPDFObjectHandle destPage = item.getDestPage();
-    if (!destPage.isNull() && destPage.isIndirect()) {
+    QPDFObjectHandle title = item.getKey("/Title");
+    if (title.isString()) node.title = title.getUTF8Value();
+    QPDFObjectHandle destPage = outlineDestPage(item, helper);
+    if (!destPage.isNull()) {
         node.page = destPage.getObjGen();
         node.hasPage = true;
     }
-    QPDFObjectHandle count = item.getObjectHandle().getKey("/Count");
+    QPDFObjectHandle count = item.getKey("/Count");
     if (count.isInteger()) {
         node.hasCount = true;
         node.count = static_cast<int>(count.getIntValue());
     }
-    if (depth < kMaxOutlineDepth) {
-        for (auto& child : item.getKids()) {
-            node.children.push_back(collectOutlineNode(child, source, depth + 1));
-        }
+    if (depth >= kMaxOutlineDepth) return node;
+
+    QPDFObjectHandle child = item.getKey("/First");
+    while (!child.isNull() && child.isDictionary()) {
+        bool indirect = child.isIndirect();
+        if (indirect && !seen.insert(child.getObjGen()).second) break;
+        node.children.push_back(collectOutlineNode(child, source, helper, depth + 1, seen));
+        child = child.getKey("/Next");
     }
     return node;
+}
+
+int rebuildOutlineCounts(OutlineNode& node) {
+    int visibleDescendants = 0;
+    for (auto& child : node.children) {
+        int childVisible = rebuildOutlineCounts(child);
+        bool childOpen = !child.hasCount || child.count >= 0;
+        if (childOpen)
+            visibleDescendants += 1 + childVisible;
+        else
+            visibleDescendants += 1;
+    }
+    if (!node.children.empty()) {
+        bool open = !node.hasCount || node.count >= 0;
+        node.hasCount = true;
+        node.count = open ? visibleDescendants : -visibleDescendants;
+    }
+    return visibleDescendants;
 }
 
 // Best-effort: a malformed outline tree must not fail the structural merge, which is useful even
@@ -360,8 +400,16 @@ std::vector<OutlineNode> collectOutlines(std::vector<PageSelection> const& selec
         try {
             QPDFOutlineDocumentHelper& helper = QPDFOutlineDocumentHelper::get(*source);
             if (!helper.hasOutlines()) continue;
-            for (auto& item : helper.getTopLevelOutlines()) {
-                outlines.push_back(collectOutlineNode(item, source, 0));
+            QPDFObjectHandle root = source->getRoot().getKey("/Outlines");
+            QPDFObjectHandle item = root.getKey("/First");
+            std::set<QPDFObjGen> seen;
+            while (!item.isNull() && item.isDictionary()) {
+                bool indirect = item.isIndirect();
+                if (indirect && !seen.insert(item.getObjGen()).second) break;
+                OutlineNode node = collectOutlineNode(item, source, helper, 0, seen);
+                rebuildOutlineCounts(node);
+                outlines.push_back(std::move(node));
+                item = item.getKey("/Next");
             }
         } catch (std::exception const& e) {
             std::fprintf(stderr, "jpdfium qpdf: outlines from merge source dropped: %s\n",
@@ -388,7 +436,7 @@ QPDFObjectHandle buildOutlineList(QPDF& doc, std::vector<OutlineNode> const& nod
     for (size_t i = 0; i < nodes.size(); ++i) {
         OutlineNode const& node = nodes[i];
         QPDFObjectHandle item = items[i];
-        item.replaceKey("/Title", QPDFObjectHandle::newString(node.title));
+        item.replaceKey("/Title", QPDFObjectHandle::newUnicodeString(node.title));
         if (node.hasPage) {
             auto pagesBySource = outputPages.find(node.source);
             if (pagesBySource != outputPages.end()) {
@@ -427,8 +475,12 @@ void installOutlines(QPDF& doc, std::vector<OutlineNode> const& outlines,
     QPDFObjectHandle first = buildOutlineList(doc, outlines, outlineRoot, outputPages, last);
     outlineRoot.replaceKey("/First", first);
     outlineRoot.replaceKey("/Last", last);
-    outlineRoot.replaceKey("/Count",
-                           QPDFObjectHandle::newInteger(static_cast<long long>(outlines.size())));
+    long long visible = 0;
+    for (auto const& node : outlines) {
+        visible += 1;
+        if (node.hasCount && node.count >= 0) visible += node.count;
+    }
+    outlineRoot.replaceKey("/Count", QPDFObjectHandle::newInteger(visible));
     doc.getRoot().replaceKey("/Outlines", outlineRoot);
 }
 
@@ -553,10 +605,12 @@ void assemblePages(QPDF& primary, std::vector<PageSelection> const& selections,
             }
             primary.addPage(page.getObjectHandle(), false);
             QPDFObjectHandle added = primary.getAllPages().back();
-            // First occurrence wins: an outline that points at a repeated page navigates to the
-            // copy that appears first in the output.
-            outputPages[&source].emplace(sourcePages[static_cast<size_t>(index)].getObjGen(),
-                                         static_cast<int32_t>(outputIndex));
+            if (preserveOutlines) {
+                // First occurrence wins: an outline that points at a repeated page navigates to
+                // the copy that appears first in the output.
+                outputPages[&source].emplace(sourcePages[static_cast<size_t>(index)].getObjGen(),
+                                             static_cast<int32_t>(outputIndex));
+            }
             // A repeated page would otherwise share its widgets with the first copy.
             if (repeat || (!fromPrimary && sourceForms.hasAcroForm())) {
                 try {
