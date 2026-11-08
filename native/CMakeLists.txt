@@ -580,7 +580,7 @@ if(JPDFIUM_USE_PDFIUM)
                 -DAPPLE=${APPLE}
                 -DMSVC=${MSVC}
                 "-DKEEP_REGEX=^_?(jpeg_|tj)"
-                "-DDROP_REGEX=^_?jpeg_(natural_order|simd_)"
+                "-DDROP_REGEX=^_?jpeg_(simd_|idct_|fdct_)"
                 -P ${CMAKE_SOURCE_DIR}/cmake/localize-static-archive.cmake
             DEPENDS "${_jpdfium_jpeg_archive}" "${CMAKE_SOURCE_DIR}/cmake/localize-static-archive.cmake"
             COMMENT "Localizing libjpeg internals from ${_jpdfium_jpeg_archive}"
