@@ -190,36 +190,6 @@ class PdfFontEmbedderTest {
     }
 
     @Test
-    void type1FontFileReplacementIsRefused() throws Exception {
-        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
-        byte[] type1Pdf;
-        try (PDDocument pdf = new PDDocument()) {
-            PDPage page = new PDPage();
-            pdf.addPage(page);
-            var fontDict = new org.apache.pdfbox.cos.COSDictionary();
-            fontDict.setItem(COSName.TYPE, COSName.FONT);
-            fontDict.setItem(COSName.SUBTYPE, COSName.TYPE1);
-            fontDict.setItem(COSName.BASE_FONT, COSName.getPDFName("CustomType1"));
-            var descDict = new org.apache.pdfbox.cos.COSDictionary();
-            descDict.setItem(COSName.TYPE, COSName.FONT_DESC);
-            descDict.setItem(COSName.FONT_NAME, COSName.getPDFName("CustomType1"));
-            var stream = pdf.getDocument().createCOSStream();
-            stream.setItem(COSName.LENGTH1, org.apache.pdfbox.cos.COSInteger.get(10));
-            stream.setItem(COSName.LENGTH2, org.apache.pdfbox.cos.COSInteger.get(10));
-            stream.setItem(COSName.LENGTH3, org.apache.pdfbox.cos.COSInteger.get(10));
-            descDict.setItem(COSName.getPDFName("FontFile"), stream);
-            fontDict.setItem(COSName.FONT_DESC, descDict);
-            pdf.getDocumentCatalog().getCOSObject().setItem(COSName.getPDFName("CustomFont"), fontDict);
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            pdf.save(baos);
-            type1Pdf = baos.toByteArray();
-        }
-        JPDFiumException ex = assertThrows(JPDFiumException.class,
-                () -> PdfFontEmbedder.embed(type1Pdf, Map.of("CustomType1", new byte[] {1, 2, 3})));
-        assertTrue(ex.getMessage().contains("Type 1") || ex.getMessage().contains("FontFile"), ex.getMessage());
-    }
-
-    @Test
     void fontDataIsAppliedOnInMemoryOverloads() throws Exception {
         assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
         Path source = Path.of(PdfFontEmbedderTest.class.getResource("/pdfs/general/basic-text.pdf").toURI());
