@@ -31,8 +31,20 @@ static void rgb_to_cmyk(float r, float g, float b, int* out) {
     // Invert cmyk_to_rgb exactly. Removing black without rescaling the
     // chromatic channels made the BToA table disagree with AToB and shifted
     // light colours; this GCR keeps the two tables consistent.
+    // Lab-to-sRGB rounding can leave a few units of chroma on pure black.
+    // Snap near-neutral dark inputs to single-channel K so a K-only source
+    // round-trips without becoming four-colour black.
+    if (c >= 250 && m >= 250 && y >= 250) {
+        out[0] = out[1] = out[2] = 0;
+        out[3] = 255;
+        return;
+    }
     int k = c < m ? (c < y ? c : y) : (m < y ? m : y);
-    if (k > 254) k = 254;
+    if (k >= 255) {
+        out[0] = out[1] = out[2] = 0;
+        out[3] = 255;
+        return;
+    }
     float inv = 255.0f - (float)k;
     out[0] = (int)lrintf(((float)c - (float)k) * 255.0f / inv);
     out[1] = (int)lrintf(((float)m - (float)k) * 255.0f / inv);
