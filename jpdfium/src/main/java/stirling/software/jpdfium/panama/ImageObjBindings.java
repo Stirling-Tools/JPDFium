@@ -73,4 +73,8 @@ public final class ImageObjBindings {
     /** Get a filter name by index. Returns chars written. */
     public static final MethodHandle FPDFImageObj_GetImageFilter = downcall("FPDFImageObj_GetImageFilter",
             FunctionDescriptor.of(JAVA_LONG, ADDRESS, JAVA_INT, ADDRESS, JAVA_LONG));
+
+    /** Whether the image carries transparency (SMask/alpha). */
+    public static final MethodHandle FPDFImageObj_HasTransparency = downcall("FPDFImageObj_HasTransparency",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS));
 }

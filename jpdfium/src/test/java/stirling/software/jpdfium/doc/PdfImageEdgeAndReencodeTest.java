@@ -51,6 +51,32 @@ class PdfImageEdgeAndReencodeTest {
         }
     }
 
+    private static byte[] softMaskedJpegPdf() throws Exception {
+        try (PDDocument doc = new PDDocument()) {
+            BufferedImage image = noisyImage(800, 1200);
+            PDImageXObject img = JPEGFactory.createFromImage(doc, image, 0.9f);
+            BufferedImage alpha = new BufferedImage(400, 600, BufferedImage.TYPE_BYTE_GRAY);
+            java.awt.Graphics2D g = alpha.createGraphics();
+            g.setColor(Color.BLACK);
+            g.fillRect(0, 0, 400, 600);
+            g.setColor(Color.WHITE);
+            g.fillRect(200, 0, 200, 600);
+            g.dispose();
+            PDImageXObject mask = LosslessFactory.createFromImage(doc, alpha);
+            img.getCOSObject().setItem(COSName.SMASK, mask.getCOSObject());
+            addImagePage(doc, img, 800, 1200);
+            return save(doc);
+        }
+    }
+
+    private static void assertBilevelPolarity(BufferedImage rendered, String codec) {
+        int black = rendered.getRGB(400, 24) & 0x00FFFFFF;
+        int white = rendered.getRGB(400, 100) & 0x00FFFFFF;
+        assertTrue((black & 0xFF) < 64 && (white & 0xFF) > 192,
+                codec + " polarity changed: bar=" + Integer.toHexString(black)
+                        + " gap=" + Integer.toHexString(white));
+    }
+
     private static byte[] bitonalBarsPdf() throws Exception {
         try (PDDocument doc = new PDDocument()) {
             BufferedImage image = new BufferedImage(2480, 3508, BufferedImage.TYPE_BYTE_BINARY);
@@ -93,6 +119,24 @@ class PdfImageEdgeAndReencodeTest {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         doc.save(out);
         return out.toByteArray();
+    }
+
+    @Test
+    void softMaskedImagesAreNotReencoded() throws Exception {
+        byte[] input = softMaskedJpegPdf();
+        try (PdfDocument doc = PdfDocument.open(input)) {
+            assertEquals(0, PdfImageOptimizer.optimize(doc, -1, 60, 800, true),
+                    "soft-masked images must keep their transparency mask");
+        }
+    }
+
+    @Test
+    void dpiOnlyOverloadLeavesABelowThresholdJpegUntouched() throws Exception {
+        byte[] input = noisyJpegPdf(800, 1200, 0.9f);
+        try (PdfDocument doc = PdfDocument.open(input)) {
+            assertEquals(0, PdfImageOptimizer.optimize(doc, 300),
+                    "the DPI-only overload must not quality-reencode a below-threshold JPEG");
+        }
     }
 
     @Test
@@ -247,16 +291,7 @@ class PdfImageEdgeAndReencodeTest {
             try (PdfDocument reopened = PdfDocument.open(out.bytes());
                  var page = reopened.page(0)) {
                 BufferedImage rendered = page.renderImage(72);
-                boolean hasInk = false;
-                for (int y = 0; y < rendered.getHeight() && !hasInk; y += 8) {
-                    for (int x = 0; x < rendered.getWidth(); x += 8) {
-                        if ((rendered.getRGB(x, y) & 0x00FFFFFF) != 0x00FFFFFF) {
-                            hasInk = true;
-                            break;
-                        }
-                    }
-                }
-                assertTrue(hasInk, "CCITT G4 page must render pixels");
+                assertBilevelPolarity(rendered, "CCITT G4");
             }
         }
     }
@@ -279,16 +314,7 @@ class PdfImageEdgeAndReencodeTest {
             try (PdfDocument reopened = PdfDocument.open(out.bytes());
                  var page = reopened.page(0)) {
                 BufferedImage rendered = page.renderImage(72);
-                boolean hasInk = false;
-                for (int y = 0; y < rendered.getHeight() && !hasInk; y += 8) {
-                    for (int x = 0; x < rendered.getWidth(); x += 8) {
-                        if ((rendered.getRGB(x, y) & 0x00FFFFFF) != 0x00FFFFFF) {
-                            hasInk = true;
-                            break;
-                        }
-                    }
-                }
-                assertTrue(hasInk, "JBIG2 page must render pixels");
+                assertBilevelPolarity(rendered, "JBIG2");
             }
         }
     }

@@ -284,6 +284,7 @@ public final class PdfImageOptimizer {
         // 1-bit scans go blurry, and CMYK/ICC/Indexed/Separation/Lab would lose
         // their colour space. Only 8-bit DeviceGray/DeviceRGB are re-embedded.
         if (!roundTrippable(meta)) return false;
+        if (hasTransparency(imgObj)) return false;
 
         ImageSource src = readSource(rawDoc, rawPage, imgObj, meta);
         if (src == null || src.width() <= 0 || src.height() <= 0) return false;
@@ -298,7 +299,30 @@ public final class PdfImageOptimizer {
             }
             // Fall through to the bitmap path only when the pixels actually shrank.
         }
-        return resize && embedBitmap(imgObj, result);
+        return resize && bitmapLikelySmaller(result, rawLength) && embedBitmap(imgObj, result);
+    }
+
+    // The bitmap fallback writes uncompressed/Flate pixels. Estimate its encoded
+    // size before replacing the stream so a failed JPEG encode cannot inflate the PDF.
+    private static boolean bitmapLikelySmaller(BufferedImage image, long rawLength) {
+        if (rawLength <= 0) return false;
+        byte[] pixels = image.getType() == BufferedImage.TYPE_BYTE_GRAY
+                ? grayBytes(image) : rgbBytes(image);
+        if (pixels == null || pixels.length == 0) return false;
+        java.util.zip.Deflater deflater = new java.util.zip.Deflater(6);
+        try {
+            deflater.setInput(pixels);
+            deflater.finish();
+            byte[] buffer = new byte[8192];
+            long total = 0;
+            while (!deflater.finished()) {
+                total += deflater.deflate(buffer);
+                if (total >= rawLength) return false;
+            }
+            return total < rawLength;
+        } finally {
+            deflater.end();
+        }
     }
 
     // A resize is adopted whenever the JPEG is smaller than the original stream: the
@@ -355,6 +379,17 @@ public final class PdfImageOptimizer {
             case CS_DEVICE_RGB -> m.bpp() == 24;
             default -> false;
         };
+    }
+
+    // FPDFImageObj_HasTransparency covers SMask/alpha. Re-encoding such an image
+    // as an opaque JPEG would make formerly transparent pixels visible.
+    private static boolean hasTransparency(MemorySegment imgObj) {
+        try {
+            return (int) ImageObjBindings.FPDFImageObj_HasTransparency.invokeExact(imgObj) == 1;
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            return true;
+        }
     }
 
     // Native-resolution pixels, in preference order: PDFium's own bitmap, the
@@ -878,8 +913,8 @@ public final class PdfImageOptimizer {
 
     private static byte[] encodeJpeg(BufferedImage img, int quality, boolean progressive) {
         int q = Math.min(100, Math.max(1, quality));
-        // Rust encoder emits optimized Huffman tables: 5-10% smaller than the
-        // fixed tables ImageIO writes, with identical DCT coefficients.
+        // The Rust encoder uses optimized Huffman tables, trellis quantization and
+        // deringing; its coefficients can differ from ImageIO at the same quality.
         boolean gray = img.getType() == BufferedImage.TYPE_BYTE_GRAY;
         byte[] pixels = gray ? grayBytes(img) : rgbBytes(img);
         byte[] best = null;
@@ -901,6 +936,7 @@ public final class PdfImageOptimizer {
             }
         }
         if (best != null) return best;
+        if (progressive) return null;
         try {
             return ImageCodecs.encode(img, ImageFormat.JPEG, q);
         } catch (IOException | RuntimeException e) {

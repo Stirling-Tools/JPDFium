@@ -5,6 +5,7 @@ import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.MemorySegment;
 import java.lang.invoke.MethodHandle;
 
+
 import static java.lang.foreign.ValueLayout.ADDRESS;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 import static java.lang.foreign.ValueLayout.JAVA_INT;
@@ -261,6 +262,7 @@ public final class RustBridgeBindings {
             }
             return extractAndFree(outPtr, outLen);
         } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
             return null;
         }
     }
@@ -328,10 +330,12 @@ public final class RustBridgeBindings {
         if (ptr.equals(MemorySegment.NULL) || len <= 0) {
             return null;
         }
-        byte[] result = ptr.reinterpret(len).toArray(JAVA_BYTE);
-        if (RUST_FREE != null) {
-            RUST_FREE.invokeExact(ptr);
+        try {
+            return ptr.reinterpret(len).toArray(JAVA_BYTE);
+        } finally {
+            if (RUST_FREE != null) {
+                RUST_FREE.invokeExact(ptr);
+            }
         }
-        return result;
     }
 }

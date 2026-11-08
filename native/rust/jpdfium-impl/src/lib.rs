@@ -585,9 +585,8 @@ unsafe fn encode_cmyk_jpeg(
 /// Encode interleaved 8-bit gray (1 byte/px) or RGB (3 bytes/px) pixels as a
 /// baseline JPEG with optimized Huffman tables. RGB uses 4:2:0 chroma.
 ///
-/// Optimized tables remove JPEG's fixed-table overhead (typically 5-10% of the
-/// stream) without touching the DCT coefficients, so this is a lossless size
-/// win over the ImageIO encoder for identical quality settings.
+/// The encoder uses optimized Huffman tables, trellis quantization and
+/// deringing; its output can differ from ImageIO at the same quality setting.
 ///
 /// # Safety
 /// `pixels` must point to `pixels_len` readable bytes; the out pointers must be valid.
@@ -612,6 +611,7 @@ pub unsafe extern "C" fn jpdfium_rust_encode_jpeg(
 /// # Safety
 /// `pixels` must point to `pixels_len` readable bytes; the out pointers must be valid.
 #[no_mangle]
+#[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn jpdfium_rust_encode_jpeg_ex(
     pixels: *const u8,
     pixels_len: i64,
@@ -643,6 +643,7 @@ pub unsafe extern "C" fn jpdfium_rust_encode_jpeg_ex(
 ///
 /// # Safety
 /// `pixels` must point to `pixels_len` readable bytes; the out pointers must be valid.
+#[allow(clippy::too_many_arguments)]
 unsafe fn encode_jpeg(
     pixels: *const u8,
     pixels_len: i64,
@@ -851,6 +852,7 @@ pub unsafe extern "C" fn jpdfium_rust_free(ptr: *mut u8) {
 /// # Safety
 /// `pixels` must point to `pixels_len` readable bytes; the out pointers must be valid.
 #[no_mangle]
+#[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn jpdfium_rust_encode_ccitt_g4(
     pixels: *const u8,
     pixels_len: i64,
@@ -889,10 +891,11 @@ unsafe fn encode_ccitt_g4(
         || height <= 0
         || width > 64 * 1024
         || height > 64 * 1024
+        || (width as i64) * (height as i64) > 64 * 1024 * 1024
     {
         return JPDFIUM_ERR_INVALID;
     }
-    let row_bytes = (width as usize + 7) / 8;
+    let row_bytes = (width as usize).div_ceil(8);
     let needed = row_bytes * height as usize;
     if pixels_len < 0 || needed > pixels_len as usize {
         return JPDFIUM_ERR_INVALID;
@@ -934,6 +937,7 @@ unsafe fn encode_ccitt_g4(
 /// # Safety
 /// `pixels` must point to `pixels_len` readable bytes; all out pointers must be valid.
 #[no_mangle]
+#[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn jpdfium_rust_encode_jbig2(
     pixels: *const u8,
     pixels_len: i64,
@@ -963,6 +967,7 @@ pub unsafe extern "C" fn jpdfium_rust_encode_jbig2(
 ///
 /// # Safety
 /// `pixels` must point to `pixels_len` readable bytes; all out pointers must be valid.
+#[allow(clippy::too_many_arguments)]
 unsafe fn encode_jbig2(
     pixels: *const u8,
     pixels_len: i64,
@@ -979,10 +984,11 @@ unsafe fn encode_jbig2(
         || height <= 0
         || width > 64 * 1024
         || height > 64 * 1024
+        || (width as i64) * (height as i64) > 64 * 1024 * 1024
     {
         return JPDFIUM_ERR_INVALID;
     }
-    let row_bytes = (width as usize + 7) / 8;
+    let row_bytes = (width as usize).div_ceil(8);
     let needed = row_bytes * height as usize;
     if pixels_len < 0 || needed > pixels_len as usize {
         return JPDFIUM_ERR_INVALID;
