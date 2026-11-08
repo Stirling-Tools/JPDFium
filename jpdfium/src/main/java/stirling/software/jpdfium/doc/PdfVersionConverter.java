@@ -4,15 +4,18 @@ import stirling.software.jpdfium.model.PdfVersion;
 import stirling.software.jpdfium.panama.DocBindings;
 import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.OutputTransaction;
+import stirling.software.jpdfium.panama.QpdfLib;
 
 import java.io.BufferedOutputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.io.RandomAccessFile;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
 
 import static java.lang.foreign.ValueLayout.JAVA_INT;
 import stirling.software.jpdfium.exception.JPDFiumException;
@@ -60,6 +63,7 @@ public final class PdfVersionConverter {
                         Files.newOutputStream(tx.staging()))) {
             saveWithVersionToStream(rawDoc, version, out);
             out.flush();
+            forcePdf2Header(tx.staging(), version);
             tx.publish(null);
         } catch (IOException e) {
             throw new JPDFiumException("Failed to write PDF to " + path, e);
@@ -80,7 +84,54 @@ public final class PdfVersionConverter {
         } catch (IOException e) {
             throw new JPDFiumException("FPDF_SaveWithVersion failed", e);
         }
-        return baos.toByteArray();
+        byte[] bytes = baos.toByteArray();
+        if (version == PdfVersion.V2_0 && bytes.length >= 8) {
+            System.arraycopy(PDF2_HEADER, 0, bytes, 0, PDF2_HEADER.length);
+        }
+        return bytes;
+    }
+
+    private static final byte[] PDF2_HEADER = "%PDF-2.0".getBytes(StandardCharsets.US_ASCII);
+
+    /**
+     * PDFium's {@code FPDF_SaveWithVersion} rejects version codes above 17
+     * (PDF 1.7) and keeps the source document's version, so a requested PDF 2.0
+     * needs the header marker rewritten. PDF 2.0 is backwards compatible with
+     * the existing object graph.
+     */
+    private static void forcePdf2Header(Path path, PdfVersion version) {
+        if (version != PdfVersion.V2_0) return;
+        try (RandomAccessFile file = new RandomAccessFile(path.toFile(), "rw")) {
+            file.seek(0);
+            file.write(PDF2_HEADER);
+        } catch (IOException e) {
+            throw new JPDFiumException("Failed to set the PDF 2.0 header on " + path, e);
+        }
+    }
+
+    /**
+     * Rewrite a file with an exact PDF version and no catalog /Version override.
+     * Uses qpdf's forcePDFVersion so object-stream and catalog-version rules are
+     * handled by the writer rather than a header-only edit.
+     */
+    public static boolean forceVersion(Path input, Path output, PdfVersion version) {
+        if (version == null) return false;
+        return QpdfLib.forceVersionToFile(input, output, version.toString());
+    }
+
+    /**
+     * Rewrite PDF bytes with an exact PDF version and no catalog /Version override.
+     */
+    public static byte[] forceVersion(byte[] input, PdfVersion version) {
+        if (input == null || version == null) return null;
+        if (!QpdfLib.isForceVersionSupported()) {
+            throw new JPDFiumException("forceVersion requires native QPDF version rewrite support");
+        }
+        byte[] out = QpdfLib.forceVersionToBytes(input, version.toString());
+        if (out == null) {
+            throw new JPDFiumException("forceVersion failed to rewrite PDF bytes to version " + version);
+        }
+        return out;
     }
 
     /**

@@ -16,6 +16,8 @@ import java.util.Set;
 // supplementary pairs fold by code point.
 final class FastKeywordIndex {
 
+    private static final char LINE_END_HYPHEN = '\uFFFE';
+
     private static final class TrieNode {
         final char ch;
         // Every original keyword folding to this node. Multiple inputs can
@@ -232,6 +234,10 @@ final class FastKeywordIndex {
         if (text == null || len == 0 || keywordCount == 0) {
             return;
         }
+        if (containsLineEndHyphen(text, len)) {
+            findMatches(new String(text, 0, len), wholeWord, out);
+            return;
+        }
         if (needsCollapse(text, len)) {
             findMatches(collapseWhitespace(new String(text, 0, len)), wholeWord, out);
             return;
@@ -255,7 +261,7 @@ final class FastKeywordIndex {
         if (text == null || text.isEmpty() || keywordCount == 0) {
             return;
         }
-        text = collapseWhitespace(text);
+        text = collapseWhitespace(withoutLineEndHyphens(text));
         if (!caseSensitive && needsConservativeFallback && containsSupplementary(text)) {
             out.addAll(allKeywords);
             return;
@@ -269,6 +275,18 @@ final class FastKeywordIndex {
             }
             scanCharSequence(normalized, wholeWord, out);
         }
+    }
+
+    private static boolean containsLineEndHyphen(char[] text, int len) {
+        for (int i = 0; i < len; i++) {
+            if (text[i] == LINE_END_HYPHEN) return true;
+        }
+        return false;
+    }
+
+    private static CharSequence withoutLineEndHyphens(CharSequence text) {
+        String s = text.toString();
+        return s.indexOf(LINE_END_HYPHEN) < 0 ? text : s.replace(String.valueOf(LINE_END_HYPHEN), "");
     }
 
     private void scanCharArray(char[] text, int len, boolean wholeWord, Set<String> out) {

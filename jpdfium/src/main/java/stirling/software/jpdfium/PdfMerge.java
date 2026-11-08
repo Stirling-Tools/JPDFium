@@ -1,10 +1,11 @@
 package stirling.software.jpdfium;
 
 import java.io.IOException;
+import java.io.OutputStream;
 import java.lang.foreign.MemorySegment;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -16,6 +17,7 @@ import stirling.software.jpdfium.doc.PdfPageImporter;
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.model.SaveOptions;
 import stirling.software.jpdfium.model.StorageOptions;
+import stirling.software.jpdfium.panama.OutputTransaction;
 import stirling.software.jpdfium.panama.QpdfLib;
 
 /**
@@ -327,24 +329,12 @@ public final class PdfMerge {
         if (paths.size() == 1) {
             // Use staging so the destination is replaced only on success and aliased
             // inputs (src == output) are handled safely, matching the multi-input path.
-            Path staged;
-            try {
-                staged = options.createStagingFile(output);
-            } catch (IOException _) {
-                staged = null;
-            }
-            if (staged != null) {
-                try {
-                    Files.copy(paths.getFirst(), staged, StandardCopyOption.REPLACE_EXISTING);
-                    Files.move(staged, output, StandardCopyOption.REPLACE_EXISTING);
-                    staged = null;
-                    return;
-                } finally {
-                    deleteQuietly(staged);
+            try (OutputTransaction tx = OutputTransaction.begin(output, options.durable())) {
+                try (OutputStream out = Files.newOutputStream(tx.staging(), StandardOpenOption.TRUNCATE_EXISTING)) {
+                    Files.copy(paths.getFirst(), out);
                 }
+                tx.publish(SaveOptions.ephemeral());
             }
-            // Staging unavailable, fall back to direct copy (best-effort).
-            Files.copy(paths.getFirst(), output, StandardCopyOption.REPLACE_EXISTING);
             return;
         }
 
@@ -358,15 +348,11 @@ public final class PdfMerge {
 
         // Save through a staging file so the destination is replaced only after the
         // merge and the save both succeed; a failed save must not truncate it.
-        Path staged = options.createStagingFile(output);
-        try {
+        try (OutputTransaction tx = OutputTransaction.begin(output, options.durable())) {
             try (PdfDocument merged = mergeFiles(paths, options)) {
-                merged.save(staged);
+                merged.saveTo(tx.staging(), SaveOptions.ephemeral());
             }
-            Files.move(staged, output, StandardCopyOption.REPLACE_EXISTING);
-            staged = null;
-        } finally {
-            deleteQuietly(staged);
+            tx.publish(SaveOptions.ephemeral());
         }
     }
 
@@ -378,19 +364,18 @@ public final class PdfMerge {
      */
     private static boolean stageNativeMerge(List<Path> paths, Path output, StorageOptions options)
             throws IOException {
-        Path staged;
+        OutputTransaction tx;
         try {
-            staged = options.createStagingFile(output);
+            tx = OutputTransaction.begin(output, options.durable());
         } catch (IOException _) {
             return false;
         }
-        try {
-            if (!QpdfLib.mergeFiles(paths, staged) || Files.size(staged) == 0) return false;
-            Files.move(staged, output, StandardCopyOption.REPLACE_EXISTING);
-            staged = null;
+        try (tx) {
+            if (!QpdfLib.mergeFiles(paths, tx.staging(), false) || Files.size(tx.staging()) == 0) {
+                return false;
+            }
+            tx.publish(SaveOptions.ephemeral());
             return true;
-        } finally {
-            deleteQuietly(staged);
         }
     }
 

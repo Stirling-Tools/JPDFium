@@ -56,6 +56,10 @@ import java.util.regex.Pattern;
  */
 public final class PdfRedactor {
 
+    // Native redaction skips unmatched pages itself, so for a few literal words the prefilter only
+    // adds a second text load per matching page; long lists still gain from per-page narrowing.
+    private static final int PREFILTER_MIN_WORDS = 8;
+
     private static final Pattern REGEX_METACHAR = Pattern.compile("([\\\\.*+?^${}()|\\[\\]])");
 
     private PdfRedactor() {}
@@ -148,7 +152,7 @@ public final class PdfRedactor {
 
         try (PageTextScratchBuffer scratch = new PageTextScratchBuffer()) {
             if (!options.words().isEmpty()) {
-                if (options.useRegex()) {
+                if (options.useRegex() || (!needPageTexts && options.words().size() < PREFILTER_MIN_WORDS)) {
                     for (int i = 0; i < totalPages; i++) {
                         pageRedactionWords.computeIfAbsent(i, k -> new HashSet<>()).addAll(options.words());
                     }
@@ -158,7 +162,7 @@ public final class PdfRedactor {
                         long tAcqStart = System.nanoTime();
                         int charCount;
                         try (PdfPage page = doc.page(i)) {
-                            charCount = scratch.extractChars(page.rawHandle());
+                            charCount = scratch.extractChars(page.rawHandleForRead());
                         }
                         pageTextAcqNs[i] = System.nanoTime() - tAcqStart;
                         pageCharCounts[i] = Math.max(0, charCount);

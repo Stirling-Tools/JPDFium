@@ -13,11 +13,13 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import stirling.software.jpdfium.exception.JPDFiumException;
+import stirling.software.jpdfium.model.SaveOptions;
 import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.QpdfLib;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -110,6 +112,37 @@ class PdfEncryptionCopyTest {
         assertArrayEquals(sourceBytes, Files.readAllBytes(source));
         assertArrayEquals(inputBytes, Files.readAllBytes(input));
         assertNoStagingFiles();
+    }
+
+    @Test
+    void ephemeralCopyKeepsProtectionAndSkipsDurablePublication() throws Exception {
+        assumeTrue(directory.getFileSystem().supportedFileAttributeViews().contains("posix"),
+                "permission mirroring is POSIX-only");
+        Path source = source();
+        Path input = processed();
+        var shared = PosixFilePermissions.fromString("rw-r--r--");
+        Path durable = Files.writeString(directory.resolve("durable.pdf"), "stale");
+        Path ephemeral = Files.writeString(directory.resolve("ephemeral.pdf"), "stale");
+        Files.setPosixFilePermissions(durable, shared);
+        Files.setPosixFilePermissions(ephemeral, shared);
+
+        PdfSecurity.copyEncryption(input, durable, source, OWNER, SaveOptions.fast());
+        PdfSecurity.copyEncryption(input, ephemeral, source, OWNER, SaveOptions.ephemeral());
+
+        try (var expected = Loader.loadPDF(durable.toFile(), USER);
+             var actual = Loader.loadPDF(ephemeral.toFile(), USER)) {
+            assertEquals(expected.getEncryption().getPermissions(), actual.getEncryption().getPermissions());
+            assertEquals(expected.getEncryption().getRevision(), actual.getEncryption().getRevision());
+            assertArrayEquals(expected.getEncryption().getOwnerKey(), actual.getEncryption().getOwnerKey());
+            assertArrayEquals(expected.getEncryption().getUserKey(), actual.getEncryption().getUserKey());
+            assertEquals(3, actual.getNumberOfPages());
+        }
+        assertThrows(InvalidPasswordException.class, () -> Loader.loadPDF(ephemeral.toFile()));
+        assertEquals(shared, Files.getPosixFilePermissions(durable));
+        assertEquals(PosixFilePermissions.fromString("rw-------"), Files.getPosixFilePermissions(ephemeral));
+        assertNoStagingFiles();
+        assertThrows(IllegalArgumentException.class,
+                () -> PdfSecurity.copyEncryption(input, ephemeral, source, OWNER, null));
     }
 
     @ParameterizedTest

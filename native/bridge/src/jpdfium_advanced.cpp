@@ -24,7 +24,7 @@
 #define PCRE2_CODE_UNIT_WIDTH 8
 #include <pcre2.h>
 
-struct Pcre2Pattern {
+struct Pcre2Pattern8 {
     pcre2_code* code;
     pcre2_match_data* match_data;
 };
@@ -50,7 +50,7 @@ int32_t jpdfium_pcre2_compile(const char* pattern, uint32_t flags, int64_t* hand
         // JIT compile for speed - failure is non-fatal (falls back to interpreter)
         pcre2_jit_compile(code, PCRE2_JIT_COMPLETE);
 
-        auto* pw = new Pcre2Pattern();
+        auto* pw = new Pcre2Pattern8();
         pw->code = code;
         pw->match_data = pcre2_match_data_create_from_pattern(code, nullptr);
 
@@ -66,7 +66,7 @@ int32_t jpdfium_pcre2_compile(const char* pattern, uint32_t flags, int64_t* hand
 int32_t jpdfium_pcre2_match_all(int64_t pattern_handle, const char* text, char** json_result) {
     try {
         if (!text || !json_result) return JPDFIUM_ERR_INVALID;
-        auto* pw = reinterpret_cast<Pcre2Pattern*>(pattern_handle);
+        auto* pw = reinterpret_cast<Pcre2Pattern8*>(pattern_handle);
         if (!pw || !Pcre2HandleRegistry::instance().contains(pw)) return JPDFIUM_ERR_INVALID;
         if (!pw->code) return JPDFIUM_ERR_INVALID;
 
@@ -132,7 +132,7 @@ int32_t jpdfium_pcre2_match_all(int64_t pattern_handle, const char* text, char**
 void jpdfium_pcre2_free(int64_t pattern_handle) noexcept {
     // Membership is checked before any dereference, so a fabricated handle is
     // rejected rather than read. See HandleRegistry for the lifetime contract.
-    auto* pw = reinterpret_cast<Pcre2Pattern*>(pattern_handle);
+    auto* pw = reinterpret_cast<Pcre2Pattern8*>(pattern_handle);
     if (!pw || !Pcre2HandleRegistry::instance().contains(pw)) return;
     Pcre2HandleRegistry::instance().remove(pw);
     if (pw->match_data) pcre2_match_data_free(pw->match_data);

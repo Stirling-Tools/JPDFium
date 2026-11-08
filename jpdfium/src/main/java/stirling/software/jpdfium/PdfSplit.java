@@ -4,9 +4,10 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
@@ -19,6 +20,7 @@ import stirling.software.jpdfium.doc.PdfPageImporter;
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.model.SaveOptions;
 import stirling.software.jpdfium.model.StorageOptions;
+import stirling.software.jpdfium.panama.OutputTransaction;
 import stirling.software.jpdfium.panama.QpdfLib;
 
 /**
@@ -52,9 +54,12 @@ public final class PdfSplit {
         public final AtomicLong sourceSerializations = new AtomicLong();
         public final AtomicLong sourceLoads = new AtomicLong();
         public final AtomicLong outputWrites = new AtomicLong();
+        /** Live-document snapshots taken by {@code extractPageRange} and {@code extractPages}. */
+        public final AtomicLong extractSerializations = new AtomicLong();
 
         void reset() {
             sourceSerializations.set(0);
+            extractSerializations.set(0);
             sourceLoads.set(0);
             outputWrites.set(0);
         }
@@ -111,16 +116,13 @@ public final class PdfSplit {
             // bytes from the original until writing finishes.
             // https://qpdf.readthedocs.io/en/stable/design.html
             int epoch = doc.structureEpoch();
-            Path src = doc.sourcePath();
             // Snapshot first, in its own try: only a snapshot-step failure
             // falls through to the per-range path below. Extraction-loop
             // failures are RuntimeExceptions and propagate after cleanup.
-            Path reusable = null;
+            Path reusable = reusableSource(doc, options);
             boolean ownsReusable = false;
             try {
-                if (src != null && options.reuseSourceFile() && Files.isReadable(src)) {
-                    reusable = src;
-                } else {
+                if (reusable == null) {
                     reusable = options.createTempFile("jpdfium-split-src", ".pdf");
                     ownsReusable = true;
                     doc.saveTo(reusable, SaveOptions.ephemeral());
@@ -246,10 +248,16 @@ public final class PdfSplit {
             Path materialized = null;
             try {
                 // The source file behind an open document may be stale after
-                // in-memory edits; serialize the live document first.
-                materialized = options.createTempFile("jpdfium-split-src", ".pdf");
-                doc.saveTo(materialized, SaveOptions.ephemeral());
-                FileExtract extracted = extractToTemp(materialized, pageIndices, remappedBookmarks, options);
+                // in-memory edits, so it is only read directly when the caller
+                // vouches for it; otherwise serialize the live document first.
+                Path extractFrom = reusableSource(doc, options);
+                if (extractFrom == null) {
+                    materialized = options.createTempFile("jpdfium-split-src", ".pdf");
+                    doc.saveTo(materialized, SaveOptions.ephemeral());
+                    COUNTERS.extractSerializations.incrementAndGet();
+                    extractFrom = materialized;
+                }
+                FileExtract extracted = extractToTemp(extractFrom, pageIndices, remappedBookmarks, options);
                 if (extracted.part() != null) return extracted.part();
                 rejected = extracted.rejected();
             } catch (Exception _) {
@@ -334,10 +342,16 @@ public final class PdfSplit {
             Path materialized = null;
             try {
                 // The source file behind an open document may be stale after
-                // in-memory edits; serialize the live document first.
-                materialized = options.createTempFile("jpdfium-split-src", ".pdf");
-                doc.saveTo(materialized, SaveOptions.ephemeral());
-                FileExtract extracted = extractToTemp(materialized, pageIndices, remappedBookmarks, options);
+                // in-memory edits, so it is only read directly when the caller
+                // vouches for it; otherwise serialize the live document first.
+                Path extractFrom = reusableSource(doc, options);
+                if (extractFrom == null) {
+                    materialized = options.createTempFile("jpdfium-split-src", ".pdf");
+                    doc.saveTo(materialized, SaveOptions.ephemeral());
+                    COUNTERS.extractSerializations.incrementAndGet();
+                    extractFrom = materialized;
+                }
+                FileExtract extracted = extractToTemp(extractFrom, pageIndices, remappedBookmarks, options);
                 if (extracted.part() != null) return extracted.part();
                 rejected = extracted.rejected();
             } catch (Exception _) {
@@ -444,25 +458,76 @@ public final class PdfSplit {
             // Save to a staging file first, then atomically replace the output.
             // A direct save to output would corrupt the file when output aliases input
             // (the document is still open), and a failed save would leave a partial file.
-            Path staged;
-            try {
-                staged = options.createStagingFile(output);
-            } catch (IOException _) {
-                staged = null;
+            try (OutputTransaction tx = OutputTransaction.begin(output, options.durable())) {
+                part.saveTo(tx.staging(), SaveOptions.ephemeral());
+                tx.publish(SaveOptions.ephemeral());
             }
-            if (staged != null) {
-                try {
-                    part.save(staged);
-                    Files.move(staged, output, StandardCopyOption.REPLACE_EXISTING);
-                    staged = null;
-                } finally {
-                    if (staged != null) {
-                        try { Files.deleteIfExists(staged); } catch (IOException _) {}
-                    }
-                }
-            } else {
-                part.save(output);
+        }
+    }
+
+    public static void extractPageRangesToFiles(Path input, List<int[]> ranges, List<Path> outputs,
+                                                StorageOptions options) throws IOException {
+        if (input == null) throw new IllegalArgumentException("input must not be null");
+        if (ranges == null || outputs == null || ranges.size() != outputs.size()) {
+            throw new IllegalArgumentException("ranges and outputs must be the same length");
+        }
+        if (ranges.isEmpty()) return;
+        int totalPages;
+        try (PdfDocument probe = PdfDocument.open(input)) {
+            totalPages = probe.pageCount();
+        }
+        int[] firstPages = new int[ranges.size()];
+        int[] lastPages = new int[ranges.size()];
+        for (int i = 0; i < ranges.size(); i++) {
+            int[] range = ranges.get(i);
+            if (range == null || range.length != 2 || range[0] < 0 || range[1] < range[0]
+                    || range[1] >= totalPages) {
+                throw new IllegalArgumentException("Invalid range %s for document with %d pages"
+                        .formatted(range == null ? "null" : Arrays.toString(range), totalPages));
             }
+            if (outputs.get(i) == null) throw new IllegalArgumentException("output must not be null");
+            firstPages[i] = range[0];
+            lastPages[i] = range[1];
+        }
+        rejectSharedOutputs(input, outputs);
+        int written = 0;
+        if (options.mode() != StorageOptions.Mode.MEMORY && QpdfLib.isExtractRangesFilesSupported()) {
+            written = Math.max(0, QpdfLib.extractRangesToFiles(
+                    input, firstPages, lastPages, outputs, options.durable()));
+        }
+        for (int i = written; i < ranges.size(); i++) {
+            extractPageRangeToFile(input, firstPages[i], lastPages[i], outputs.get(i), options);
+        }
+    }
+
+    private static void rejectSharedOutputs(Path input, List<Path> outputs) throws IOException {
+        Path source = canonical(input);
+        Set<Path> seen = new HashSet<>();
+        for (Path output : outputs) {
+            Path target = canonical(output);
+            if (target.equals(source)) {
+                throw new IllegalArgumentException("output must not be the input: " + output);
+            }
+            if (!seen.add(target)) {
+                throw new IllegalArgumentException("each range needs its own output: " + output);
+            }
+        }
+    }
+
+    private static Path canonical(Path path) throws IOException {
+        Set<Path> followed = new HashSet<>();
+        Path current = path.toAbsolutePath().normalize();
+        while (true) {
+            if (Files.exists(current)) return current.toRealPath();
+            Path parent = current.getParent();
+            if (parent != null && Files.exists(parent)) {
+                current = parent.toRealPath().resolve(current.getFileName());
+            }
+            if (!Files.isSymbolicLink(current)) return current;
+            if (!followed.add(current)) {
+                throw new IllegalArgumentException("output is a symlink loop: " + path);
+            }
+            current = current.resolveSibling(Files.readSymbolicLink(current)).normalize();
         }
     }
 
@@ -474,14 +539,15 @@ public final class PdfSplit {
      */
     private static boolean stageNativeExtract(Path input, int[] pageIndices, int expectedPages,
                                               Path output, StorageOptions options) throws IOException {
-        Path staged;
+        OutputTransaction tx;
         try {
-            staged = options.createStagingFile(output);
+            tx = OutputTransaction.begin(output, options.durable());
         } catch (IOException _) {
             return false;
         }
-        try {
-            if (!QpdfLib.extractPagesToFile(input, pageIndices, staged) || Files.size(staged) == 0) {
+        try (tx) {
+            Path staged = tx.staging();
+            if (!QpdfLib.extractPagesToFile(input, pageIndices, staged, false) || Files.size(staged) == 0) {
                 return false;
             }
             // The native extractor skips out-of-range indices; verify the
@@ -492,12 +558,14 @@ public final class PdfSplit {
                             + expectedPages + " requested pages");
                 }
             }
-            Files.move(staged, output, StandardCopyOption.REPLACE_EXISTING);
-            staged = null;
+            tx.publish(SaveOptions.ephemeral());
             return true;
-        } finally {
-            deleteQuietly(staged);
         }
+    }
+
+    private static Path reusableSource(PdfDocument doc, StorageOptions options) {
+        Path src = doc.sourcePath();
+        return src != null && options.reuseSourceFile() && Files.isReadable(src) ? src : null;
     }
 
     /** Best-effort temp cleanup: a failed delete must not mask the real outcome. */

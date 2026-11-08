@@ -178,6 +178,19 @@ static constexpr double kInkDpi = 200.0;
 static constexpr double kMaxInkPixels = 16.0e6;
 static constexpr double kMinCoverWidthEm = 0.1;
 static constexpr double kFallbackEm = 10.0;  // pt, for chars with no derivable size
+// PDFium gives a glyph with no outline a box one font unit thick; the thinnest
+// inked glyph (a hyphen, a rule) is tens of units.
+static constexpr double kOutlineLessThicknessEm = 0.002;
+// The band a cover spans around the baseline where it is not fitted to glyph
+// boxes: over an outline-less glyph, and across a rotated match's quad. It reaches
+// into the ink of every glyph on the line, and stays short of the baselines above
+// and below at any leading of 1em or more.
+static constexpr double kBaselineBandBelowEm = 0.25;
+static constexpr double kBaselineBandAboveEm = 0.75;
+// How far past the glyph origin a cover reaches: the redactor hit-tests with
+// strict inequalities, and its origin and PDFium's text-page origin are computed
+// in float along different paths.
+static constexpr double kOriginMarginEm = 0.01;
 
 // Font size of a character in page space, or 0 when it cannot be derived:
 // generated chars (the spaces and line breaks PDFium inserts) have no text
@@ -359,8 +372,174 @@ static void growToInk(double l, double r, double em, double* bottom, double* top
     *bottom = std::min(*bottom, t_ink.boxTop - newBot / t_ink.scale);
 }
 
-bool matchCharBox(FPDF_TEXTPAGE textPage, int index, double* l, double* r, double* b, double* t) {
+// A glyph the font has no outline for: a font program cut short of the glyph ids
+// its content stream uses. It paints nothing but still extracts, and the
+// redactor's glyph box for it is the single point at its origin, which a cover
+// removes only when that point lies strictly inside it. The cover therefore
+// contains the origin with a margin. Whitespace is left alone: it is blank in
+// every font, and widening its box would change covers over ordinary phrases.
+//
+// On upright text PDFium's box for such a glyph is its advance cell, one font unit
+// tall, so the next glyph's cell starts exactly where it ends. The cover stops a
+// margin short of that edge: on the edge, whether the neighbour counts as touched
+// turns on float rounding that differs before and after the rewrite, and the
+// survivor audit then reports the page incomplete. It also spans a band around the
+// baseline so the painted cover sits on the line. Other orientations only grow the
+// box, since which side of it is the advance is not known.
+static void coverOutlineLessGlyph(FPDF_TEXTPAGE textPage, int index, double* l, double* r,
+                                  double* b, double* t) {
+    unsigned int u = FPDFText_GetUnicode(textPage, index);
+    if (u == ' ' || u == 0xA0 || u == '\t' || u == '\r' || u == '\n') return;
+    FS_MATRIX m;
+    double em = charEm(textPage, index, &m);
+    double ox, oy;
+    if (em <= 0 || !FPDFText_GetCharOrigin(textPage, index, &ox, &oy)) return;
+    double thin = kOutlineLessThicknessEm * em;
+    double margin = kOriginMarginEm * em;
+    bool upright =
+        m.d > 0 && std::fabs(m.b) <= 0.01f * std::fabs(m.a) && std::fabs(m.c) <= 0.01f * m.d;
+    if (upright && m.a > 0) {
+        if (*t - *b >= thin) return;
+        *l = ox - margin;
+        *r = std::max(*r - margin, ox + margin);
+        *b = oy - kBaselineBandBelowEm * em;
+        *t = oy + kBaselineBandAboveEm * em;
+        return;
+    }
+    if (std::min(*r - *l, *t - *b) >= thin) return;
+    *l = std::min(*l, ox - margin);
+    *r = std::max(*r, ox + margin);
+    *b = std::min(*b, oy - margin);
+    *t = std::max(*t, oy + margin);
+}
+
+bool outlineAwareCharBox(FPDF_TEXTPAGE textPage, int index, double* l, double* r, double* b,
+                         double* t) {
     if (!FPDFText_GetCharBox(textPage, index, l, r, b, t)) return false;
+    coverOutlineLessGlyph(textPage, index, l, r, b, t);
+    return true;
+}
+
+namespace {
+// One baseline in page space: an origin on it, the unit writing direction u, and
+// the unit direction v glyphs rise along (not perpendicular to u on skewed text).
+struct BaselineFrame {
+    double ox = 0, oy = 0, ux = 0, uy = 0, vx = 0, vy = 0;
+
+    // (s, t) of a page point: s along the baseline, t up from it.
+    bool locate(double px, double py, double* s, double* t) const {
+        double det = ux * vy - uy * vx;
+        if (std::fabs(det) < 1e-9) return false;
+        double dx = px - ox, dy = py - oy;
+        *s = (dx * vy - dy * vx) / det;
+        *t = (ux * dy - uy * dx) / det;
+        return true;
+    }
+
+    void point(double s, double t, float* x, float* y) const {
+        *x = static_cast<float>(ox + s * ux + t * vx);
+        *y = static_cast<float>(oy + s * uy + t * vy);
+    }
+};
+
+bool charFrame(FPDF_TEXTPAGE tp, int ci, BaselineFrame* f) {
+    FS_MATRIX m;
+    if (!FPDFText_GetMatrix(tp, ci, &m) || !FPDFText_GetCharOrigin(tp, ci, &f->ox, &f->oy))
+        return false;
+    double nu = std::hypot(static_cast<double>(m.a), static_cast<double>(m.b));
+    double nv = std::hypot(static_cast<double>(m.c), static_cast<double>(m.d));
+    if (nu <= 0 || nv <= 0) return false;
+    f->ux = m.a / nu;
+    f->uy = m.b / nu;
+    f->vx = m.c / nv;
+    f->vy = m.d / nv;
+    return true;
+}
+
+// How far char `ci`, at (s, t) in `f`, reaches along the baseline: to the next
+// char's origin when that char carries on along the same baseline, else to the
+// far side of its glyph box.
+double advanceAlong(FPDF_TEXTPAGE tp, int ci, const BaselineFrame& f, double s, double t,
+                    double em) {
+    int next = ci + 1;
+    double nx, ny, ns, nt;
+    if (next < FPDFText_CountChars(tp) && FPDFText_IsGenerated(tp, next) != 1 &&
+        FPDFText_GetCharOrigin(tp, next, &nx, &ny) && f.locate(nx, ny, &ns, &nt) &&
+        std::fabs(nt - t) <= 0.1 * em && ns > s && ns - s <= 2 * em) {
+        return ns - s;
+    }
+    double l, r, b, top;
+    double reach = s;
+    if (FPDFText_GetCharBox(tp, ci, &l, &r, &b, &top)) {
+        const double xs[4] = {l, r, l, r};
+        const double ys[4] = {b, b, top, top};
+        for (int k = 0; k < 4; ++k) {
+            double cs, ct;
+            if (f.locate(xs[k], ys[k], &cs, &ct)) reach = std::max(reach, cs);
+        }
+    }
+    return reach - s;
+}
+}  // namespace
+
+// On rotated, mirrored or skewed text a match's bbox also spans the corners
+// around the tilted word, where the neighbouring glyphs sit, and the redactor
+// removes every glyph a mark touches; the quad is the word's own cell instead.
+// It runs along the baseline from just before the first origin (so an
+// outline-less glyph, a point there, is inside) to just short of where the next
+// glyph starts, across the baseline band. Upright text is left to its bbox, which
+// is already exact there, and so is a match that does not lie on one baseline.
+void orientMatchQuads(FPDF_TEXTPAGE tp, std::vector<TextMatch>& matches) {
+    for (TextMatch& m : matches) {
+        m.hasQuad = false;
+        BaselineFrame frame;
+        bool started = false;
+        bool oneBaseline = true;
+        double em = 0, lo = 0, hi = 0;
+        for (int ci : m.charIndices) {
+            if (FPDFText_IsGenerated(tp, ci) == 1) continue;
+            BaselineFrame cf;
+            double cem = charEm(tp, ci, nullptr);
+            if (cem <= 0 || !charFrame(tp, ci, &cf)) {
+                oneBaseline = false;
+                break;
+            }
+            if (!started) {
+                frame = cf;
+                started = true;
+            } else if (std::fabs(cf.ux - frame.ux) > 0.01 || std::fabs(cf.uy - frame.uy) > 0.01 ||
+                       std::fabs(cf.vx - frame.vx) > 0.01 || std::fabs(cf.vy - frame.vy) > 0.01) {
+                oneBaseline = false;
+                break;
+            }
+            double s, t;
+            if (!frame.locate(cf.ox, cf.oy, &s, &t) || std::fabs(t) > 0.1 * cem) {
+                oneBaseline = false;
+                break;
+            }
+            em = std::max(em, cem);
+            lo = std::min(lo, s);
+            hi = std::max(hi, s + advanceAlong(tp, ci, frame, s, t, cem));
+        }
+        if (!started || !oneBaseline) continue;
+        bool upright = frame.ux > 0 && frame.vy > 0 && std::fabs(frame.uy) <= 0.01 &&
+                       std::fabs(frame.vx) <= 0.01;
+        if (upright) continue;
+        double margin = kOriginMarginEm * em;
+        double s0 = lo - margin;
+        double s1 = std::max(hi - margin, lo + margin);
+        double below = -kBaselineBandBelowEm * em;
+        double above = kBaselineBandAboveEm * em;
+        frame.point(s0, above, &m.quad.x1, &m.quad.y1);
+        frame.point(s1, above, &m.quad.x2, &m.quad.y2);
+        frame.point(s0, below, &m.quad.x3, &m.quad.y3);
+        frame.point(s1, below, &m.quad.x4, &m.quad.y4);
+        m.hasQuad = true;
+    }
+}
+
+bool matchCharBox(FPDF_TEXTPAGE textPage, int index, double* l, double* r, double* b, double* t) {
+    if (!outlineAwareCharBox(textPage, index, l, r, b, t)) return false;
     // A redaction removes a char only when the box overlaps its glyph box, and a
     // zero-width one (a combining mark, OCR text with no advance) on the edge of
     // the box only touches it. A box over it alone would have no area.
@@ -604,6 +783,18 @@ static void appendMatchChars(CharBoxCache& chars, const std::vector<int>& idxMap
     for (int k = start; k < start + len && k < static_cast<int>(idxMap.size()); ++k) {
         int ci = idxMap[k];
         if (ci == lastCi) continue;  // NFKC expansion maps several buffer units to one char
+        if (lastCi >= 0) {
+            for (int skipped = lastCi + 1; skipped < ci; ++skipped) {
+                if (!isLineEndHyphen(textPage, skipped, FPDFText_GetUnicode(textPage, skipped)))
+                    continue;
+                double l, r, b, t;
+                tm.charIndices.push_back(skipped);
+                if (matchCharBox(textPage, skipped, &l, &r, &b, &t)) {
+                    lastRight = r;
+                    addCharBox(textPage, skipped, bounds, &l, &r, &b, &t);
+                }
+            }
+        }
         lastCi = ci;
         if (isLineBreak(FPDFText_GetUnicode(textPage, ci))) {
             flush();

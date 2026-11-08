@@ -534,6 +534,26 @@ tasks.register<Test>("nativeSmokeTest") {
     }
 }
 
+// The compatibility gate must exercise the real qpdf paths on each Ubuntu runtime.
+tasks.register<Test>("nativeCompatibilityTest") {
+    group = "verification"
+    description = "Verify native loading, pattern matching and merge/extract preservation"
+    useJUnitPlatform()
+    testClassesDirs = sourceSets.test.get().output.classesDirs
+    classpath = sourceSets.test.get().runtimeClasspath
+    systemProperty("jpdfium.smoke", "true")
+    filter {
+        includeTestsMatching("*NativeSmokeTest")
+        includeTestsMatching("*PdfMergeSplitPreservationTest")
+        includeTestsMatching("*PatternEngineTest")
+    }
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
+    testLogging {
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+        showCauses = true
+    }
+}
+
 // Run: ./gradlew :jpdfium:graalvmNativeSmokeTest -Pjpdfium.testNatives=<platform>
 tasks.register<Exec>("graalvmNativeSmokeTest") {
     group       = "verification"
