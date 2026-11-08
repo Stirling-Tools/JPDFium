@@ -6,6 +6,7 @@ import org.apache.pdfbox.cos.COSObject;
 import org.apache.pdfbox.cos.COSStream;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
 import org.apache.pdfbox.pdmodel.font.PDType1Font;
 import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
@@ -590,7 +591,7 @@ class PdfXConverterTest {
     void oversizedTransparentPageIsRejectedBeforeRasterization() throws Exception {
         assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
         byte[] input = pageWithConstantAlpha(
-                new org.apache.pdfbox.pdmodel.common.PDRectangle(3600, 3600));
+                new PDRectangle(3600, 3600));
         PdfXOptions options = PdfXOptions.builder()
                 .standard(PdfXStandard.PDF_X_3)
                 .useCompactCmyk()
@@ -610,7 +611,7 @@ class PdfXConverterTest {
         assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
         byte[] input;
         try (PDDocument pdfbox = new PDDocument()) {
-            PDPage page = new PDPage(new org.apache.pdfbox.pdmodel.common.PDRectangle(612, 792));
+            PDPage page = new PDPage(new PDRectangle(612, 792));
             pdfbox.addPage(page);
             PDExtendedGraphicsState state = new PDExtendedGraphicsState();
             state.setNonStrokingAlphaConstant(0.5f);
@@ -620,8 +621,8 @@ class PdfXConverterTest {
                 content.addRect(100, 100, 100, 100);
                 content.fill();
             }
-            page.setTrimBox(new org.apache.pdfbox.pdmodel.common.PDRectangle(20, 30, 480, 670));
-            page.setBleedBox(new org.apache.pdfbox.pdmodel.common.PDRectangle(10, 15, 550, 745));
+            page.setTrimBox(new PDRectangle(20, 30, 480, 670));
+            page.setBleedBox(new PDRectangle(10, 15, 550, 745));
             ByteArrayOutputStream bytes = new ByteArrayOutputStream();
             pdfbox.save(bytes);
             input = bytes.toByteArray();
@@ -642,6 +643,8 @@ class PdfXConverterTest {
             assertEquals(670f, trim.height(), 0.1f);
             assertEquals(10f, bleed.x(), 0.1f);
             assertEquals(15f, bleed.y(), 0.1f);
+            assertEquals(550f, bleed.width(), 0.1f);
+            assertEquals(745f, bleed.height(), 0.1f);
         }
     }
 
@@ -660,10 +663,51 @@ class PdfXConverterTest {
             int pageHeight = image.getHeight();
             Color inside = new Color(image.getRGB(150, pageHeight - 150));
             Color outside = new Color(image.getRGB(450, pageHeight - 450));
-            assertTrue(inside.getRed() < 245 || inside.getGreen() < 245 || inside.getBlue() < 245,
-                    "the flattened rectangle must remain visible");
+            assertTrue(inside.getRed() > inside.getGreen() + 40
+                            && inside.getRed() > inside.getBlue() + 40,
+                    "the flattened rectangle must keep its red shade");
             assertTrue(outside.getRed() > 250 && outside.getGreen() > 250 && outside.getBlue() > 250,
                     "the page background must stay white");
+        }
+    }
+
+    @Test
+    void flatteningNormalizesAnOffsetCropBox() throws Exception {
+        assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
+        byte[] input;
+        try (PDDocument pdfbox = new PDDocument()) {
+            PDPage page = new PDPage(new PDRectangle(612, 792));
+            page.setCropBox(new PDRectangle(50, 60, 462, 632));
+            pdfbox.addPage(page);
+            PDExtendedGraphicsState state = new PDExtendedGraphicsState();
+            state.setNonStrokingAlphaConstant(0.5f);
+            try (PDPageContentStream content = new PDPageContentStream(
+                    pdfbox, page, PDPageContentStream.AppendMode.APPEND, true, true)) {
+                content.setGraphicsStateParameters(state);
+                content.setNonStrokingColor(Color.RED);
+                content.addRect(100, 100, 100, 100);
+                content.fill();
+            }
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            pdfbox.save(bytes);
+            input = bytes.toByteArray();
+        }
+        PdfXOptions options = PdfXOptions.builder()
+                .standard(PdfXStandard.PDF_X_3)
+                .useCompactCmyk()
+                .title("Offset crop")
+                .build();
+        byte[] output = PdfXConverter.applyMetadata(input, options);
+        try (PDDocument pdfbox = Loader.loadPDF(output)) {
+            assertEquals(0f, pdfbox.getPage(0).getCropBox().getLowerLeftX(), 0.1f);
+            assertEquals(0f, pdfbox.getPage(0).getCropBox().getLowerLeftY(), 0.1f);
+            assertEquals(462f, pdfbox.getPage(0).getCropBox().getWidth(), 0.1f);
+            assertEquals(632f, pdfbox.getPage(0).getCropBox().getHeight(), 0.1f);
+            BufferedImage image = new PDFRenderer(pdfbox).renderImageWithDPI(0, 72);
+            Color inside = new Color(image.getRGB(100, image.getHeight() - 90));
+            assertTrue(inside.getRed() > inside.getGreen() + 40
+                            && inside.getRed() > inside.getBlue() + 40,
+                    "the raster must map to the shifted crop-box origin");
         }
     }
 
@@ -789,7 +833,7 @@ class PdfXConverterTest {
     }
 
     private static byte[] pageWithConstantAlpha() throws Exception {
-        return pageWithConstantAlpha(new org.apache.pdfbox.pdmodel.common.PDRectangle(612, 792));
+        return pageWithConstantAlpha(new PDRectangle(612, 792));
     }
 
     private static byte[] pageWithConstantAlpha(
@@ -804,6 +848,7 @@ class PdfXConverterTest {
             try (PDPageContentStream content = new PDPageContentStream(
                     pdfbox, page, PDPageContentStream.AppendMode.APPEND, true, true)) {
                 content.setGraphicsStateParameters(state);
+                content.setNonStrokingColor(Color.RED);
                 content.addRect(100, 100, 100, 100);
                 content.fill();
             }
@@ -952,7 +997,7 @@ class PdfXConverterTest {
         byte[] withArtBox;
         try (PDDocument pdfbox = Loader.loadPDF(input)) {
             PDPage p = pdfbox.getPage(0);
-            p.setArtBox(new org.apache.pdfbox.pdmodel.common.PDRectangle(10, 10, 100, 100));
+            p.setArtBox(new PDRectangle(10, 10, 100, 100));
             ByteArrayOutputStream baos = new ByteArrayOutputStream();
             pdfbox.save(baos);
             withArtBox = baos.toByteArray();
@@ -969,7 +1014,7 @@ class PdfXConverterTest {
     void strictCropRemovesBoundaryCrossingWords() throws Exception {
         byte[] input;
         try (PDDocument pdfbox = new PDDocument()) {
-            PDPage page = new PDPage(new org.apache.pdfbox.pdmodel.common.PDRectangle(612, 792));
+            PDPage page = new PDPage(new PDRectangle(612, 792));
             pdfbox.addPage(page);
             try (PDPageContentStream cs = new PDPageContentStream(pdfbox, page)) {
                 cs.beginText();
@@ -1009,7 +1054,7 @@ class PdfXConverterTest {
     void strictCropAuditFailureArmsNativeIncompleteStateAndBlocksFullSave() throws Exception {
         byte[] input;
         try (PDDocument pdfbox = new PDDocument()) {
-            PDPage page = new PDPage(new org.apache.pdfbox.pdmodel.common.PDRectangle(612, 792));
+            PDPage page = new PDPage(new PDRectangle(612, 792));
             pdfbox.addPage(page);
             ByteArrayOutputStream baos = new ByteArrayOutputStream();
             pdfbox.save(baos);
@@ -1034,7 +1079,7 @@ class PdfXConverterTest {
     void rotatedPageWithInheritedMediaBoxKeepsUnrotatedCoordinates() throws Exception {
         byte[] pdf;
         try (PDDocument pdfbox = new PDDocument()) {
-            PDPage page = new PDPage(new org.apache.pdfbox.pdmodel.common.PDRectangle(612, 792));
+            PDPage page = new PDPage(new PDRectangle(612, 792));
             page.setRotation(90);
             pdfbox.addPage(page);
             ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -1062,12 +1107,12 @@ class PdfXConverterTest {
             pdfbox.addPage(page);
 
             PDAnnotationFreeText annot = new PDAnnotationFreeText();
-            annot.setRectangle(new org.apache.pdfbox.pdmodel.common.PDRectangle(50, 50, 200, 50));
+            annot.setRectangle(new PDRectangle(50, 50, 200, 50));
             annot.setContents("AnnotText");
 
             PDAppearanceDictionary appearance = new PDAppearanceDictionary();
             PDAppearanceStream appStream = new PDAppearanceStream(pdfbox);
-            appStream.setBBox(new org.apache.pdfbox.pdmodel.common.PDRectangle(0, 0, 200, 50));
+            appStream.setBBox(new PDRectangle(0, 0, 200, 50));
             PDResources res = new PDResources();
             res.put(COSName.getPDFName("F1"), new PDType1Font(Standard14Fonts.FontName.HELVETICA));
             appStream.setResources(res);
@@ -1102,7 +1147,7 @@ class PdfXConverterTest {
             pdfbox.addPage(page);
 
             PDFormXObject form = new PDFormXObject(pdfbox);
-            form.setBBox(new org.apache.pdfbox.pdmodel.common.PDRectangle(0, 0, 100, 100));
+            form.setBBox(new PDRectangle(0, 0, 100, 100));
             PDResources res = new PDResources();
             res.put(COSName.getPDFName("F1"), new PDType1Font(Standard14Fonts.FontName.HELVETICA));
             form.setResources(res);
@@ -1149,13 +1194,13 @@ class PdfXConverterTest {
     private static byte[] nestedForms(int depth) throws IOException {
         try (PDDocument pdfbox = new PDDocument();
                 ByteArrayOutputStream out = new ByteArrayOutputStream()) {
-            PDPage page = new PDPage(new org.apache.pdfbox.pdmodel.common.PDRectangle(612, 792));
+            PDPage page = new PDPage(new PDRectangle(612, 792));
             pdfbox.addPage(page);
 
             PDFormXObject nested = null;
             for (int level = depth - 1; level >= 0; level--) {
                 PDFormXObject form = new PDFormXObject(pdfbox);
-                form.setBBox(new org.apache.pdfbox.pdmodel.common.PDRectangle(0, 0, 100, 100));
+                form.setBBox(new PDRectangle(0, 0, 100, 100));
                 PDResources resources = new PDResources();
                 String childName = null;
                 if (nested == null) {

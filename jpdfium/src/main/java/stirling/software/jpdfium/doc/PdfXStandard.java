@@ -53,7 +53,7 @@ public enum PdfXStandard {
         return metadataSupported();
     }
 
-    /** True when the standard permits transparency (PDF/X-4 and later). */
+    /** True when the standard permits transparency. PDF/X-1a and PDF/X-3 rasterize transparent pages. */
     public boolean allowsTransparency() {
         return this == PDF_X_4 || this == PDF_X_6;
     }

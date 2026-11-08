@@ -10,6 +10,8 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 
 import stirling.software.jpdfium.PdfDocument;
@@ -18,6 +20,7 @@ import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.model.FlattenMode;
 import stirling.software.jpdfium.model.PdfVersion;
 import stirling.software.jpdfium.model.Rect;
+import stirling.software.jpdfium.transform.PdfPageGeometry;
 import stirling.software.jpdfium.panama.DocBindings;
 import stirling.software.jpdfium.panama.QpdfLib;
 
@@ -309,9 +312,13 @@ public final class PdfXConverter {
         }
         validateCmykProfile(profile);
         validateBeforeFlatten(doc, options);
-        flattenTransparency(doc, standard);
+        int flattenedPages = flattenTransparency(doc, standard);
         if (options.convertColors()) {
-            PdfColorConverter.convert(doc, options.colorOptions());
+            PdfColorConverter.convert(
+                    doc,
+                    flattenedPages > 0
+                            ? options.colorOptionsWithLosslessImages()
+                            : options.colorOptions());
         }
     }
 
@@ -341,46 +348,59 @@ public final class PdfXConverter {
      * primitive JPDFium exposes; PDF/X-1a and X-3 outputs therefore trade
      * selectable text for a valid, non-transparent page.
      */
-    private static void flattenTransparency(PdfDocument doc, PdfXStandard standard) {
-        if (standard.allowsTransparency()) return;
+    private static int flattenTransparency(PdfDocument doc, PdfXStandard standard) {
+        if (standard.allowsTransparency()) return 0;
+        List<Integer> transparentPages = new ArrayList<>();
+        List<Float> widths = new ArrayList<>();
+        List<Float> heights = new ArrayList<>();
         for (int i = 0; i < doc.pageCount(); i++) {
-            boolean transparent;
-            float pageWidth;
-            float pageHeight;
-            Optional<Rect> mediaBox;
+            try (PdfPage page = doc.page(i)) {
+                if (!PdfPageObjects.hasTransparencyStrict(page.rawHandleForRead())) continue;
+                transparentPages.add(i);
+                var size = page.size();
+                widths.add(size.width());
+                heights.add(size.height());
+            }
+        }
+        for (int p = 0; p < transparentPages.size(); p++) {
+            long width = Math.round(widths.get(p) * TRANSPARENCY_FLATTEN_DPI / 72.0);
+            long height = Math.round(heights.get(p) * TRANSPARENCY_FLATTEN_DPI / 72.0);
+            if (width * height > MAX_FLATTEN_PIXELS) {
+                throw new JPDFiumException(standard + " page " + transparentPages.get(p)
+                        + " is too large to flatten at " + TRANSPARENCY_FLATTEN_DPI
+                        + " dpi (" + width + "x" + height + " pixels)");
+            }
+        }
+        for (int i : transparentPages) {
             Optional<Rect> cropBox;
             Optional<Rect> trimBox;
             Optional<Rect> bleedBox;
             Optional<Rect> artBox;
             try (PdfPage page = doc.page(i)) {
-                transparent = PdfPageObjects.hasTransparencyStrict(page.rawHandleForRead());
-                if (!transparent) continue;
-                var size = page.size();
-                pageWidth = size.width();
-                pageHeight = size.height();
-                mediaBox = Optional.of(page.getMediaBox());
                 cropBox = page.getCropBox();
                 trimBox = page.getTrimBox();
                 bleedBox = page.getBleedBox();
                 artBox = page.getArtBox();
             }
-            long width = Math.round(pageWidth * TRANSPARENCY_FLATTEN_DPI / 72.0);
-            long height = Math.round(pageHeight * TRANSPARENCY_FLATTEN_DPI / 72.0);
-            if (width * height > MAX_FLATTEN_PIXELS) {
-                throw new JPDFiumException(standard + " page " + i
-                        + " is too large to flatten at " + TRANSPARENCY_FLATTEN_DPI
-                        + " dpi (" + width + "x" + height + " pixels)");
-            }
             doc.flattenPage(i, FlattenMode.FULL, TRANSPARENCY_FLATTEN_DPI);
+            boolean unrotated = PdfPageGeometry.getRotation(doc, i) % 180 == 0;
+            float dx = unrotated ? cropBox.map(Rect::x).orElse(0f) : 0f;
+            float dy = unrotated ? cropBox.map(Rect::y).orElse(0f) : 0f;
             try (PdfPage flattened = doc.page(i)) {
-                mediaBox.ifPresent(flattened::setMediaBox);
-                cropBox.ifPresent(flattened::setCropBox);
-                trimBox.ifPresent(flattened::setTrimBox);
-                bleedBox.ifPresent(flattened::setBleedBox);
-                artBox.ifPresent(flattened::setArtBox);
+                if (unrotated) {
+                    cropBox.map(box -> shift(box, dx, dy)).ifPresent(flattened::setCropBox);
+                    trimBox.map(box -> shift(box, dx, dy)).ifPresent(flattened::setTrimBox);
+                    bleedBox.map(box -> shift(box, dx, dy)).ifPresent(flattened::setBleedBox);
+                    artBox.map(box -> shift(box, dx, dy)).ifPresent(flattened::setArtBox);
+                }
             }
         }
         requireNoTransparency(doc, standard);
+        return transparentPages.size();
+    }
+
+    private static Rect shift(Rect box, float dx, float dy) {
+        return new Rect(box.x() - dx, box.y() - dy, box.width(), box.height());
     }
 
     private static final int TRANSPARENCY_FLATTEN_DPI = 300;

@@ -217,7 +217,8 @@ if (PdfColorConverter.supportsColorSpace(PdfColorConverter.ColorSpace.CMYK)) {
 transparency, detected transparent pages are rasterized at 300 dpi before the
 output intent is written; pages that still report transparency afterwards are
 rejected. Rasterizing preserves the source MediaBox, CropBox, TrimBox,
-BleedBox and ArtBox, but makes text on those pages non-selectable. Pages over
+BleedBox and ArtBox, but makes text on those pages non-selectable and removes
+interactive links, form fields and annotations from the rasterized page. Pages over
 about 64 megapixels at 300 dpi are rejected instead of risking an oversized
 bitmap. Supply a real printing-condition ICC for production output; the bundled
 compact profile is only a fallback. Run veraPDF or Acrobat preflight before
