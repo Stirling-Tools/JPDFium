@@ -264,7 +264,7 @@ void encodeBilevelJbig2(QPDF& pdf) {
     QPDFPageDocumentHelper helper{pdf};
     for (auto& page : helper.getAllPages()) {
         page.forEachImage(true, [&pdf](QPDFObjectHandle& image, QPDFObjectHandle& resources,
-                                      std::string const& key) {
+                                       std::string const& key) {
             try {
                 auto dict = image.getDict();
                 if (dict.hasKey("/Filter") && dict.getKey("/Filter").isName() &&
@@ -276,8 +276,7 @@ void encodeBilevelJbig2(QPDF& pdf) {
                     return;
                 }
                 if (dict.getKey("/BitsPerComponent").getIntValue() != 1) return;
-                if (dict.hasKey("/ImageMask") || dict.hasKey("/Mask") ||
-                    dict.hasKey("/SMask")) {
+                if (dict.hasKey("/ImageMask") || dict.hasKey("/Mask") || dict.hasKey("/SMask")) {
                     return;
                 }
                 if (!dict.hasKey("/ColorSpace") || !dict.getKey("/ColorSpace").isName() ||
@@ -304,9 +303,9 @@ void encodeBilevelJbig2(QPDF& pdf) {
                 int64_t pageLen = 0;
                 uint8_t* globalsData = nullptr;
                 int64_t globalsLen = 0;
-                if (jpdfium_rust_encode_jbig2(decoded->getBuffer(), decoded->getSize(),
-                                              width, height, 0, &pageData, &pageLen,
-                                              &globalsData, &globalsLen) != 0 ||
+                if (jpdfium_rust_encode_jbig2(decoded->getBuffer(), decoded->getSize(), width,
+                                              height, 0, &pageData, &pageLen, &globalsData,
+                                              &globalsLen) != 0 ||
                     pageData == nullptr || pageLen <= 0) {
                     if (pageData) jpdfium_rust_free(pageData);
                     if (globalsData) jpdfium_rust_free(globalsData);
@@ -329,17 +328,16 @@ void encodeBilevelJbig2(QPDF& pdf) {
                 if (globalsLen > 0) {
                     auto globalsStream = pdf.newStream();
                     globalsStream.replaceStreamData(
-                            std::string(reinterpret_cast<const char*>(globalsData),
-                                        static_cast<size_t>(globalsLen)),
-                            QPDFObjectHandle::newNull(), QPDFObjectHandle::newNull());
+                        std::string(reinterpret_cast<const char*>(globalsData),
+                                    static_cast<size_t>(globalsLen)),
+                        QPDFObjectHandle::newNull(), QPDFObjectHandle::newNull());
                     auto globalsRef = pdf.makeIndirectObject(globalsStream);
                     parms = QPDFObjectHandle::newDictionary();
                     parms.replaceKey("/JBIG2Globals", globalsRef);
                 }
-                replacement.replaceStreamData(
-                        std::string(reinterpret_cast<const char*>(pageData),
-                                    static_cast<size_t>(pageLen)),
-                        QPDFObjectHandle::newName("/JBIG2Decode"), parms);
+                replacement.replaceStreamData(std::string(reinterpret_cast<const char*>(pageData),
+                                                          static_cast<size_t>(pageLen)),
+                                              QPDFObjectHandle::newName("/JBIG2Decode"), parms);
                 jpdfium_rust_free(pageData);
                 if (globalsData) jpdfium_rust_free(globalsData);
                 resources.replaceKey(key, replacement);
