@@ -165,6 +165,8 @@ std::string FormatNumber(double v) {
     return s;
 }
 
+struct Raster;
+
 class Converter {
    public:
     Converter(QPDF& pdf, const Options& options) : pdf_(pdf), o_(options) {}
@@ -183,6 +185,10 @@ class Converter {
     };
 
     ColourSpaceInfo Classify(QPDFObjectHandle cs, int depth = 0);
+    ColourSpaceInfo ClassifyArray(QPDFObjectHandle cs, int depth);
+    ColourSpaceInfo ClassifyIndexed(QPDFObjectHandle cs, int depth);
+    ColourSpaceInfo ClassifySpecial(const std::string& family, QPDFObjectHandle cs, int depth);
+    ColourSpaceInfo ClassifyPattern(QPDFObjectHandle cs, int depth);
     bool ConvertFunction(QPDFObjectHandle fn, int inputs, Kind kind, const ColourSpaceInfo& base,
                          int depth = 0);
     bool ConvertSampled(QPDFObjectHandle fn, Kind kind, const ColourSpaceInfo& base);
@@ -196,6 +202,11 @@ class Converter {
                               bool* sets_font = nullptr);
     void ConvertImage(QPDFObjectHandle image);
     bool ConvertImagePixels(QPDFObjectHandle image, const ColourSpaceInfo& cs);
+    std::vector<uint8_t> RasterToCmyk(const Raster& raster, const ColourSpaceInfo& cs);
+    QPDFObjectHandle ColourKeyToStencil(const Raster& raster, QPDFObjectHandle mask);
+    void ConvertMatte(QPDFObjectHandle smask, const ColourSpaceInfo& cs);
+    void StoreCmyk(QPDFObjectHandle image, const std::vector<uint8_t>& cmyk, int64_t width,
+                   int64_t height, bool as_jpeg);
     std::shared_ptr<Buffer> DecodeImage(QPDFObjectHandle image, bool was_dct);
     void ConvertGroup(QPDFObjectHandle holder);
     bool AuditResources(QPDFObjectHandle resources, std::set<QPDFObjGen>* seen, std::string* why,
@@ -223,163 +234,163 @@ std::string Name(QPDFObjectHandle h) {
     return h.isName() ? h.getName() : std::string();
 }
 
-ColourSpaceInfo Converter::Classify(QPDFObjectHandle cs, int depth) {
+ColourSpaceInfo Replaced(Kind kind, const char* device) {
     ColourSpaceInfo info;
-    if (depth > 16 || cs.isNull()) return info;
-    QPDFObjGen og = cs.getObjGen();
-    if (cs.isIndirect()) {
-        auto it = cs_memo_.find(og);
-        if (it != cs_memo_.end()) return it->second;
+    info.kind = kind;
+    info.replacement = QPDFObjectHandle::newName(device);
+    return info;
+}
+
+void ReadLabParameters(QPDFObjectHandle cs, ColourSpaceInfo* info) {
+    if (cs.getArrayNItems() < 2 || !cs.getArrayItem(1).isDictionary()) return;
+    QPDFObjectHandle d = cs.getArrayItem(1);
+    QPDFObjectHandle wp = d.getKey("/WhitePoint");
+    for (int i = 0; wp.isArray() && wp.getArrayNItems() == 3 && i < 3; ++i) {
+        if (wp.getArrayItem(i).isNumber()) info->white[i] = wp.getArrayItem(i).getNumericValue();
     }
-    const bool strict = ForbidsDeviceIndependent(o_.level);
-    if (cs.isName()) {
-        const std::string n = cs.getName();
-        if (n == "/DeviceRGB" || n == "/RGB") {
-            info.kind = Kind::Rgb;
-            info.replacement = QPDFObjectHandle::newName("/DeviceCMYK");
-        } else if (n == "/Pattern") {
-            info.is_pattern = true;
-        }
-        return info;
+    QPDFObjectHandle range = d.getKey("/Range");
+    for (int i = 0; range.isArray() && range.getArrayNItems() == 4 && i < 4; ++i) {
+        if (range.getArrayItem(i).isNumber())
+            info->range[i] = range.getArrayItem(i).getNumericValue();
     }
-    if (!cs.isArray() || cs.getArrayNItems() == 0) return info;
-    const std::string family = Name(cs.getArrayItem(0));
+}
+
+ColourSpaceInfo ClassifyDeviceIndependent(const std::string& family, QPDFObjectHandle cs) {
     if (family == "/ICCBased" && cs.getArrayNItems() > 1) {
         QPDFObjectHandle stream = cs.getArrayItem(1);
         const int n = stream.isStream() && stream.getDict().getKey("/N").isInteger()
                           ? stream.getDict().getKey("/N").getIntValue()
                           : 0;
-        if (strict) {
-            if (n == 3) {
-                info.kind = Kind::Rgb;
-                info.replacement = QPDFObjectHandle::newName("/DeviceCMYK");
-            } else if (n == 1) {
-                info.kind = Kind::AsGray;
-                info.replacement = QPDFObjectHandle::newName("/DeviceGray");
-            } else if (n == 4) {
-                info.kind = Kind::AsCmyk;
-                info.replacement = QPDFObjectHandle::newName("/DeviceCMYK");
-            }
-        }
-    } else if (family == "/CalRGB") {
-        if (strict) {
-            info.kind = Kind::Rgb;
-            info.replacement = QPDFObjectHandle::newName("/DeviceCMYK");
-        }
-    } else if (family == "/CalGray") {
-        if (strict) {
-            info.kind = Kind::AsGray;
-            info.replacement = QPDFObjectHandle::newName("/DeviceGray");
-        }
-    } else if (family == "/Lab") {
-        if (strict) {
-            info.kind = Kind::Lab;
-            info.replacement = QPDFObjectHandle::newName("/DeviceCMYK");
-            if (cs.getArrayNItems() > 1 && cs.getArrayItem(1).isDictionary()) {
-                QPDFObjectHandle d = cs.getArrayItem(1);
-                QPDFObjectHandle wp = d.getKey("/WhitePoint");
-                if (wp.isArray() && wp.getArrayNItems() == 3) {
-                    for (int i = 0; i < 3; ++i) {
-                        if (wp.getArrayItem(i).isNumber()) {
-                            info.white[i] = wp.getArrayItem(i).getNumericValue();
-                        }
-                    }
-                }
-                QPDFObjectHandle range = d.getKey("/Range");
-                if (range.isArray() && range.getArrayNItems() == 4) {
-                    for (int i = 0; i < 4; ++i) {
-                        if (range.getArrayItem(i).isNumber()) {
-                            info.range[i] = range.getArrayItem(i).getNumericValue();
-                        }
-                    }
-                }
-            }
-        }
-    } else if (family == "/Indexed" && cs.getArrayNItems() == 4) {
-        ColourSpaceInfo base = Classify(cs.getArrayItem(1), depth + 1);
-        if (base.kind != Kind::Keep) {
-            QPDFObjectHandle out = QPDFObjectHandle::newArray();
-            out.appendItem(QPDFObjectHandle::newName("/Indexed"));
-            out.appendItem(base.replacement);
-            out.appendItem(cs.getArrayItem(2));
-            QPDFObjectHandle lookup = cs.getArrayItem(3);
-            if (base.kind == Kind::Rgb || base.kind == Kind::Lab) {
-                std::string raw;
-                if (lookup.isString()) {
-                    raw = lookup.getStringValue();
-                } else if (lookup.isStream()) {
-                    std::shared_ptr<Buffer> b = lookup.getStreamData(qpdf_dl_all);
-                    raw.assign(reinterpret_cast<const char*>(b->getBuffer()), b->getSize());
-                }
-                const int hival =
-                    cs.getArrayItem(2).isInteger() ? cs.getArrayItem(2).getIntValue() : -1;
-                if (hival < 0 || hival > 255 || raw.size() < static_cast<size_t>(hival + 1) * 3) {
-                    return info;
-                }
-                std::string converted;
-                converted.reserve(static_cast<size_t>(hival + 1) * 4);
-                for (int i = 0; i <= hival; ++i) {
-                    std::vector<double> in(3);
-                    for (int c = 0; c < 3; ++c) {
-                        in[c] = static_cast<uint8_t>(raw[static_cast<size_t>(i) * 3 + c]) / 255.0;
-                    }
-                    if (base.kind == Kind::Lab) {
-                        in[0] = in[0] * 100.0;
-                        in[1] = base.range[0] + in[1] * (base.range[1] - base.range[0]);
-                        in[2] = base.range[2] + in[2] * (base.range[3] - base.range[2]);
-                    }
-                    std::vector<double> cmyk = ConvertComponents(base, in, false);
-                    for (double v : cmyk) {
-                        converted.push_back(static_cast<char>(std::lround(Clamp01(v) * 255.0)));
-                    }
-                }
-                out.appendItem(QPDFObjectHandle::newString(converted));
-            } else {
-                out.appendItem(lookup);
-            }
-            info.replacement = out;
-            ++spaces_;
-        }
-    } else if ((family == "/Separation" || family == "/DeviceN") && cs.getArrayNItems() >= 4 &&
-               o_.convert_special) {
-        const int alt_index = 2;
-        ColourSpaceInfo alt = Classify(cs.getArrayItem(alt_index), depth + 1);
-        if (alt.kind != Kind::Keep) {
-            int inputs = 1;
-            if (family == "/DeviceN" && cs.getArrayItem(1).isArray()) {
-                inputs = cs.getArrayItem(1).getArrayNItems();
-            }
-            QPDFObjectHandle fn = cs.getArrayItem(3);
-            if (alt.kind == Kind::AsGray || alt.kind == Kind::AsCmyk ||
-                ConvertFunction(fn, inputs, alt.kind, alt)) {
-                QPDFObjectHandle out = QPDFObjectHandle::newArray();
-                for (int i = 0; i < cs.getArrayNItems(); ++i) {
-                    out.appendItem(i == alt_index ? alt.replacement : cs.getArrayItem(i));
-                }
-                info.replacement = out;
-                ++spaces_;
-            }
-        }
-    } else if (family == "/Pattern") {
-        info.is_pattern = true;
-        if (cs.getArrayNItems() > 1) {
-            ColourSpaceInfo base = Classify(cs.getArrayItem(1), depth + 1);
-            if (base.kind != Kind::Keep || base.replacement.isInitialized()) {
-                info.pattern_base = base.kind;
-                QPDFObjectHandle out = QPDFObjectHandle::newArray();
-                out.appendItem(QPDFObjectHandle::newName("/Pattern"));
-                out.appendItem(base.replacement);
-                info.replacement = out;
-                info.white[0] = base.white[0];
-                info.white[1] = base.white[1];
-                info.white[2] = base.white[2];
-                std::copy(std::begin(base.range), std::end(base.range), std::begin(info.range));
-            }
-        }
-    } else if (family == "/DeviceRGB" || family == "/RGB") {
-        info.kind = Kind::Rgb;
-        info.replacement = QPDFObjectHandle::newName("/DeviceCMYK");
+        if (n == 3) return Replaced(Kind::Rgb, "/DeviceCMYK");
+        if (n == 1) return Replaced(Kind::AsGray, "/DeviceGray");
+        if (n == 4) return Replaced(Kind::AsCmyk, "/DeviceCMYK");
+        return {};
     }
+    if (family == "/CalRGB") return Replaced(Kind::Rgb, "/DeviceCMYK");
+    if (family == "/CalGray") return Replaced(Kind::AsGray, "/DeviceGray");
+    if (family == "/Lab") {
+        ColourSpaceInfo info = Replaced(Kind::Lab, "/DeviceCMYK");
+        ReadLabParameters(cs, &info);
+        return info;
+    }
+    return {};
+}
+
+std::string IndexedLookupBytes(QPDFObjectHandle lookup) {
+    if (lookup.isString()) return lookup.getStringValue();
+    if (!lookup.isStream()) return {};
+    std::shared_ptr<Buffer> b = lookup.getStreamData(qpdf_dl_all);
+    return std::string(reinterpret_cast<const char*>(b->getBuffer()), b->getSize());
+}
+
+ColourSpaceInfo Converter::ClassifyIndexed(QPDFObjectHandle cs, int depth) {
+    ColourSpaceInfo info;
+    ColourSpaceInfo base = Classify(cs.getArrayItem(1), depth + 1);
+    if (base.kind == Kind::Keep) return info;
+    QPDFObjectHandle out = QPDFObjectHandle::newArray();
+    out.appendItem(QPDFObjectHandle::newName("/Indexed"));
+    out.appendItem(base.replacement);
+    out.appendItem(cs.getArrayItem(2));
+    QPDFObjectHandle lookup = cs.getArrayItem(3);
+    if (base.kind != Kind::Rgb && base.kind != Kind::Lab) {
+        out.appendItem(lookup);
+        info.replacement = out;
+        ++spaces_;
+        return info;
+    }
+    const std::string raw = IndexedLookupBytes(lookup);
+    const int hival = cs.getArrayItem(2).isInteger() ? cs.getArrayItem(2).getIntValue() : -1;
+    if (hival < 0 || hival > 255 || raw.size() < static_cast<size_t>(hival + 1) * 3) return info;
+    std::string converted;
+    converted.reserve(static_cast<size_t>(hival + 1) * 4);
+    for (int i = 0; i <= hival; ++i) {
+        std::vector<double> in(3);
+        for (int c = 0; c < 3; ++c) {
+            in[c] = static_cast<uint8_t>(raw[static_cast<size_t>(i) * 3 + c]) / 255.0;
+        }
+        if (base.kind == Kind::Lab) {
+            in[0] = in[0] * 100.0;
+            in[1] = base.range[0] + in[1] * (base.range[1] - base.range[0]);
+            in[2] = base.range[2] + in[2] * (base.range[3] - base.range[2]);
+        }
+        for (double v : ConvertComponents(base, in, false)) {
+            converted.push_back(static_cast<char>(std::lround(Clamp01(v) * 255.0)));
+        }
+    }
+    out.appendItem(QPDFObjectHandle::newString(converted));
+    info.replacement = out;
+    ++spaces_;
+    return info;
+}
+
+ColourSpaceInfo Converter::ClassifySpecial(const std::string& family, QPDFObjectHandle cs,
+                                           int depth) {
+    ColourSpaceInfo info;
+    const int alt_index = 2;
+    ColourSpaceInfo alt = Classify(cs.getArrayItem(alt_index), depth + 1);
+    if (alt.kind == Kind::Keep) return info;
+    int inputs = 1;
+    if (family == "/DeviceN" && cs.getArrayItem(1).isArray()) {
+        inputs = cs.getArrayItem(1).getArrayNItems();
+    }
+    if (alt.kind != Kind::AsGray && alt.kind != Kind::AsCmyk &&
+        !ConvertFunction(cs.getArrayItem(3), inputs, alt.kind, alt)) {
+        return info;
+    }
+    QPDFObjectHandle out = QPDFObjectHandle::newArray();
+    for (int i = 0; i < cs.getArrayNItems(); ++i) {
+        out.appendItem(i == alt_index ? alt.replacement : cs.getArrayItem(i));
+    }
+    info.replacement = out;
+    ++spaces_;
+    return info;
+}
+
+ColourSpaceInfo Converter::ClassifyPattern(QPDFObjectHandle cs, int depth) {
+    ColourSpaceInfo info;
+    info.is_pattern = true;
+    if (cs.getArrayNItems() < 2) return info;
+    ColourSpaceInfo base = Classify(cs.getArrayItem(1), depth + 1);
+    if (base.kind == Kind::Keep && !base.replacement.isInitialized()) return info;
+    info.pattern_base = base.kind;
+    QPDFObjectHandle out = QPDFObjectHandle::newArray();
+    out.appendItem(QPDFObjectHandle::newName("/Pattern"));
+    out.appendItem(base.replacement);
+    info.replacement = out;
+    std::copy(std::begin(base.white), std::end(base.white), std::begin(info.white));
+    std::copy(std::begin(base.range), std::end(base.range), std::begin(info.range));
+    return info;
+}
+
+ColourSpaceInfo Converter::ClassifyArray(QPDFObjectHandle cs, int depth) {
+    const std::string family = Name(cs.getArrayItem(0));
+    if (family == "/DeviceRGB" || family == "/RGB") return Replaced(Kind::Rgb, "/DeviceCMYK");
+    if (family == "/Indexed" && cs.getArrayNItems() == 4) return ClassifyIndexed(cs, depth);
+    if ((family == "/Separation" || family == "/DeviceN") && cs.getArrayNItems() >= 4 &&
+        o_.convert_special) {
+        return ClassifySpecial(family, cs, depth);
+    }
+    if (family == "/Pattern") return ClassifyPattern(cs, depth);
+    if (ForbidsDeviceIndependent(o_.level)) return ClassifyDeviceIndependent(family, cs);
+    return {};
+}
+
+ColourSpaceInfo Converter::Classify(QPDFObjectHandle cs, int depth) {
+    if (depth > 16 || cs.isNull()) return {};
+    if (cs.isName()) {
+        const std::string n = cs.getName();
+        if (n == "/DeviceRGB" || n == "/RGB") return Replaced(Kind::Rgb, "/DeviceCMYK");
+        ColourSpaceInfo info;
+        info.is_pattern = n == "/Pattern";
+        return info;
+    }
+    if (!cs.isArray() || cs.getArrayNItems() == 0) return {};
+    const QPDFObjGen og = cs.getObjGen();
+    if (cs.isIndirect()) {
+        auto it = cs_memo_.find(og);
+        if (it != cs_memo_.end()) return it->second;
+    }
+    ColourSpaceInfo info = ClassifyArray(cs, depth);
     if (cs.isIndirect()) cs_memo_[og] = info;
     return info;
 }
@@ -957,70 +968,66 @@ std::shared_ptr<Buffer> Converter::DecodeImage(QPDFObjectHandle image, bool was_
     return decoded;
 }
 
-bool Converter::ConvertImagePixels(QPDFObjectHandle image, const ColourSpaceInfo& cs) {
-    QPDFObjectHandle dict = image.getDict();
-    const QPDFObjectHandle wo = dict.getKey("/Width");
-    const QPDFObjectHandle ho = dict.getKey("/Height");
-    const QPDFObjectHandle bo = dict.getKey("/BitsPerComponent");
-    if (!wo.isInteger() || !ho.isInteger() || !bo.isInteger()) return false;
-    const int64_t w = wo.getIntValue();
-    const int64_t h = ho.getIntValue();
-    const int bpc = bo.getIntValue();
-    if (w <= 0 || h <= 0 || w > 65535 || h > 65535 || w * h > 100'000'000) return false;
-    if (bpc != 1 && bpc != 2 && bpc != 4 && bpc != 8 && bpc != 16) return false;
-    bool was_dct = false;
-    QPDFObjectHandle filter = dict.getKey("/Filter");
-    if (filter.isName()) {
-        was_dct = filter.getName() == "/DCTDecode";
-        if (filter.getName() == "/JPXDecode" || filter.getName() == "/JBIG2Decode") return false;
-    } else if (filter.isArray()) {
-        for (int i = 0; i < filter.getArrayNItems(); ++i) {
-            const std::string n = Name(filter.getArrayItem(i));
-            if (n == "/DCTDecode") was_dct = true;
-            if (n == "/JPXDecode" || n == "/JBIG2Decode") return false;
-        }
-    }
-    std::shared_ptr<Buffer> decoded = DecodeImage(image, was_dct);
-    if (!decoded) return false;
-    const int64_t row_bytes = (w * 3 * bpc + 7) / 8;
-    if (!decoded || static_cast<int64_t>(decoded->getSize()) < row_bytes * h) return false;
-    const uint8_t* p = decoded->getBuffer();
-    const double max = static_cast<double>((1 << bpc) - 1);
+struct Raster {
+    const uint8_t* data = nullptr;
+    int64_t width = 0;
+    int64_t height = 0;
+    int64_t row_bytes = 0;
+    int bpc = 8;
     double decode[6] = {0, 1, 0, 1, 0, 1};
-    if (cs.kind == Kind::Lab) {
-        decode[0] = 0;
-        decode[1] = 100;
-        decode[2] = cs.range[0];
-        decode[3] = cs.range[1];
-        decode[4] = cs.range[2];
-        decode[5] = cs.range[3];
-    }
-    QPDFObjectHandle decode_obj = dict.getKey("/Decode");
-    if (decode_obj.isArray() && decode_obj.getArrayNItems() == 6) {
-        for (int i = 0; i < 6; ++i) {
-            if (decode_obj.getArrayItem(i).isNumber())
-                decode[i] = decode_obj.getArrayItem(i).getNumericValue();
-        }
-    }
-    auto sample = [&](int64_t y, int64_t index) -> double {
-        const uint8_t* row = p + y * row_bytes;
+
+    double Sample(int64_t y, int64_t index) const {
+        const uint8_t* row = data + y * row_bytes;
         if (bpc == 8) return row[index];
         if (bpc == 16) return static_cast<double>(row[index * 2] << 8 | row[index * 2 + 1]);
         const int64_t bit = index * bpc;
         const int shift = 8 - bpc - static_cast<int>(bit % 8);
         return static_cast<double>((row[bit / 8] >> shift) & ((1 << bpc) - 1));
-    };
-    std::vector<uint8_t> cmyk(static_cast<size_t>(w * h * 4));
-    std::vector<double> in(3);
-    const bool use_cache = cs.kind == Kind::Rgb && bpc == 8 && decode[0] == 0 && decode[1] == 1 &&
-                           decode[2] == 0 && decode[3] == 1 && decode[4] == 0 && decode[5] == 1;
+    }
+
+    bool IsPlainRgb8() const {
+        return bpc == 8 && decode[0] == 0 && decode[1] == 1 && decode[2] == 0 && decode[3] == 1 &&
+               decode[4] == 0 && decode[5] == 1;
+    }
+};
+
+bool ReadImageFilters(QPDFObjectHandle filter, bool* was_dct) {
+    std::vector<std::string> names;
+    if (filter.isName()) names.push_back(filter.getName());
+    for (int i = 0; filter.isArray() && i < filter.getArrayNItems(); ++i) {
+        names.push_back(Name(filter.getArrayItem(i)));
+    }
+    for (const std::string& n : names) {
+        if (n == "/DCTDecode") *was_dct = true;
+        if (n == "/JPXDecode" || n == "/JBIG2Decode") return false;
+    }
+    return true;
+}
+
+void ReadImageDecode(QPDFObjectHandle dict, const ColourSpaceInfo& cs, Raster* raster) {
+    if (cs.kind == Kind::Lab) {
+        const double lab[6] = {0, 100, cs.range[0], cs.range[1], cs.range[2], cs.range[3]};
+        std::copy(std::begin(lab), std::end(lab), std::begin(raster->decode));
+    }
+    QPDFObjectHandle decode = dict.getKey("/Decode");
+    for (int i = 0; decode.isArray() && decode.getArrayNItems() == 6 && i < 6; ++i) {
+        if (decode.getArrayItem(i).isNumber())
+            raster->decode[i] = decode.getArrayItem(i).getNumericValue();
+    }
+}
+
+std::vector<uint8_t> Converter::RasterToCmyk(const Raster& raster, const ColourSpaceInfo& cs) {
+    std::vector<uint8_t> cmyk(static_cast<size_t>(raster.width * raster.height * 4));
+    const double max = static_cast<double>((1 << raster.bpc) - 1);
+    const bool use_cache = cs.kind == Kind::Rgb && raster.IsPlainRgb8();
     uint32_t last_key = 0xFFFFFFFFu;
     uint8_t last[4] = {0, 0, 0, 0};
-    for (int64_t y = 0; y < h; ++y) {
-        for (int64_t x = 0; x < w; ++x) {
-            uint8_t* dst = cmyk.data() + (y * w + x) * 4;
+    std::vector<double> in(3);
+    for (int64_t y = 0; y < raster.height; ++y) {
+        for (int64_t x = 0; x < raster.width; ++x) {
+            uint8_t* dst = cmyk.data() + (y * raster.width + x) * 4;
             if (use_cache) {
-                const uint8_t* src = p + y * row_bytes + x * 3;
+                const uint8_t* src = raster.data + y * raster.row_bytes + x * 3;
                 const uint32_t key = static_cast<uint32_t>(src[0]) << 16 | src[1] << 8 | src[2];
                 if (key != last_key) {
                     double out[4];
@@ -1033,68 +1040,74 @@ bool Converter::ConvertImagePixels(QPDFObjectHandle image, const ColourSpaceInfo
                 continue;
             }
             for (int c = 0; c < 3; ++c) {
-                in[c] = decode[c * 2] +
-                        sample(y, x * 3 + c) / max * (decode[c * 2 + 1] - decode[c * 2]);
+                in[c] =
+                    raster.decode[c * 2] + raster.Sample(y, x * 3 + c) / max *
+                                               (raster.decode[c * 2 + 1] - raster.decode[c * 2]);
             }
             std::vector<double> out = ConvertComponents(cs, in, false);
             for (int c = 0; c < 4; ++c)
                 dst[c] = static_cast<uint8_t>(std::lround(Clamp01(out[c]) * 255.0));
         }
     }
-    QPDFObjectHandle mask = dict.getKey("/Mask");
-    if (mask.isArray()) {
-        if (mask.getArrayNItems() != 6) return false;
-        int64_t lo[3];
-        int64_t hi[3];
-        for (int c = 0; c < 3; ++c) {
-            lo[c] = mask.getArrayItem(c * 2).getIntValue();
-            hi[c] = mask.getArrayItem(c * 2 + 1).getIntValue();
-        }
-        const int64_t mask_row = (w + 7) / 8;
-        std::string bits(static_cast<size_t>(mask_row * h), '\0');
-        for (int64_t y = 0; y < h; ++y) {
-            for (int64_t x = 0; x < w; ++x) {
-                bool keyed = true;
-                for (int c = 0; c < 3 && keyed; ++c) {
-                    const int64_t v = static_cast<int64_t>(sample(y, x * 3 + c));
-                    keyed = v >= lo[c] && v <= hi[c];
-                }
-                if (keyed)
-                    bits[static_cast<size_t>(y * mask_row + x / 8)] |=
-                        static_cast<char>(0x80 >> (x % 8));
+    return cmyk;
+}
+
+QPDFObjectHandle Converter::ColourKeyToStencil(const Raster& raster, QPDFObjectHandle mask) {
+    int64_t lo[3];
+    int64_t hi[3];
+    for (int c = 0; c < 3; ++c) {
+        lo[c] = mask.getArrayItem(c * 2).getIntValue();
+        hi[c] = mask.getArrayItem(c * 2 + 1).getIntValue();
+    }
+    const int64_t mask_row = (raster.width + 7) / 8;
+    std::string bits(static_cast<size_t>(mask_row * raster.height), '\0');
+    for (int64_t y = 0; y < raster.height; ++y) {
+        for (int64_t x = 0; x < raster.width; ++x) {
+            bool keyed = true;
+            for (int c = 0; c < 3 && keyed; ++c) {
+                const int64_t v = static_cast<int64_t>(raster.Sample(y, x * 3 + c));
+                keyed = v >= lo[c] && v <= hi[c];
             }
-        }
-        QPDFObjectHandle stencil = QPDFObjectHandle::newStream(&pdf_, bits);
-        QPDFObjectHandle sd = stencil.getDict();
-        sd.replaceKey("/Type", QPDFObjectHandle::newName("/XObject"));
-        sd.replaceKey("/Subtype", QPDFObjectHandle::newName("/Image"));
-        sd.replaceKey("/Width", QPDFObjectHandle::newInteger(w));
-        sd.replaceKey("/Height", QPDFObjectHandle::newInteger(h));
-        sd.replaceKey("/ImageMask", QPDFObjectHandle::newBool(true));
-        dict.replaceKey("/Mask", stencil);
-    }
-    QPDFObjectHandle smask = dict.getKey("/SMask");
-    if (smask.isStream()) {
-        QPDFObjectHandle matte = smask.getDict().getKey("/Matte");
-        if (matte.isArray() && matte.getArrayNItems() == 3) {
-            std::vector<double> mv;
-            for (int i = 0; i < 3; ++i) mv.push_back(matte.getArrayItem(i).getNumericValue());
-            std::vector<double> converted = ConvertComponents(cs, mv, false);
-            QPDFObjectHandle arr = QPDFObjectHandle::newArray();
-            for (double v : converted) arr.appendItem(QPDFObjectHandle::newReal(v, 4));
-            smask.getDict().replaceKey("/Matte", arr);
+            if (keyed)
+                bits[static_cast<size_t>(y * mask_row + x / 8)] |=
+                    static_cast<char>(0x80 >> (x % 8));
         }
     }
+    QPDFObjectHandle stencil = QPDFObjectHandle::newStream(&pdf_, bits);
+    QPDFObjectHandle sd = stencil.getDict();
+    sd.replaceKey("/Type", QPDFObjectHandle::newName("/XObject"));
+    sd.replaceKey("/Subtype", QPDFObjectHandle::newName("/Image"));
+    sd.replaceKey("/Width", QPDFObjectHandle::newInteger(raster.width));
+    sd.replaceKey("/Height", QPDFObjectHandle::newInteger(raster.height));
+    sd.replaceKey("/ImageMask", QPDFObjectHandle::newBool(true));
+    return stencil;
+}
+
+void Converter::ConvertMatte(QPDFObjectHandle smask, const ColourSpaceInfo& cs) {
+    if (!smask.isStream()) return;
+    QPDFObjectHandle matte = smask.getDict().getKey("/Matte");
+    if (!matte.isArray() || matte.getArrayNItems() != 3) return;
+    std::vector<double> mv;
+    for (int i = 0; i < 3; ++i) mv.push_back(matte.getArrayItem(i).getNumericValue());
+    QPDFObjectHandle arr = QPDFObjectHandle::newArray();
+    for (double v : ConvertComponents(cs, mv, false))
+        arr.appendItem(QPDFObjectHandle::newReal(v, 4));
+    smask.getDict().replaceKey("/Matte", arr);
+}
+
+void Converter::StoreCmyk(QPDFObjectHandle image, const std::vector<uint8_t>& cmyk, int64_t width,
+                          int64_t height, bool as_jpeg) {
+    QPDFObjectHandle dict = image.getDict();
     dict.replaceKey("/ColorSpace", QPDFObjectHandle::newName("/DeviceCMYK"));
     dict.replaceKey("/BitsPerComponent", QPDFObjectHandle::newInteger(8));
     dict.removeKey("/Decode");
     dict.removeKey("/DecodeParms");
-    if (was_dct) {
+    if (as_jpeg) {
         uint8_t* jpeg = nullptr;
         int64_t jpeg_len = 0;
         const int32_t rc = jpdfium_rust_encode_cmyk_jpeg(
-            cmyk.data(), static_cast<int64_t>(cmyk.size()), static_cast<int32_t>(w),
-            static_cast<int32_t>(h), o_.quality, &jpeg, &jpeg_len);
+            cmyk.data(), static_cast<int64_t>(cmyk.size()), static_cast<int32_t>(width),
+            static_cast<int32_t>(height), o_.quality, &jpeg, &jpeg_len);
         if (rc == JPDFIUM_OK && jpeg && jpeg_len > 0) {
             std::string bytes(reinterpret_cast<const char*>(jpeg), static_cast<size_t>(jpeg_len));
             jpdfium_rust_free(jpeg);
@@ -1106,12 +1119,47 @@ bool Converter::ConvertImagePixels(QPDFObjectHandle image, const ColourSpaceInfo
             dict.replaceKey("/Decode", inverted);
             image.replaceStreamData(bytes, QPDFObjectHandle::newName("/DCTDecode"),
                                     QPDFObjectHandle::newNull());
-            return true;
+            return;
         }
         if (jpeg) jpdfium_rust_free(jpeg);
     }
     image.replaceStreamData(std::string(reinterpret_cast<const char*>(cmyk.data()), cmyk.size()),
                             QPDFObjectHandle::newNull(), QPDFObjectHandle::newNull());
+}
+
+bool Converter::ConvertImagePixels(QPDFObjectHandle image, const ColourSpaceInfo& cs) {
+    QPDFObjectHandle dict = image.getDict();
+    const QPDFObjectHandle wo = dict.getKey("/Width");
+    const QPDFObjectHandle ho = dict.getKey("/Height");
+    const QPDFObjectHandle bo = dict.getKey("/BitsPerComponent");
+    if (!wo.isInteger() || !ho.isInteger() || !bo.isInteger()) return false;
+    Raster raster;
+    raster.width = wo.getIntValue();
+    raster.height = ho.getIntValue();
+    raster.bpc = bo.getIntValue();
+    if (raster.width <= 0 || raster.height <= 0 || raster.width > 65535 || raster.height > 65535 ||
+        raster.width * raster.height > 100'000'000) {
+        return false;
+    }
+    if (raster.bpc != 1 && raster.bpc != 2 && raster.bpc != 4 && raster.bpc != 8 &&
+        raster.bpc != 16) {
+        return false;
+    }
+    bool was_dct = false;
+    if (!ReadImageFilters(dict.getKey("/Filter"), &was_dct)) return false;
+    std::shared_ptr<Buffer> decoded = DecodeImage(image, was_dct);
+    raster.row_bytes = (raster.width * 3 * raster.bpc + 7) / 8;
+    if (!decoded || static_cast<int64_t>(decoded->getSize()) < raster.row_bytes * raster.height) {
+        return false;
+    }
+    raster.data = decoded->getBuffer();
+    ReadImageDecode(dict, cs, &raster);
+    QPDFObjectHandle mask = dict.getKey("/Mask");
+    if (mask.isArray() && mask.getArrayNItems() != 6) return false;
+    std::vector<uint8_t> cmyk = RasterToCmyk(raster, cs);
+    if (mask.isArray()) dict.replaceKey("/Mask", ColourKeyToStencil(raster, mask));
+    ConvertMatte(dict.getKey("/SMask"), cs);
+    StoreCmyk(image, cmyk, raster.width, raster.height, was_dct);
     return true;
 }
 
