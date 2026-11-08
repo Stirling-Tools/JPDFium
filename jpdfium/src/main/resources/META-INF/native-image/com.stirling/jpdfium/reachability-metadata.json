@@ -249,11 +249,6 @@
         "parameterTypes": [
           "void*",
           "void*",
-      {
-        "returnType": "jint",
-        "parameterTypes": [
-          "void*",
-          "void*",
           "void*",
           "jint",
           "void*"
@@ -269,8 +264,6 @@
           "void*",
           "void*",
           "jint"
-        ]
-      },
         ]
       },
       {
