@@ -231,6 +231,10 @@ class CropImageContentTest {
         // clip it instead.
         byte[] output = crop(CropTestPdfGenerator.twoLevelSandwichedFormImagePdf(),
                 new Rect(200, 50, 100, 50));
+        assertEquals(1, countImageDraws(output), "the nested image must still be drawn once");
+        BufferedImage bitmap = onlyImage(output);
+        assertPixelRows(bitmap, 0, 50, 0xFF0000, "nested bitmap top");
+        assertPixelRows(bitmap, 50, 100, 0x0000FF, "nested bitmap bottom");
         BufferedImage page = render(output);
         assertEquals(0x00FF00, pixelAt(page, output, 260, 75) & 0xFFFFFF,
                 "later form content must stay above the image");
@@ -239,6 +243,10 @@ class CropImageContentTest {
     @Test
     void sandwichedFormImageKeepsPaintOrder() throws Exception {
         byte[] output = crop(CropTestPdfGenerator.formSandwichedImagePdf(), KEEP_TOP);
+        assertEquals(1, countImageDraws(output), "the sandwiched image must still be drawn once");
+        BufferedImage bitmap = onlyImage(output);
+        assertPixelRows(bitmap, 0, 50, 0xFF0000, "sandwiched bitmap top");
+        assertPixelRows(bitmap, 50, 100, 0x0000FF, "sandwiched bitmap bottom");
         BufferedImage page = render(output);
         assertEquals(0x00FF00, pixelAt(page, output, 200, 220) & 0xFFFFFF,
                 "later form content must stay above the image");

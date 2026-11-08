@@ -8,6 +8,7 @@ import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDResources;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.pdmodel.graphics.form.PDFormXObject;
+import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import stirling.software.jpdfium.PdfDocument;
@@ -196,6 +197,29 @@ class CropContentContractTest {
             try (PDDocument pdf = Loader.loadPDF(output)) {
                 assertEquals(LEFT_HALF.width(), pdf.getPage(0).getMediaBox().getWidth());
                 assertEquals(LEFT_HALF.height(), pdf.getPage(0).getMediaBox().getHeight());
+                PDImageXObject kept = null;
+                for (COSName name : pdf.getPage(0).getResources().getXObjectNames()) {
+                    if (pdf.getPage(0).getResources().getXObject(name) instanceof PDImageXObject image) {
+                        kept = image;
+                    }
+                }
+                assertTrue(kept != null, "the unerasable image must stay on the page");
+                try (var source = Loader.loadPDF(CropTestPdfGenerator.dimensionlessStraddlingImagePdf());
+                        var expected = ((PDImageXObject) source.getPage(0)
+                                        .getResources()
+                                        .getXObject(source.getPage(0)
+                                                .getResources()
+                                                .getXObjectNames()
+                                                .iterator()
+                                                .next()))
+                                .getCOSObject()
+                                .createInputStream();
+                        var actual = kept.getCOSObject().createInputStream()) {
+                    assertEquals(
+                            new String(expected.readAllBytes(), StandardCharsets.ISO_8859_1),
+                            new String(actual.readAllBytes(), StandardCharsets.ISO_8859_1),
+                            "the kept image data must be unchanged");
+                }
             }
         }
     }
