@@ -7,9 +7,13 @@ import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.PDPageContentStream;
 import org.apache.pdfbox.pdmodel.PDResources;
 import org.apache.pdfbox.pdmodel.font.PDFont;
+import org.apache.pdfbox.pdmodel.font.PDType1Font;
+import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 
 import java.io.ByteArrayOutputStream;
@@ -28,6 +32,36 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 /** Contract tests for qpdf-backed exact font-stream replacement. */
 @EnabledIfSystemProperty(named = "jpdfium.integration", matches = "true")
 class PdfFontEmbedderTest {
+
+    @Test
+    void fileBackedEmbeddingWritesTheOutputWithoutJavaDocumentBytes(@TempDir Path temp)
+            throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
+        Path input = temp.resolve("input.pdf");
+        Path output = temp.resolve("output.pdf");
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage();
+            doc.addPage(page);
+            try (PDPageContentStream content = new PDPageContentStream(doc, page)) {
+                content.beginText();
+                content.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 12);
+                content.newLineAtOffset(72, 720);
+                content.showText("file backed font embedding");
+                content.endText();
+            }
+            doc.save(input.toFile());
+        }
+
+        PdfFontEmbedder.FileResult result = PdfFontEmbedder.embedMissingTo(input, output);
+        assumeTrue(!result.embedded().isEmpty(), "no matching system font installed");
+
+        assertTrue(Files.size(output) > 0, "file-backed output must be written");
+        try (PDDocument rewritten = Loader.loadPDF(output.toFile())) {
+            PDFont font = rewritten.getPage(0).getResources()
+                    .getFont(rewritten.getPage(0).getResources().getFontNames().iterator().next());
+            assertTrue(font.isEmbedded(), "file-backed output font must be embedded");
+        }
+    }
 
     @Test
     void replacesAnExistingEmbeddedFontStreamWithExactMatching() throws Exception {

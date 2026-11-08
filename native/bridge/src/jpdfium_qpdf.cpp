@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <limits>
 #include <map>
@@ -1642,6 +1643,41 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_embed_fonts(const uint8_t* input, int64_t in
         }
         std::memcpy(*output, result.buffer->getBuffer(), static_cast<size_t>(*outputLen));
         return 0;
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
+    }
+}
+
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_embed_fonts_file(const char* in_path, const char* out_path,
+                                                     int32_t count, const char* const* names,
+                                                     const uint8_t* const* fonts,
+                                                     const int64_t* fontLens, int32_t onlyMissing) {
+    try {
+        if (!in_path || !out_path || count <= 0 || !names || !fonts || !fontLens) return -1;
+        std::ifstream in(in_path, std::ios::binary | std::ios::ate);
+        if (!in) return -1;
+        std::streamoff size = in.tellg();
+        if (size <= 0) return -1;
+        in.seekg(0);
+        std::vector<uint8_t> input(static_cast<size_t>(size));
+        if (!in.read(reinterpret_cast<char*>(input.data()), size)) return -1;
+
+        std::vector<FontSource> sources;
+        for (int32_t i = 0; i < count; ++i) {
+            if (!names[i] || !*names[i] || !fonts[i] || fontLens[i] <= 0) return -1;
+            sources.push_back({names[i], {fonts[i], static_cast<size_t>(fontLens[i])}});
+        }
+        auto result = embedFonts({input.data(), input.size()}, sources, onlyMissing != 0);
+        if (result.rc != 0) {
+            std::fprintf(stderr, "jpdfium qpdf embed fonts file: %s\n", result.error.c_str());
+            return result.rc;
+        }
+        FILE* out = createOutputFile(out_path);
+        if (!out) return -1;
+        const size_t length = result.buffer->getSize();
+        bool written = std::fwrite(result.buffer->getBuffer(), 1, length, out) == length;
+        if (std::fclose(out) != 0) written = false;
+        return written ? 0 : -1;
     } catch (...) {
         return JPDFIUM_ERR_NATIVE;
     }

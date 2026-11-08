@@ -635,6 +635,13 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_embed_fonts(const uint8_t* input, int64_t in
                                                 const int64_t* fontLens, int32_t onlyMissing,
                                                 uint8_t** output, int64_t* outputLen);
 
+// File-backed form of jpdfium_qpdf_embed_fonts: reads in_path and writes out_path,
+// so callers do not materialize the PDF bytes in the Java heap.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_embed_fonts_file(const char* in_path, const char* out_path,
+                                                     int32_t count, const char* const* names,
+                                                     const uint8_t* const* fonts,
+                                                     const int64_t* fontLens, int32_t onlyMissing);
+
 // In-process qpdf structural sanitization (FFM, no CLI).
 // Scrubs metadata/info/structure, JavaScript actions, embedded files, AcroForm
 // widgets, and flattens annotations. Does NOT do visual redaction (removing
