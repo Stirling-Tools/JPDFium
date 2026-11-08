@@ -192,7 +192,8 @@ class Converter {
     Resources PrepareResources(QPDFObjectHandle resources);
     void ProcessContentHolder(QPDFObjectHandle stream, QPDFObjectHandle inherited, int depth);
     void ProcessResources(Resources& res, int depth);
-    std::string FilterContent(const std::string& content, Resources& res, bool* changed);
+    std::string FilterContent(const std::string& content, Resources& res, bool* changed,
+                              bool* sets_font = nullptr);
     void ConvertImage(QPDFObjectHandle image);
     bool ConvertImagePixels(QPDFObjectHandle image, const ColourSpaceInfo& cs);
     std::shared_ptr<Buffer> DecodeImage(QPDFObjectHandle image, bool was_dct);
@@ -594,6 +595,9 @@ class ColourFilter : public QPDFObjectHandle::TokenFilter {
     bool changed() const {
         return changed_;
     }
+    bool sets_font() const {
+        return sets_font_;
+    }
 
    private:
     struct State {
@@ -664,6 +668,7 @@ class ColourFilter : public QPDFObjectHandle::TokenFilter {
 
     void Operator(QPDFTokenizer::Token const& token) {
         const std::string op = token.getValue();
+        if (op == "Tf") sets_font_ = true;
         State& state = stack_.back();
         if (op == "q") {
             FlushOperands();
@@ -730,6 +735,7 @@ class ColourFilter : public QPDFObjectHandle::TokenFilter {
     std::vector<QPDFTokenizer::Token> inline_;
     bool in_inline_ = false;
     bool changed_ = false;
+    bool sets_font_ = false;
 };
 
 std::string ExpandInlineName(const std::string& n) {
@@ -843,13 +849,15 @@ void ColourFilter::FlushInline() {
     for (const auto& t : tokens) writeToken(t);
 }
 
-std::string Converter::FilterContent(const std::string& content, Resources& res, bool* changed) {
+std::string Converter::FilterContent(const std::string& content, Resources& res, bool* changed,
+                                     bool* sets_font) {
     ColourFilter filter(*this, res.spaces);
     std::string out;
     Pl_String sink("pdfx-content", nullptr, out);
     QPDFObjectHandle tmp = QPDFObjectHandle::newStream(&pdf_, content);
     tmp.filterAsContents(&filter, &sink);
     *changed = filter.changed();
+    if (sets_font) *sets_font = filter.sets_font();
     return out;
 }
 
@@ -1219,9 +1227,14 @@ void Converter::ProcessContentHolder(QPDFObjectHandle stream, QPDFObjectHandle i
     }
     std::string content(reinterpret_cast<const char*>(data->getBuffer()), data->getSize());
     bool changed = false;
-    std::string out = FilterContent(content, res, &changed);
+    bool sets_font = true;
+    std::string out = FilterContent(content, res, &changed, &sets_font);
     if (changed)
         stream.replaceStreamData(out, QPDFObjectHandle::newNull(), QPDFObjectHandle::newNull());
+    if (!sets_font && own.isDictionary() && !own.isIndirect() && !own.hasKey("/XObject") &&
+        !own.hasKey("/Pattern")) {
+        own.removeKey("/Font");
+    }
 }
 
 void Converter::Run() {

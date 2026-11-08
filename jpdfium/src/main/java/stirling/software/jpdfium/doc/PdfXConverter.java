@@ -26,12 +26,15 @@ import stirling.software.jpdfium.panama.QpdfLib;
  * PDF version and page trim boxes.
  *
  * <p>Colours are rewritten in the existing content streams, images keep their masks,
- * printable annotations are flattened and JavaScript is removed. PDF/X-1a and PDF/X-3
- * reject transparency, hidden optional content and JBIG2/JPX images rather than
- * flattening them, and the conversion fails if the page count changes.
+ * printable annotations are flattened, JavaScript is removed and missing fonts are
+ * embedded from the system font directories unless {@code embedMissingFonts} is off.
+ * PDF/X-1a and PDF/X-3 reject transparency, hidden optional content and JBIG2/JPX
+ * images rather than flattening them. Signed documents are rejected, and the
+ * conversion fails if the page count changes.
  *
- * <p>This is <strong>not a PDF/X validator</strong>. It does not embed missing fonts
- * (it can reject them on request) or apply trapping. veraPDF has no PDF/X profiles,
+ * <p>This is <strong>not a PDF/X validator</strong>. A font that cannot be found is
+ * left unembedded (rejected with {@code requireEmbeddedFonts}), and trapping is not
+ * applied. veraPDF has no PDF/X profiles,
  * so use a PDF/X preflight such as Acrobat or callas before claiming conformance;
  * {@link #checkMetadata(byte[], PdfXOptions)} only checks the intent/ICC/version
  * wiring written here.
@@ -68,6 +71,7 @@ public final class PdfXConverter {
         if (!options.fontData().isEmpty()) {
             converted = PdfFontEmbedder.embed(converted, options.fontData());
         }
+        converted = embedMissingFonts(converted, options);
         try (PdfDocument metadata = PdfDocument.open(converted)) {
             requireSamePageCount(doc.pageCount(), metadata.pageCount());
             applyPageBoxes(metadata);
@@ -110,6 +114,10 @@ public final class PdfXConverter {
             if (!options.fontData().isEmpty()) {
                 applyFontData(metadata, options);
             }
+            if (options.embedMissingFonts() && PdfFontEmbedder.isAvailable()) {
+                Files.write(metadata, PdfFontEmbedder.embedMissing(metadata,
+                        options.fontDirectories().toArray(Path[]::new)).pdf());
+            }
             try (PdfDocument document = PdfDocument.open(metadata)) {
                 requireSamePageCount(pages, document.pageCount());
                 applyPageBoxes(document);
@@ -122,6 +130,15 @@ public final class PdfXConverter {
         } finally {
             deleteQuietly(staging);
             deleteQuietly(metadata);
+        }
+    }
+
+    private static byte[] embedMissingFonts(byte[] pdf, PdfXOptions options) {
+        if (!options.embedMissingFonts() || !PdfFontEmbedder.isAvailable()) return pdf;
+        try {
+            return PdfFontEmbedder.embedMissing(pdf, options.fontDirectories().toArray(Path[]::new)).pdf();
+        } catch (IOException e) {
+            throw new JPDFiumException("PDF/X font embedding failed: " + e.getMessage(), e);
         }
     }
 
@@ -293,6 +310,7 @@ public final class PdfXConverter {
             if (!options.fontData().isEmpty()) {
                 converted = PdfFontEmbedder.embed(converted, options.fontData());
             }
+            converted = embedMissingFonts(converted, options);
             try (PdfDocument metadata = PdfDocument.open(converted)) {
                 requireSamePageCount(source.pageCount(), metadata.pageCount());
                 applyPageBoxes(metadata);
@@ -323,6 +341,10 @@ public final class PdfXConverter {
             throw new JPDFiumException("PDF/X metadata requires an output intent ICC profile");
         }
         validateCmykProfile(profile);
+        if (PdfSignatures.count(doc.rawHandleForRead()) > 0) {
+            throw new JPDFiumException("PDF/X conversion rewrites the document and would invalidate"
+                    + " its digital signature; remove the signature first");
+        }
         requireNoTransparency(doc, standard);
         if (!standard.allowsIccBasedColors() && !options.convertColors()) {
             throw new JPDFiumException(standard + " forbids ICC-based, Lab, and RGB colour spaces; "

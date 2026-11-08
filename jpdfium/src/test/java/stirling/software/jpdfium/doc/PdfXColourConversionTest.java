@@ -192,6 +192,53 @@ class PdfXColourConversionTest {
     }
 
     @Test
+    void missingStandardFontIsEmbedded() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "font embedding unavailable");
+        byte[] in;
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage();
+            doc.addPage(page);
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.beginText();
+                cs.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 12);
+                cs.newLineAtOffset(72, 700);
+                cs.showText("Print ready");
+                cs.endText();
+            }
+            in = save(doc);
+        }
+        assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
+        byte[] out = PdfXConverter.applyMetadata(in,
+                options(PdfXStandard.PDF_X_4).requireEmbeddedFonts(true).build());
+        try (PdfDocument doc = PdfDocument.open(out)) {
+            assertFalse(PdfFontAuditor.hasNonEmbeddedFonts(doc));
+        }
+    }
+
+    @Test
+    void signedDocumentIsRejectedBeforeAnyRewrite() throws Exception {
+        byte[] blank;
+        try (PDDocument doc = new PDDocument()) {
+            doc.addPage(new PDPage());
+            blank = save(doc);
+        }
+        byte[] in;
+        try (PDDocument doc = Loader.loadPDF(blank)) {
+            org.apache.pdfbox.pdmodel.interactive.digitalsignature.PDSignature signature =
+                    new org.apache.pdfbox.pdmodel.interactive.digitalsignature.PDSignature();
+            signature.setFilter(org.apache.pdfbox.pdmodel.interactive.digitalsignature.PDSignature.FILTER_ADOBE_PPKLITE);
+            signature.setSubFilter(org.apache.pdfbox.pdmodel.interactive.digitalsignature.PDSignature.SUBFILTER_ADBE_PKCS7_DETACHED);
+            doc.addSignature(signature, content -> new byte[] {1, 2, 3, 4});
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            doc.saveIncremental(out);
+            in = out.toByteArray();
+        }
+        JPDFiumException error = assertThrows(JPDFiumException.class,
+                () -> convert(in, PdfXStandard.PDF_X_4));
+        assertTrue(error.getMessage().contains("signature"), error.getMessage());
+    }
+
+    @Test
     void manyPagesConvertWithoutChangingThePageCount() throws Exception {
         byte[] in;
         try (PDDocument doc = new PDDocument()) {

@@ -22,6 +22,10 @@ publishing workflows, not library releases, so they are not listed here.
 - `PdfXOptions.neutralsToBlack(boolean)`, on by default, maps neutral RGB
   vector colours to K only instead of four-colour black.
 
+- `PdfXOptions.embedMissingFonts(boolean)`, on by default, and
+  `fontDirectories(Path...)`: PDF/X conversion embeds fonts used without a
+  program through `PdfFontEmbedder.embedMissing`.
+
 - Font embedding. `PdfFontEmbedder.embed(...)` embeds TrueType, OpenType, CFF
   and Type 1 programs by exact `/BaseFont` in one qpdf rewrite, into fonts that
   have no program as well as ones that do, building a missing descriptor and
@@ -97,7 +101,8 @@ publishing workflows, not library releases, so they are not listed here.
   never encrypted.
 
 - PDF/X conversion fails instead of writing a document with fewer pages when
-  the source page tree cannot be rewritten.
+  the source page tree cannot be rewritten, and refuses signed documents
+  instead of silently invalidating the signature.
 
 - Word and regex redaction finds words PDFium reports hyphenated across a line
   break (`Trace-` / `Monkey`), and removes the hyphen with them; it previously
