@@ -43,6 +43,7 @@
 #include <qpdf/QPDFFormFieldObjectHelper.hh>
 #include <qpdf/QPDFLogger.hh>
 #include <qpdf/QPDFObjectHandle.hh>
+#include <qpdf/QPDFOutlineDocumentHelper.hh>
 #include <qpdf/QPDFPageDocumentHelper.hh>
 #include <qpdf/QPDFPageLabelDocumentHelper.hh>
 #include <qpdf/QPDFPageObjectHelper.hh>
@@ -310,6 +311,127 @@ std::vector<int32_t> allPageIndices(QPDF& qpdf) {
     return indices;
 }
 
+// Outline item captured from a source before its pages are moved, so the destination can be
+// resolved to the output page index the item ends up on.
+struct OutlineNode {
+    std::string title;
+    QPDF* source = nullptr;
+    QPDFObjGen page;
+    bool hasPage = false;
+    bool hasCount = false;
+    int count = 0;
+    std::vector<OutlineNode> children;
+};
+
+using OutputPageMap = std::map<QPDF*, std::map<QPDFObjGen, int32_t>>;
+
+constexpr int kMaxOutlineDepth = 100;
+
+OutlineNode collectOutlineNode(QPDFOutlineObjectHelper item, QPDF* source, int depth) {
+    OutlineNode node;
+    node.source = source;
+    node.title = item.getTitle();
+    QPDFObjectHandle destPage = item.getDestPage();
+    if (!destPage.isNull() && destPage.isIndirect()) {
+        node.page = destPage.getObjGen();
+        node.hasPage = true;
+    }
+    QPDFObjectHandle count = item.getObjectHandle().getKey("/Count");
+    if (count.isInteger()) {
+        node.hasCount = true;
+        node.count = static_cast<int>(count.getIntValue());
+    }
+    if (depth < kMaxOutlineDepth) {
+        for (auto& child : item.getKids()) {
+            node.children.push_back(collectOutlineNode(child, source, depth + 1));
+        }
+    }
+    return node;
+}
+
+// Best-effort: a malformed outline tree must not fail the structural merge, which is useful even
+// when the navigation data cannot be recovered.
+std::vector<OutlineNode> collectOutlines(std::vector<PageSelection> const& selections) {
+    std::vector<OutlineNode> outlines;
+    std::set<QPDF*> collected;
+    for (auto const& selection : selections) {
+        QPDF* source = selection.source;
+        if (!source || !collected.insert(source).second) continue;
+        try {
+            QPDFOutlineDocumentHelper& helper = QPDFOutlineDocumentHelper::get(*source);
+            if (!helper.hasOutlines()) continue;
+            for (auto& item : helper.getTopLevelOutlines()) {
+                outlines.push_back(collectOutlineNode(item, source, 0));
+            }
+        } catch (std::exception const& e) {
+            std::fprintf(stderr, "jpdfium qpdf: outlines from merge source dropped: %s\n",
+                         e.what());
+        }
+    }
+    return outlines;
+}
+
+// Rebuilds one sibling chain and returns its first item, with `last` set for the parent's /Last.
+// Only GoTo page destinations are restored; URI and file actions keep their title and hierarchy
+// but lose the action.
+QPDFObjectHandle buildOutlineList(QPDF& doc, std::vector<OutlineNode> const& nodes,
+                                  QPDFObjectHandle const& parent, OutputPageMap const& outputPages,
+                                  QPDFObjectHandle& last) {
+    if (nodes.empty()) return QPDFObjectHandle::newNull();
+
+    std::vector<QPDFObjectHandle> items;
+    items.reserve(nodes.size());
+    for (size_t i = 0; i < nodes.size(); ++i) {
+        items.push_back(doc.makeIndirectObject(QPDFObjectHandle::newDictionary()));
+    }
+
+    for (size_t i = 0; i < nodes.size(); ++i) {
+        OutlineNode const& node = nodes[i];
+        QPDFObjectHandle item = items[i];
+        item.replaceKey("/Title", QPDFObjectHandle::newString(node.title));
+        if (node.hasPage) {
+            auto pagesBySource = outputPages.find(node.source);
+            if (pagesBySource != outputPages.end()) {
+                auto found = pagesBySource->second.find(node.page);
+                if (found != pagesBySource->second.end()) {
+                    QPDFObjectHandle page = doc.getAllPages()[static_cast<size_t>(found->second)];
+                    item.replaceKey("/Dest", QPDFObjectHandle::newArray(
+                                                 {page, QPDFObjectHandle::newName("/Fit")}));
+                }
+            }
+        }
+        item.replaceKey("/Parent", parent);
+        if (i > 0) item.replaceKey("/Prev", items[i - 1]);
+        if (i + 1 < items.size()) item.replaceKey("/Next", items[i + 1]);
+
+        QPDFObjectHandle lastChild;
+        QPDFObjectHandle firstChild =
+            buildOutlineList(doc, node.children, item, outputPages, lastChild);
+        if (!firstChild.isNull()) {
+            item.replaceKey("/First", firstChild);
+            item.replaceKey("/Last", lastChild);
+        }
+        if (node.hasCount) item.replaceKey("/Count", QPDFObjectHandle::newInteger(node.count));
+    }
+    last = items.back();
+    return items.front();
+}
+
+void installOutlines(QPDF& doc, std::vector<OutlineNode> const& outlines,
+                     OutputPageMap const& outputPages) {
+    if (outlines.empty()) return;
+
+    QPDFObjectHandle outlineRoot = doc.makeIndirectObject(QPDFObjectHandle::newDictionary());
+    outlineRoot.replaceKey("/Type", QPDFObjectHandle::newName("/Outlines"));
+    QPDFObjectHandle last;
+    QPDFObjectHandle first = buildOutlineList(doc, outlines, outlineRoot, outputPages, last);
+    outlineRoot.replaceKey("/First", first);
+    outlineRoot.replaceKey("/Last", last);
+    outlineRoot.replaceKey("/Count",
+                           QPDFObjectHandle::newInteger(static_cast<long long>(outlines.size())));
+    doc.getRoot().replaceKey("/Outlines", outlineRoot);
+}
+
 // A page with no label in its source is labelled with its physical number in the output, which
 // is what a viewer shows for a file without labels. qpdf's own fabricated label has no /S, which
 // renders as a blank label.
@@ -381,11 +503,17 @@ void keepOnlyFields(QPDF& qpdf, std::set<QPDFObjGen> const& keptFields) {
 // left outside the output's page tree is nulled, so a destination or annotation still pointing
 // at one cannot pull it, and everything it draws, back into the file.
 //
-// Dropped, unlike qpdf: outlines, which the Java callers rebuild for each output from the source
-// bookmarks; the structure tree, which describes the source's page order and would carry every
-// removed page's elements; the XFA form, which viewers would show in place of the assembled
-// fields; and usage-rights signatures (/Perms), which any change invalidates.
-void assemblePages(QPDF& primary, std::vector<PageSelection> const& selections) {
+// With `preserveOutlines`, each source's outline tree is captured before pages move and rebuilt
+// against the output page indices. Extraction leaves outlines out: a tree whose destinations
+// point at dropped pages is not worth carrying.
+//
+// Dropped, unlike qpdf: the structure tree, which describes the source's page order and would
+// carry every removed page's elements; the XFA form, which viewers would show in place of the
+// assembled fields; and usage-rights signatures (/Perms), which any change invalidates.
+void assemblePages(QPDF& primary, std::vector<PageSelection> const& selections,
+                   bool preserveOutlines = false) {
+    std::vector<OutlineNode> outlines =
+        preserveOutlines ? collectOutlines(selections) : std::vector<OutlineNode>{};
     std::vector<QPDFObjectHandle> primaryPages = primary.getAllPages();
     for (auto const& page : primaryPages) primary.removePage(page);
 
@@ -399,6 +527,7 @@ void assemblePages(QPDF& primary, std::vector<PageSelection> const& selections) 
     copied[&primary].assign(primaryPages.size(), false);
     std::set<QPDFObjGen> keptFields;
     std::vector<QPDFObjectHandle> labelNums;
+    OutputPageMap outputPages;
     long long outputIndex = 0;
 
     for (auto const& selection : selections) {
@@ -424,6 +553,10 @@ void assemblePages(QPDF& primary, std::vector<PageSelection> const& selections) 
             }
             primary.addPage(page.getObjectHandle(), false);
             QPDFObjectHandle added = primary.getAllPages().back();
+            // First occurrence wins: an outline that points at a repeated page navigates to the
+            // copy that appears first in the output.
+            outputPages[&source].emplace(sourcePages[static_cast<size_t>(index)].getObjGen(),
+                                         static_cast<int32_t>(outputIndex));
             // A repeated page would otherwise share its widgets with the first copy.
             if (repeat || (!fromPrimary && sourceForms.hasAcroForm())) {
                 try {
@@ -464,6 +597,10 @@ void assemblePages(QPDF& primary, std::vector<PageSelection> const& selections) 
          {"/Outlines", "/StructTreeRoot", "/MarkInfo", "/NeedsRendering", "/Perms"}) {
         root.removeKey(key);
     }
+
+    if (preserveOutlines) {
+        installOutlines(primary, outlines, outputPages);
+    }
 }
 
 // Fast structural settings, not an optimization pass: optimize_file owns size tuning. The
@@ -499,7 +636,7 @@ QpdfResult mergePdfs(const uint8_t* const* inputs, const int64_t* inputLens, int
         if (sources.empty()) {
             return {nullptr, "no readable merge inputs"};
         }
-        assemblePages(*sources.front(), selections);
+        assemblePages(*sources.front(), selections, true);
 
         QPDFWriter w{*sources.front()};
         w.setOutputMemory();
@@ -1410,7 +1547,7 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_merge_files(const char* const* paths, int32_
             return -1;
         }
         auto& dest = sources.front();
-        assemblePages(*dest, selections);
+        assemblePages(*dest, selections, true);
 
         FILE* out = createOutputFile(out_path);
         if (!out) {
