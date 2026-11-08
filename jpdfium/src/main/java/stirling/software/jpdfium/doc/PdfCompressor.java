@@ -371,7 +371,13 @@ public final class PdfCompressor {
                             PdfOptimizer.OBJECT_STREAMS_PRESERVE,
                             PdfOptimizer.STREAM_DATA_COMPRESS,
                             PdfOptimizer.DECODE_LEVEL_GENERALIZED)
-                    : PdfOptimizer.compress(resultBytes, 9, false, false);
+                    : PdfOptimizer.optimize(resultBytes,
+                            PdfOptimizer.RECOMPRESS_FLATE | PdfOptimizer.COMPRESS_STREAMS
+                                    | PdfOptimizer.DEDUPLICATE_IMAGES,
+                            9,
+                            PdfOptimizer.OBJECT_STREAMS_GENERATE,
+                            PdfOptimizer.STREAM_DATA_COMPRESS,
+                            PdfOptimizer.DECODE_LEVEL_GENERALIZED);
             if (opt != null && opt.length < resultBytes.length) {
                 resultBytes = opt;
                 streamsOptimized = true;
@@ -386,7 +392,8 @@ public final class PdfCompressor {
             // required: the all-DEFAULT form measured worse than the source on
             // some inputs (inflating streams instead of recompressing them).
             byte[] opt = PdfOptimizer.optimize(resultBytes,
-                    PdfOptimizer.RECOMPRESS_FLATE | PdfOptimizer.COMPRESS_STREAMS, 9,
+                    PdfOptimizer.RECOMPRESS_FLATE | PdfOptimizer.COMPRESS_STREAMS
+                            | PdfOptimizer.DEDUPLICATE_IMAGES, 9,
                     PdfOptimizer.OBJECT_STREAMS_PRESERVE,
                     PdfOptimizer.STREAM_DATA_COMPRESS,
                     PdfOptimizer.DECODE_LEVEL_GENERALIZED);

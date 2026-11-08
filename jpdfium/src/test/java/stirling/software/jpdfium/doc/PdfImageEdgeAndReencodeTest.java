@@ -20,6 +20,7 @@ import java.util.Random;
 import stirling.software.jpdfium.PdfDocument;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -164,12 +165,49 @@ class PdfImageEdgeAndReencodeTest {
         }
     }
 
-    private static PDImageXObject firstImage(PDDocument doc) throws Exception {
-        for (COSName name : doc.getPage(0).getResources().getXObjectNames()) {
-            if (doc.getPage(0).getResources().getXObject(name) instanceof PDImageXObject img) {
+    @Test
+    void deduplicatesSeparateCopiesOfTheSameImage() throws Exception {
+        byte[] input;
+        try (PDDocument doc = new PDDocument()) {
+            BufferedImage image = noisyImage(800, 1200);
+            for (int i = 0; i < 3; i++) {
+                PDImageXObject img = JPEGFactory.createFromImage(doc, image, 0.9f);
+                addImagePage(doc, img, 800, 1200);
+            }
+            input = save(doc);
+        }
+
+        try (PdfDocument doc = PdfDocument.open(input)) {
+            PdfCompressor.CompressResultWithBytes out = PdfCompressor.compress(doc,
+                    CompressOptions.builder()
+                            .maxImageDpi(-1)
+                            .maxImageEdgePx(600)
+                            .imageQuality(65)
+                            .preservationMode(PreservationMode.DESTRUCTIVE)
+                            .build());
+
+            assertTrue(out.bytes().length < input.length / 2,
+                    "three identical images must collapse to one stream");
+            try (PDDocument check = Loader.loadPDF(out.bytes())) {
+                assertEquals(3, check.getNumberOfPages());
+                PDImageXObject first = firstImage(check, 0);
+                PDImageXObject third = firstImage(check, 2);
+                assertSame(first.getCOSObject(), third.getCOSObject(),
+                        "duplicate pages must reference the same image object");
+            }
+        }
+    }
+
+    private static PDImageXObject firstImage(PDDocument doc, int page) throws Exception {
+        for (COSName name : doc.getPage(page).getResources().getXObjectNames()) {
+            if (doc.getPage(page).getResources().getXObject(name) instanceof PDImageXObject img) {
                 return img;
             }
         }
-        throw new AssertionError("no image found on the page");
+        throw new AssertionError("no image found on page " + page);
+    }
+
+    private static PDImageXObject firstImage(PDDocument doc) throws Exception {
+        return firstImage(doc, 0);
     }
 }

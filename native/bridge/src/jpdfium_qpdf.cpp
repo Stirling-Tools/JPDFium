@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <memory>
 #include <set>
@@ -16,6 +17,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -199,6 +201,59 @@ void optimizeImages(QPDF& pdf, int32_t jpegQuality) {
     }
 }
 
+// Hash a stream's dictionary and raw bytes so only bit-identical image
+// XObjects are candidates for deduplication. The dictionary check catches
+// images with identical pixels but different color spaces or decode arrays.
+size_t imageFingerprint(QPDFObjectHandle& image, std::string& dict) {
+    dict = image.getDict().unparse();
+    size_t hash = std::hash<std::string>{}(dict);
+    auto data = image.getRawStreamData();
+    if (data && data->getSize() > 0) {
+        const auto* bytes = data->getBuffer();
+        uint64_t fnv = 1469598103934665603ULL;
+        for (size_t i = 0; i < data->getSize(); ++i) {
+            fnv ^= bytes[i];
+            fnv *= 1099511628211ULL;
+        }
+        hash ^= std::hash<uint64_t>{}(fnv) + 0x9e3779b97f4a7c15ULL
+                + (hash << 6) + (hash >> 2);
+    }
+    return hash;
+}
+
+bool sameImage(QPDFObjectHandle& left, QPDFObjectHandle& right, std::string const& dict) {
+    if (left.getDict().unparse() != dict) return false;
+    auto a = left.getRawStreamData();
+    auto b = right.getRawStreamData();
+    if (!a || !b || a->getSize() != b->getSize()) return false;
+    return std::memcmp(a->getBuffer(), b->getBuffer(), a->getSize()) == 0;
+}
+
+// Point every duplicate image resource at the first identical stream. The
+// writer then drops the now-unreferenced copies. Duplicate images are common
+// in generated documents that repeat a cover, logo, or page background.
+void deduplicateImages(QPDF& pdf) {
+    QPDFPageDocumentHelper helper{pdf};
+    std::unordered_map<size_t, std::vector<QPDFObjectHandle>> seen;
+    for (auto& page : helper.getAllPages()) {
+        page.forEachImage(true, [&seen](QPDFObjectHandle& image,
+                                         QPDFObjectHandle& xobjDict,
+                                         std::string const& key) {
+            std::string dict;
+            size_t fingerprint = imageFingerprint(image, dict);
+            auto& bucket = seen[fingerprint];
+            for (auto& candidate : bucket) {
+                if (!sameImage(image, candidate, dict)) continue;
+                if (!image.isSameObjectAs(candidate)) {
+                    xobjDict.replaceKey(key, candidate);
+                }
+                return;
+            }
+            bucket.push_back(image);
+        });
+    }
+}
+
 void applyDocumentOptions(QPDF& pdf, const OptimizeOptions& options) {
     if (options.flags & JPDFIUM_QPDF_QDF) {
         if (options.flags & JPDFIUM_QPDF_LINEARIZE) {
@@ -207,6 +262,9 @@ void applyDocumentOptions(QPDF& pdf, const OptimizeOptions& options) {
     }
     if (options.flags & JPDFIUM_QPDF_OPTIMIZE_IMAGES) {
         optimizeImages(pdf, options.jpegQuality);
+    }
+    if (options.flags & JPDFIUM_QPDF_DEDUPLICATE_IMAGES) {
+        deduplicateImages(pdf);
     }
     if (options.flags & JPDFIUM_QPDF_REMOVE_UNREFERENCED_RESOURCES) {
         QPDFPageDocumentHelper{pdf}.removeUnreferencedResources();

@@ -566,6 +566,8 @@ JPDFIUM_EXPORT int32_t jpdfium_repair_inspect(const uint8_t* input, int64_t inpu
 #define JPDFIUM_QPDF_REMOVE_UNREFERENCED_RESOURCES 0x40
 // Image pass, equivalent to --optimize-images; jpegQuality < 0 keeps DCT data.
 #define JPDFIUM_QPDF_OPTIMIZE_IMAGES 0x80
+// Replace image XObjects whose dictionary and raw stream bytes are identical.
+#define JPDFIUM_QPDF_DEDUPLICATE_IMAGES 0x100
 // objectStreamMode: 0=disable,1=preserve,2=generate,-1=default
 // streamDataMode:   0=uncompress,1=preserve,2=compress,-1=default
 // decodeLevel:      0=none,1=generalized,2=specialized,3=all,-1=default

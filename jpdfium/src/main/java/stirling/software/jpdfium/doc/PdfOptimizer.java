@@ -27,6 +27,8 @@ public final class PdfOptimizer {
     public static final int REMOVE_UNREFERENCED_RESOURCES = 0x40;
     /** Run qpdf's DCT image optimization pass before writing. */
     public static final int OPTIMIZE_IMAGES = 0x80;
+    /** Point duplicate image XObjects at one identical stream before writing. */
+    public static final int DEDUPLICATE_IMAGES = 0x100;
 
     public static final int OBJECT_STREAMS_DISABLE = 0;
     public static final int OBJECT_STREAMS_PRESERVE = 1;

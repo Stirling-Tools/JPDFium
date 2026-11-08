@@ -32,6 +32,10 @@ publishing workflows, not library releases, so they are not listed here.
   the classpath, `PdfImageOptimizer` compares its JPEG output with the Rust
   encoder and keeps the smaller stream. `jpdfium.vips.trellis=true` enables
   libvips trellis/deringing on builds linked against mozjpeg.
+- `PdfCompressor` now deduplicates image XObjects with identical dictionaries
+  and raw stream bytes before writing. This collapses repeated covers, logos
+  and page backgrounds: a 10-page PDF repeating one 1600x2400 image went from
+  3.7 MB to 95 KB after the normal image pass, versus 938 KB without dedup.
 - Native qpdf font-stream replacement. `PdfFontEmbedder.embed(...)` replaces
   `/FontFile2` or `/FontFile3` streams by exact `/BaseFont`, updating
   `/Length1`; Type 1 `/FontFile` streams are rejected. `PdfXOptions.fontData(...)`
