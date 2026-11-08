@@ -22,7 +22,6 @@ thread_local! {
     /// Reused encoding buffer. JPEG output is copied into a libc allocation
     /// for the C ABI, but the scratch Vec keeps its capacity between images.
     static CMYK_JPEG_BUFFER: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
-    static RGB_JPEG_BUFFER: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
 }
 
 use fast_image_resize as fir;
@@ -633,8 +632,8 @@ unsafe fn encode_jpeg(
     out_len: *mut i64,
 ) -> i32 {
     let color = match components {
-        1 => jpeg_encoder::ColorType::Luma,
-        3 => jpeg_encoder::ColorType::Rgb,
+        1 => mozjpeg_rs::Subsampling::Gray,
+        3 => mozjpeg_rs::Subsampling::S420,
         _ => return JPDFIUM_ERR_INVALID,
     };
     if pixels.is_null() || width <= 0 || height <= 0 || width > 65535 || height > 65535 {
@@ -649,37 +648,31 @@ unsafe fn encode_jpeg(
     let data = slice::from_raw_parts(pixels, needed);
     let quality = quality.clamp(1, 100) as u8;
 
-    let mut buffer = RGB_JPEG_BUFFER.with(|cell| std::mem::take(&mut *cell.borrow_mut()));
-    buffer.clear();
-    let mut encoder = jpeg_encoder::Encoder::new(&mut buffer, quality);
-    encoder.set_optimized_huffman_tables(true);
-    if components == 3 {
-        // Match the ImageIO/libjpeg default for color photography. 4:4:4 would
-        // grow files by ~15% for chroma detail the eye does not resolve.
-        encoder.set_sampling_factor(jpeg_encoder::SamplingFactor::F_2_2);
-    }
-    let encoded = encoder
-        .encode(data, width as u16, height as u16, color)
-        .is_ok();
-    if !encoded || buffer.is_empty() {
-        RGB_JPEG_BUFFER.with(|cell| *cell.borrow_mut() = buffer);
-        return JPDFIUM_ERR_GENERIC;
-    }
+    // Baseline (not progressive) so every PDF reader accepts the stream.
+    // BaselineBalanced enables trellis quantization, deringing and optimized
+    // Huffman tables; trellis is the main 15-20% win over jpeg-encoder.
+    let encoder = mozjpeg_rs::Encoder::new(mozjpeg_rs::Preset::BaselineBalanced)
+        .quality(quality)
+        .subsampling(color)
+        .trellis(mozjpeg_rs::TrellisConfig::default())
+        .optimize_huffman(true)
+        .overshoot_deringing(true);
+    let encoded = if components == 1 {
+        encoder.encode_gray(data, width as u32, height as u32)
+    } else {
+        encoder.encode_rgb(data, width as u32, height as u32)
+    };
+    let buffer = match encoded {
+        Ok(bytes) if !bytes.is_empty() => bytes,
+        _ => return JPDFIUM_ERR_GENERIC,
+    };
 
     let ptr = malloc_copy(&buffer);
-    let len = buffer.len();
-    let capacity = buffer.capacity();
-    if capacity > 4 * 1024 * 1024 {
-        // A single huge JPEG must not pin its capacity to a long-lived worker.
-        RGB_JPEG_BUFFER.with(|cell| *cell.borrow_mut() = Vec::new());
-    } else {
-        RGB_JPEG_BUFFER.with(|cell| *cell.borrow_mut() = buffer);
-    }
     if ptr.is_null() {
         return JPDFIUM_ERR_GENERIC;
     }
     *out_ptr = ptr;
-    *out_len = len as i64;
+    *out_len = buffer.len() as i64;
     JPDFIUM_OK
 }
 #[no_mangle]

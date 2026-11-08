@@ -28,6 +28,10 @@ publishing workflows, not library releases, so they are not listed here.
   tables). On a 24-page 2550x3301 comic scan, 150 DPI / 1600 px / quality 65
   reduced 14.8 MB to 1.8 MB; Ghostscript `/ebook` left the same file at
   14.7 MB.
+- Optional libvips integration in the compressor: when `jpdfium-vips` is on
+  the classpath, `PdfImageOptimizer` compares its JPEG output with the Rust
+  encoder and keeps the smaller stream. `jpdfium.vips.trellis=true` enables
+  libvips trellis/deringing on builds linked against mozjpeg.
 - Native qpdf font-stream replacement. `PdfFontEmbedder.embed(...)` replaces
   `/FontFile2` or `/FontFile3` streams by exact `/BaseFont`, updating
   `/Length1`; Type 1 `/FontFile` streams are rejected. `PdfXOptions.fontData(...)`

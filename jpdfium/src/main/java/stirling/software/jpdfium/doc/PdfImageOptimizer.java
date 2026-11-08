@@ -871,11 +871,25 @@ public final class PdfImageOptimizer {
         // fixed tables ImageIO writes, with identical DCT coefficients.
         boolean gray = img.getType() == BufferedImage.TYPE_BYTE_GRAY;
         byte[] pixels = gray ? grayBytes(img) : rgbBytes(img);
+        byte[] best = null;
         if (pixels != null) {
-            byte[] jpeg = RustBridgeBindings.rustEncodeJpeg(
+            best = RustBridgeBindings.rustEncodeJpeg(
                     pixels, img.getWidth(), img.getHeight(), gray ? 1 : 3, q);
-            if (jpeg != null) return jpeg;
         }
+        // Optional libvips codec (jpdfium-vips on the classpath) writes JPEG
+        // with its own optimized/trellis tables. Keep whichever stream is
+        // smaller; both are valid baseline JPEG for PDFium.
+        if (ImageCodecs.hasCodec()) {
+            try {
+                byte[] vips = ImageCodecs.encode(img, ImageFormat.JPEG, q);
+                if (vips != null && (best == null || vips.length < best.length)) {
+                    best = vips;
+                }
+            } catch (IOException | RuntimeException ignored) {
+                // Keep the Rust/ImageIO result.
+            }
+        }
+        if (best != null) return best;
         try {
             return ImageCodecs.encode(img, ImageFormat.JPEG, q);
         } catch (IOException | RuntimeException e) {
