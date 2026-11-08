@@ -252,9 +252,8 @@ void deduplicateImages(QPDF& pdf) {
     }
 }
 
-
-extern "C" int32_t jpdfium_rust_encode_ccitt_g4(const uint8_t*, int64_t, int32_t, int32_t,
-                                                int32_t, uint8_t**, int64_t*);
+extern "C" int32_t jpdfium_rust_encode_ccitt_g4(const uint8_t*, int64_t, int32_t, int32_t, int32_t,
+                                                uint8_t**, int64_t*);
 extern "C" void jpdfium_rust_free(uint8_t*);
 
 // Re-encode 1-bit DeviceGray images as CCITT G4 when the encoded stream is
@@ -264,7 +263,7 @@ void encodeBilevelImages(QPDF& pdf) {
     QPDFPageDocumentHelper helper{pdf};
     for (auto& page : helper.getAllPages()) {
         page.forEachImage(true, [&pdf](QPDFObjectHandle& image, QPDFObjectHandle& resources,
-                                      std::string const& key) {
+                                       std::string const& key) {
             try {
                 auto dict = image.getDict();
                 if (!dict.hasKey("/Width") || !dict.hasKey("/Height") ||
@@ -272,12 +271,10 @@ void encodeBilevelImages(QPDF& pdf) {
                     return;
                 }
                 if (dict.getKey("/BitsPerComponent").getIntValue() != 1) return;
-                if (dict.hasKey("/ImageMask") || dict.hasKey("/Mask") ||
-                    dict.hasKey("/SMask")) {
+                if (dict.hasKey("/ImageMask") || dict.hasKey("/Mask") || dict.hasKey("/SMask")) {
                     return;
                 }
-                if (!dict.hasKey("/ColorSpace") ||
-                    !dict.getKey("/ColorSpace").isName() ||
+                if (!dict.hasKey("/ColorSpace") || !dict.getKey("/ColorSpace").isName() ||
                     dict.getKey("/ColorSpace").getName() != "/DeviceGray") {
                     return;
                 }
@@ -299,8 +296,8 @@ void encodeBilevelImages(QPDF& pdf) {
 
                 uint8_t* out = nullptr;
                 int64_t outLen = 0;
-                if (jpdfium_rust_encode_ccitt_g4(decoded->getBuffer(), decoded->getSize(),
-                                                 width, height, 0, &out, &outLen) != 0 ||
+                if (jpdfium_rust_encode_ccitt_g4(decoded->getBuffer(), decoded->getSize(), width,
+                                                 height, 0, &out, &outLen) != 0 ||
                     out == nullptr || outLen <= 0) {
                     if (out) jpdfium_rust_free(out);
                     return;
@@ -322,8 +319,8 @@ void encodeBilevelImages(QPDF& pdf) {
                 parms.replaceKey("/BlackIs1", QPDFObjectHandle::newBool(false));
                 replacement.replaceDict(replacementDict);
                 replacement.replaceStreamData(
-                        std::string(reinterpret_cast<const char*>(out), static_cast<size_t>(outLen)),
-                        QPDFObjectHandle::newName("/CCITTFaxDecode"), parms);
+                    std::string(reinterpret_cast<const char*>(out), static_cast<size_t>(outLen)),
+                    QPDFObjectHandle::newName("/CCITTFaxDecode"), parms);
                 jpdfium_rust_free(out);
                 resources.replaceKey(key, replacement);
             } catch (...) {
