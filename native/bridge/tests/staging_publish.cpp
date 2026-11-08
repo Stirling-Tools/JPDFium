@@ -31,19 +31,20 @@ void Write(const std::filesystem::path& path, const std::string& text) {
 
 bool PublishText(const std::filesystem::path& dest, const std::string& text,
                  const std::function<void(const std::string&)>& before_publish, bool apply_mode) {
+    const std::string destination = dest.string();
     jpdfium_staging::StagedFile staged;
-    jpdfium_staging::OpenUniqueSibling(dest.string(), &staged);
+    jpdfium_staging::OpenUniqueSibling(destination, &staged);
     const std::unique_ptr<jpdfium_staging::StagedFile, void (*)(jpdfium_staging::StagedFile*)>
         guard(&staged, [](jpdfium_staging::StagedFile* open) {
             if (open->file) std::fclose(open->file);
         });
     std::fwrite(text.data(), 1, text.size(), staged.file);
-    if (apply_mode && !jpdfium_staging::ApplyPublishModeTo(staged.file, dest.c_str())) {
+    if (apply_mode && !jpdfium_staging::ApplyPublishModeTo(staged.file, destination.c_str())) {
         return false;
     }
     before_publish(staged.path);
     std::string error;
-    const bool ok = jpdfium_staging::PublishStagedFile(&staged, dest.c_str(), &error);
+    const bool ok = jpdfium_staging::PublishStagedFile(&staged, destination.c_str(), &error);
     if (!ok) std::filesystem::remove(staged.path);
     return ok;
 }
