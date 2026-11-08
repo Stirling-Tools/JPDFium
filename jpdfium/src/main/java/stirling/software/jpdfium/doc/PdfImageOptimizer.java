@@ -176,6 +176,16 @@ public final class PdfImageOptimizer {
      */
     public static int optimize(PdfDocument doc, int maxImageDpi, int jpegQuality,
             int maxImageEdgePx, boolean convertPngToJpeg) {
+        return optimize(doc, maxImageDpi, jpegQuality, maxImageEdgePx, convertPngToJpeg, false);
+    }
+
+    /**
+     * Full image pass with an explicit JPEG scan mode.
+     *
+     * @param jpegProgressive write progressive JPEG instead of baseline
+     */
+    public static int optimize(PdfDocument doc, int maxImageDpi, int jpegQuality,
+            int maxImageEdgePx, boolean convertPngToJpeg, boolean jpegProgressive) {
         if (!isSupported()) return 0;
         if (maxImageDpi <= 0 && maxImageEdgePx <= 0 && jpegQuality <= 0) return 0;
         MemorySegment rawDoc = doc.rawHandle();
@@ -213,7 +223,7 @@ public final class PdfImageOptimizer {
                     if (type != FPDF_PAGEOBJ_IMAGE) continue;
 
                     if (optimizeImage(rawDoc, rawPage, obj, maxImageDpi, jpegQuality,
-                            maxImageEdgePx, convertPngToJpeg)) {
+                            maxImageEdgePx, convertPngToJpeg, jpegProgressive)) {
                         pageChanged = true;
                         rewritten++;
                     }
@@ -243,7 +253,8 @@ public final class PdfImageOptimizer {
     // Returns true when the image object was rewritten.
     private static boolean optimizeImage(MemorySegment rawDoc, MemorySegment rawPage,
                                          MemorySegment imgObj, int maxImageDpi, int jpegQuality,
-                                         int maxImageEdgePx, boolean convertPngToJpeg) {
+                                         int maxImageEdgePx, boolean convertPngToJpeg,
+                                         boolean jpegProgressive) {
         ImageMeta meta = readMeta(imgObj, rawPage);
         if (meta == null || meta.width() <= 0 || meta.height() <= 0) return false;
 
@@ -280,7 +291,7 @@ public final class PdfImageOptimizer {
         BufferedImage result = resize ? scale(src.image(), targetW, targetH) : src.image();
 
         if (reencode) {
-            byte[] jpeg = encodeJpeg(result, jpegQuality);
+            byte[] jpeg = encodeJpeg(result, jpegQuality, jpegProgressive);
             if (jpeg != null && adoptJpeg(jpeg.length, rawLength, resize)
                     && embedJpegInline(imgObj, jpeg)) {
                 return true;
@@ -865,7 +876,7 @@ public final class PdfImageOptimizer {
         }
     }
 
-    private static byte[] encodeJpeg(BufferedImage img, int quality) {
+    private static byte[] encodeJpeg(BufferedImage img, int quality, boolean progressive) {
         int q = Math.min(100, Math.max(1, quality));
         // Rust encoder emits optimized Huffman tables: 5-10% smaller than the
         // fixed tables ImageIO writes, with identical DCT coefficients.
@@ -874,12 +885,12 @@ public final class PdfImageOptimizer {
         byte[] best = null;
         if (pixels != null) {
             best = RustBridgeBindings.rustEncodeJpeg(
-                    pixels, img.getWidth(), img.getHeight(), gray ? 1 : 3, q);
+                    pixels, img.getWidth(), img.getHeight(), gray ? 1 : 3, q, progressive);
         }
         // Optional libvips codec (jpdfium-vips on the classpath) writes JPEG
         // with its own optimized/trellis tables. Keep whichever stream is
         // smaller; both are valid baseline JPEG for PDFium.
-        if (ImageCodecs.hasCodec()) {
+        if (!progressive && ImageCodecs.hasCodec()) {
             try {
                 byte[] vips = ImageCodecs.encode(img, ImageFormat.JPEG, q);
                 if (vips != null && (best == null || vips.length < best.length)) {

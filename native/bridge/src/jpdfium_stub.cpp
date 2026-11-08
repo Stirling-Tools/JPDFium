@@ -1408,6 +1408,11 @@ int32_t jpdfium_rust_encode_jpeg(const uint8_t*, int64_t, int32_t, int32_t, int3
     return fail_native_bytes(out_ptr, out_len);
 }
 
+int32_t jpdfium_rust_encode_jpeg_ex(const uint8_t*, int64_t, int32_t, int32_t, int32_t, int32_t,
+                                    int32_t, uint8_t** out_ptr, int64_t* out_len) {
+    return fail_native_bytes(out_ptr, out_len);
+}
+
 void jpdfium_rust_free(uint8_t* p) {
     std::free(p);
 }

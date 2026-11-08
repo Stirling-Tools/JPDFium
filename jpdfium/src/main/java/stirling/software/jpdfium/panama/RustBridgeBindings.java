@@ -107,6 +107,13 @@ public final class RustBridgeBindings {
                     ADDRESS, JAVA_LONG, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT,
                     ADDRESS, ADDRESS));
 
+    /** {@code int32_t jpdfium_rust_encode_jpeg_ex(..., progressive, out, outLen)} */
+    static final MethodHandle RUST_ENCODE_JPEG_EX = downcallOptional(
+            "jpdfium_rust_encode_jpeg_ex",
+            FunctionDescriptor.of(JAVA_INT,
+                    ADDRESS, JAVA_LONG, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT,
+                    ADDRESS, ADDRESS));
+
     /** {@code void jpdfium_rust_free(uint8_t* ptr)} */
     static final MethodHandle RUST_FREE = downcallOptional(
             "jpdfium_rust_free",
@@ -223,7 +230,17 @@ public final class RustBridgeBindings {
      */
     public static byte[] rustEncodeJpeg(byte[] pixels, int width, int height,
                                         int components, int quality) {
-        if (!AVAILABLE || RUST_ENCODE_JPEG == null || pixels == null || pixels.length == 0) {
+        return rustEncodeJpeg(pixels, width, height, components, quality, false);
+    }
+
+    /**
+     * As {@link #rustEncodeJpeg(byte[], int, int, int, int)}, with an explicit
+     * progressive JPEG scan mode.
+     */
+    public static byte[] rustEncodeJpeg(byte[] pixels, int width, int height,
+                                        int components, int quality, boolean progressive) {
+        MethodHandle encoder = progressive ? RUST_ENCODE_JPEG_EX : RUST_ENCODE_JPEG;
+        if (!AVAILABLE || encoder == null || pixels == null || pixels.length == 0) {
             return null;
         }
         try (Arena arena = Arena.ofConfined()) {
@@ -231,9 +248,13 @@ public final class RustBridgeBindings {
             MemorySegment outPtr = arena.allocate(ADDRESS);
             MemorySegment outLen = arena.allocate(JAVA_LONG);
 
-            int rc = (int) RUST_ENCODE_JPEG.invokeExact(
-                    inSeg, (long) pixels.length, width, height, components,
-                    Math.max(1, Math.min(100, quality)), outPtr, outLen);
+            int rc = progressive
+                    ? (int) RUST_ENCODE_JPEG_EX.invokeExact(
+                            inSeg, (long) pixels.length, width, height, components,
+                            Math.max(1, Math.min(100, quality)), 1, outPtr, outLen)
+                    : (int) RUST_ENCODE_JPEG.invokeExact(
+                            inSeg, (long) pixels.length, width, height, components,
+                            Math.max(1, Math.min(100, quality)), outPtr, outLen);
 
             if (rc != 0) {
                 return null;

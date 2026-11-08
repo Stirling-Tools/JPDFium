@@ -304,7 +304,8 @@ public final class PdfCompressor {
             try (PdfDocument working = PdfDocument.open(preImage)) {
                 n = PdfImageOptimizer.optimize(
                         working, opts.maxImageDpi(), opts.imageQuality(),
-                        opts.maxImageEdgePx(), opts.convertPngToJpeg());
+                        opts.maxImageEdgePx(), opts.convertPngToJpeg(),
+                        opts.jpegProgressive());
                 if (n > 0) {
                     imagePostBytes = working.saveBytes();
                 }

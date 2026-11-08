@@ -36,6 +36,9 @@ publishing workflows, not library releases, so they are not listed here.
   and raw stream bytes before writing. This collapses repeated covers, logos
   and page backgrounds: a 10-page PDF repeating one 1600x2400 image went from
   3.7 MB to 95 KB after the normal image pass, versus 938 KB without dedup.
+- `CompressOptions.jpegProgressive` writes rewritten images as progressive
+  JPEG. Saves 2-11% more depending on image content while remaining a standard
+  PDF DCT stream; baseline stays the default for maximum reader compatibility.
 - Native qpdf font-stream replacement. `PdfFontEmbedder.embed(...)` replaces
   `/FontFile2` or `/FontFile3` streams by exact `/BaseFont`, updating
   `/Length1`; Type 1 `/FontFile` streams are rejected. `PdfXOptions.fontData(...)`

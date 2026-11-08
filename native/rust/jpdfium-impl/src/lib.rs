@@ -602,6 +602,27 @@ pub unsafe extern "C" fn jpdfium_rust_encode_jpeg(
     out_ptr: *mut *mut u8,
     out_len: *mut i64,
 ) -> i32 {
+    jpdfium_rust_encode_jpeg_ex(
+        pixels, pixels_len, width, height, components, quality, 0, out_ptr, out_len,
+    )
+}
+
+/// As [`jpdfium_rust_encode_jpeg`], with a progressive-scan flag.
+///
+/// # Safety
+/// `pixels` must point to `pixels_len` readable bytes; the out pointers must be valid.
+#[no_mangle]
+pub unsafe extern "C" fn jpdfium_rust_encode_jpeg_ex(
+    pixels: *const u8,
+    pixels_len: i64,
+    width: i32,
+    height: i32,
+    components: i32,
+    quality: i32,
+    progressive: i32,
+    out_ptr: *mut *mut u8,
+    out_len: *mut i64,
+) -> i32 {
     if out_ptr.is_null() || out_len.is_null() {
         return JPDFIUM_ERR_INVALID;
     }
@@ -611,7 +632,8 @@ pub unsafe extern "C" fn jpdfium_rust_encode_jpeg(
     // Contain a panic so it cannot unwind across the C ABI boundary.
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         encode_jpeg(
-            pixels, pixels_len, width, height, components, quality, out_ptr, out_len,
+            pixels, pixels_len, width, height, components, quality, progressive != 0, out_ptr,
+            out_len,
         )
     }))
     .unwrap_or(JPDFIUM_ERR_GENERIC)
@@ -628,6 +650,7 @@ unsafe fn encode_jpeg(
     height: i32,
     components: i32,
     quality: i32,
+    progressive: bool,
     out_ptr: *mut *mut u8,
     out_len: *mut i64,
 ) -> i32 {
@@ -648,10 +671,15 @@ unsafe fn encode_jpeg(
     let data = slice::from_raw_parts(pixels, needed);
     let quality = quality.clamp(1, 100) as u8;
 
-    // Baseline (not progressive) so every PDF reader accepts the stream.
-    // BaselineBalanced enables trellis quantization, deringing and optimized
-    // Huffman tables; trellis is the main 15-20% win over jpeg-encoder.
-    let encoder = mozjpeg_rs::Encoder::new(mozjpeg_rs::Preset::BaselineBalanced)
+    // Baseline is the default for maximum reader compatibility; progressive
+    // saves 4-5% more on scans. Both presets enable trellis quantization,
+    // deringing and optimized Huffman tables.
+    let preset = if progressive {
+        mozjpeg_rs::Preset::ProgressiveBalanced
+    } else {
+        mozjpeg_rs::Preset::BaselineBalanced
+    };
+    let encoder = mozjpeg_rs::Encoder::new(preset)
         .quality(quality)
         .subsampling(color)
         .trellis(mozjpeg_rs::TrellisConfig::default())

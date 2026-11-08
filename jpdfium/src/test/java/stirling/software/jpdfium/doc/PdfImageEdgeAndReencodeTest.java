@@ -166,6 +166,41 @@ class PdfImageEdgeAndReencodeTest {
     }
 
     @Test
+    void progressiveJpegIsValidAndRenders() throws Exception {
+        byte[] input = noisyJpegPdf(800, 1200, 0.9f);
+        try (PdfDocument doc = PdfDocument.open(input)) {
+            PdfCompressor.CompressResultWithBytes out = PdfCompressor.compress(doc,
+                    CompressOptions.builder()
+                            .maxImageEdgePx(600)
+                            .imageQuality(65)
+                            .jpegProgressive(true)
+                            .preservationMode(PreservationMode.DESTRUCTIVE)
+                            .build());
+            try (PDDocument check = Loader.loadPDF(out.bytes())) {
+                PDImageXObject image = firstImage(check);
+                byte[] raw;
+                try (var in = image.getCOSObject().createRawInputStream()) {
+                    raw = in.readAllBytes();
+                }
+                boolean progressive = false;
+                for (int i = 0; i + 1 < raw.length; i++) {
+                    if ((raw[i] & 0xFF) == 0xFF && (raw[i + 1] & 0xFF) == 0xC2) {
+                        progressive = true;
+                        break;
+                    }
+                }
+                assertTrue(progressive, "image stream must use a progressive SOF2 marker");
+            }
+            try (PdfDocument reopened = PdfDocument.open(out.bytes());
+                 var page = reopened.page(0)) {
+                BufferedImage rendered = page.renderImage(72);
+                assertTrue(rendered.getWidth() > 0 && rendered.getHeight() > 0,
+                        "progressive JPEG must render through PDFium");
+            }
+        }
+    }
+
+    @Test
     void deduplicatesSeparateCopiesOfTheSameImage() throws Exception {
         byte[] input;
         try (PDDocument doc = new PDDocument()) {
