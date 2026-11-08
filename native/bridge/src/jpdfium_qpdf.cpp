@@ -320,17 +320,22 @@ void encodeBilevelJbig2(QPDF& pdf) {
                         return;
                     }
                 }
-                int width = static_cast<int>(dict.getKey("/Width").getIntValue());
-                int height = static_cast<int>(dict.getKey("/Height").getIntValue());
-                if (width <= 0 || height <= 0 ||
-                    static_cast<int64_t>(width) * height > kBilevelMaxPixels) {
+                int64_t widthValue = dict.getKey("/Width").getIntValue();
+                int64_t heightValue = dict.getKey("/Height").getIntValue();
+                if (widthValue <= 0 || heightValue <= 0 || widthValue > 32768 ||
+                    heightValue > 32768 || widthValue * heightValue > kBilevelMaxPixels) {
                     return;
                 }
-                std::string objectKey = image.getObjGen().unparse();
-                auto cached = replacements.find(objectKey);
-                if (cached != replacements.end()) {
-                    resources.replaceKey(key, cached->second);
-                    return;
+                int width = static_cast<int>(widthValue);
+                int height = static_cast<int>(heightValue);
+                std::string objectKey =
+                    image.isIndirect() ? image.getObjGen().unparse() : std::string();
+                if (!objectKey.empty()) {
+                    auto cached = replacements.find(objectKey);
+                    if (cached != replacements.end()) {
+                        resources.replaceKey(key, cached->second);
+                        return;
+                    }
                 }
                 auto decoded = image.getStreamData(qpdf_dl_all);
                 if (!decoded) return;
@@ -378,7 +383,7 @@ void encodeBilevelJbig2(QPDF& pdf) {
                                               QPDFObjectHandle::newName("/JBIG2Decode"), parms);
                 jpdfium_rust_free(pageData);
                 if (globalsData) jpdfium_rust_free(globalsData);
-                replacements[objectKey] = replacement;
+                if (!objectKey.empty()) replacements[objectKey] = replacement;
                 resources.replaceKey(key, replacement);
             } catch (...) {
                 // A malformed image must not abort the structural pass.
@@ -423,17 +428,22 @@ void encodeBilevelImages(QPDF& pdf) {
                         return;
                     }
                 }
-                int width = static_cast<int>(dict.getKey("/Width").getIntValue());
-                int height = static_cast<int>(dict.getKey("/Height").getIntValue());
-                if (width <= 0 || height <= 0 ||
-                    static_cast<int64_t>(width) * height > kBilevelMaxPixels) {
+                int64_t widthValue = dict.getKey("/Width").getIntValue();
+                int64_t heightValue = dict.getKey("/Height").getIntValue();
+                if (widthValue <= 0 || heightValue <= 0 || widthValue > 32768 ||
+                    heightValue > 32768 || widthValue * heightValue > kBilevelMaxPixels) {
                     return;
                 }
-                std::string objectKey = image.getObjGen().unparse();
-                auto cached = replacements.find(objectKey);
-                if (cached != replacements.end()) {
-                    resources.replaceKey(key, cached->second);
-                    return;
+                int width = static_cast<int>(widthValue);
+                int height = static_cast<int>(heightValue);
+                std::string objectKey =
+                    image.isIndirect() ? image.getObjGen().unparse() : std::string();
+                if (!objectKey.empty()) {
+                    auto cached = replacements.find(objectKey);
+                    if (cached != replacements.end()) {
+                        resources.replaceKey(key, cached->second);
+                        return;
+                    }
                 }
                 auto decoded = image.getStreamData(qpdf_dl_all);
                 if (!decoded) return;
@@ -468,7 +478,7 @@ void encodeBilevelImages(QPDF& pdf) {
                     std::string(reinterpret_cast<const char*>(out), static_cast<size_t>(outLen)),
                     QPDFObjectHandle::newName("/CCITTFaxDecode"), parms);
                 jpdfium_rust_free(out);
-                replacements[objectKey] = replacement;
+                if (!objectKey.empty()) replacements[objectKey] = replacement;
                 resources.replaceKey(key, replacement);
             } catch (...) {
                 // A malformed image must not abort the structural pass.
