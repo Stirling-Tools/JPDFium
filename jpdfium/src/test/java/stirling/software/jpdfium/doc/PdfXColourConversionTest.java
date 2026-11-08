@@ -59,6 +59,7 @@ class PdfXColourConversionTest {
 
     @Test
     void neutralsKeepProcessColourWhenDisabled() throws Exception {
+        assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
         PdfXOptions options = options(PdfXStandard.PDF_X_4).neutralsToBlack(false).build();
         byte[] out = PdfXConverter.applyMetadata(textAndRectangle(), options);
         try (PDDocument doc = Loader.loadPDF(out)) {
@@ -208,6 +209,8 @@ class PdfXColourConversionTest {
             in = save(doc);
         }
         assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
+        assumeTrue(PdfFontEmbedder.embedMissing(in).unresolved().isEmpty(),
+                "no Helvetica substitute in the system font directories");
         byte[] out = PdfXConverter.applyMetadata(in,
                 options(PdfXStandard.PDF_X_4).requireEmbeddedFonts(true).build());
         try (PdfDocument doc = PdfDocument.open(out)) {
@@ -236,6 +239,79 @@ class PdfXColourConversionTest {
         JPDFiumException error = assertThrows(JPDFiumException.class,
                 () -> convert(in, PdfXStandard.PDF_X_4));
         assertTrue(error.getMessage().contains("signature"), error.getMessage());
+    }
+
+    @Test
+    void sharedColourSpaceIsConvertedOnEveryPage() throws Exception {
+        byte[] in;
+        try (PDDocument doc = new PDDocument()) {
+            COSDictionary spaces = new COSDictionary();
+            spaces.setItem(COSName.getPDFName("CS0"), COSName.DEVICERGB);
+            spaces.setDirect(false);
+            for (int i = 0; i < 2; i++) {
+                PDPage page = new PDPage();
+                org.apache.pdfbox.pdmodel.PDResources resources = new org.apache.pdfbox.pdmodel.PDResources();
+                resources.getCOSObject().setItem(COSName.COLORSPACE, spaces);
+                page.setResources(resources);
+                doc.addPage(page);
+                COSStream content = doc.getDocument().createCOSStream();
+                try (var os = content.createOutputStream()) {
+                    os.write("/CS0 cs 0.2 0.4 0.6 sc 0 0 10 10 re f".getBytes(StandardCharsets.US_ASCII));
+                }
+                page.getCOSObject().setItem(COSName.CONTENTS, content);
+            }
+            in = save(doc);
+        }
+        byte[] out = convert(in, PdfXStandard.PDF_X_4);
+        try (PDDocument doc = Loader.loadPDF(out)) {
+            for (int i = 0; i < 2; i++) {
+                List<List<Float>> sc = operands(tokens(doc.getPage(i).getContents().readAllBytes()), "sc");
+                assertEquals(4, sc.getFirst().size(), "page " + i + " kept RGB operands");
+            }
+        }
+    }
+
+    @Test
+    void unsignedSignatureFieldIsNotTreatedAsSigned() throws Exception {
+        byte[] in;
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage();
+            doc.addPage(page);
+            org.apache.pdfbox.pdmodel.interactive.form.PDAcroForm form =
+                    new org.apache.pdfbox.pdmodel.interactive.form.PDAcroForm(doc);
+            doc.getDocumentCatalog().setAcroForm(form);
+            org.apache.pdfbox.pdmodel.interactive.form.PDSignatureField field =
+                    new org.apache.pdfbox.pdmodel.interactive.form.PDSignatureField(form);
+            field.getWidgets().getFirst().setRectangle(new PDRectangle(10, 10, 100, 40));
+            field.getWidgets().getFirst().setPage(page);
+            page.getAnnotations().add(field.getWidgets().getFirst());
+            form.getFields().add(field);
+            in = save(doc);
+        }
+        byte[] out = convert(in, PdfXStandard.PDF_X_4);
+        try (PdfDocument doc = PdfDocument.open(out)) {
+            assertEquals(1, doc.pageCount());
+        }
+    }
+
+    @Test
+    void documentOverloadLeavesTheInputUntouched() throws Exception {
+        assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
+        try (PdfDocument source = PdfDocument.open(textAndRectangle());
+                PdfDocument out = PdfXConverter.applyMetadata(source,
+                        options(PdfXStandard.PDF_X_4).title("Changed").build())) {
+            assertNotEquals(java.util.Optional.of("Changed"), PdfMetadata.of(source.rawHandleForRead()).title());
+            assertEquals(1, out.pageCount());
+        }
+    }
+
+    @Test
+    void mismatchedLutIsRejectedBeforeTheNativeCall() {
+        assumeTrue(stirling.software.jpdfium.panama.ColorBindings.pdfxPrepareAvailable(),
+                "PDF/X native pipeline unavailable");
+        assertThrows(IllegalArgumentException.class,
+                () -> stirling.software.jpdfium.panama.ColorBindings.pdfxPrepareBytes(
+                        new byte[] {1}, 4, new byte[10], 17, 0, 90));
     }
 
     @Test

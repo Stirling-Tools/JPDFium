@@ -7,7 +7,6 @@
 #include <filesystem>
 #include <map>
 #include <memory>
-#include <mutex>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -15,12 +14,13 @@
 
 #include "jpdfium.h"
 #include "jpdfium_rust.h"
+#include "jpdfium_staging.h"
 
 #ifdef JPDFIUM_HAS_QPDF
 #include <qpdf/Constants.h>
 
 #include <qpdf/Buffer.hh>
-#include <qpdf/Pl_DCT.hh>
+#include <qpdf/Pl_QPDFTokenizer.hh>
 #include <qpdf/Pl_String.hh>
 #include <qpdf/QPDF.hh>
 #include <qpdf/QPDFAcroFormDocumentHelper.hh>
@@ -31,6 +31,10 @@
 #include <qpdf/QPDFWriter.hh>
 
 #include "jpdfium_qpdf_writer_lock.h"
+#endif
+
+#ifdef JPDFIUM_HAS_TURBOJPEG
+#include <turbojpeg.h>
 #endif
 
 namespace {
@@ -222,6 +226,9 @@ class Converter {
     std::set<QPDFObjGen> done_functions_;
     std::set<QPDFObjGen> done_resources_;
     std::vector<QPDFObjectHandle> done_direct_resources_;
+    std::map<QPDFObjGen, std::map<std::string, ColourSpaceInfo>> spaces_memo_;
+    std::vector<std::pair<QPDFObjectHandle, std::map<std::string, ColourSpaceInfo>>>
+        direct_spaces_memo_;
     int64_t vector_ops_ = 0;
     int64_t images_ = 0;
     int64_t images_skipped_ = 0;
@@ -555,6 +562,20 @@ Converter::Resources Converter::PrepareResources(QPDFObjectHandle resources) {
     if (!resources.isDictionary()) return res;
     QPDFObjectHandle spaces = resources.getKey("/ColorSpace");
     if (!spaces.isDictionary()) return res;
+    if (spaces.isIndirect()) {
+        auto it = spaces_memo_.find(spaces.getObjGen());
+        if (it != spaces_memo_.end()) {
+            res.spaces = it->second;
+            return res;
+        }
+    } else {
+        for (const auto& [seen, classified] : direct_spaces_memo_) {
+            if (seen.isSameObjectAs(spaces)) {
+                res.spaces = classified;
+                return res;
+            }
+        }
+    }
     for (const std::string& key : spaces.getKeys()) {
         QPDFObjectHandle cs = spaces.getKey(key);
         ColourSpaceInfo info = Classify(cs);
@@ -562,6 +583,11 @@ Converter::Resources Converter::PrepareResources(QPDFObjectHandle resources) {
             spaces.replaceKey(key, info.replacement);
         }
         res.spaces[key] = info;
+    }
+    if (spaces.isIndirect()) {
+        spaces_memo_[spaces.getObjGen()] = res.spaces;
+    } else {
+        direct_spaces_memo_.emplace_back(spaces, res.spaces);
     }
     return res;
 }
@@ -816,7 +842,9 @@ void ColourFilter::FlushInline() {
                    (bytes.back() == ' ' || bytes.back() == '\n' || bytes.back() == '\r')) {
                 bytes.pop_back();
             }
-            QPDFObjectHandle tmp = QPDFObjectHandle::newStream(&owner_.pdf_, bytes);
+            auto scratch = QPDF::create();
+            scratch->emptyPDF();
+            QPDFObjectHandle tmp = QPDFObjectHandle::newStream(scratch.get(), bytes);
             if (dict.hasKey("/Filter")) tmp.getDict().replaceKey("/Filter", dict.getKey("/Filter"));
             if (dict.hasKey("/DecodeParms")) {
                 tmp.getDict().replaceKey("/DecodeParms", dict.getKey("/DecodeParms"));
@@ -865,8 +893,9 @@ std::string Converter::FilterContent(const std::string& content, Resources& res,
     ColourFilter filter(*this, res.spaces);
     std::string out;
     Pl_String sink("pdfx-content", nullptr, out);
-    QPDFObjectHandle tmp = QPDFObjectHandle::newStream(&pdf_, content);
-    tmp.filterAsContents(&filter, &sink);
+    Pl_QPDFTokenizer tokenizer("pdfx-tokens", &filter, &sink);
+    tokenizer.write(reinterpret_cast<const unsigned char*>(content.data()), content.size());
+    tokenizer.finish();
     *changed = filter.changed();
     if (sets_font) *sets_font = filter.sets_font();
     return out;
@@ -914,58 +943,110 @@ void Converter::ConvertImage(QPDFObjectHandle image) {
     }
 }
 
+QPDFObjectHandle Detached(QPDFObjectHandle h) {
+    return h.isNull() ? h : QPDFObjectHandle::parse(h.unparseResolved());
+}
+
+QPDFObjectHandle SanitiseDctParms(QPDFObjectHandle filter, QPDFObjectHandle parms) {
+    if (Name(filter) != "/DCTDecode" || !parms.isDictionary()) return parms;
+    QPDFObjectHandle kept = QPDFObjectHandle::newDictionary();
+    if (parms.hasKey("/ColorTransform")) {
+        kept.replaceKey("/ColorTransform", parms.getKey("/ColorTransform"));
+    }
+    return kept.getKeys().empty() ? QPDFObjectHandle::newNull() : kept;
+}
+
+QPDFObjectHandle SanitisedParms(QPDFObjectHandle filter, QPDFObjectHandle parms) {
+    if (!filter.isArray() || !parms.isArray()) {
+        return filter.isName() ? SanitiseDctParms(filter, parms) : parms;
+    }
+    QPDFObjectHandle clean = QPDFObjectHandle::newArray();
+    for (int i = 0; i < filter.getArrayNItems(); ++i) {
+        QPDFObjectHandle p =
+            i < parms.getArrayNItems() ? parms.getArrayItem(i) : QPDFObjectHandle::newNull();
+        clean.appendItem(SanitiseDctParms(filter.getArrayItem(i), p));
+    }
+    return clean;
+}
+
+std::shared_ptr<Buffer> DecodeJpegLeniently(const Buffer& jpeg, int64_t width, int64_t height) {
+#ifdef JPDFIUM_HAS_TURBOJPEG
+    tjhandle handle = tjInitDecompress();
+    if (!handle) return nullptr;
+    auto data = std::make_shared<Buffer>(static_cast<size_t>(width * height * 3));
+    const int rc = tjDecompress2(handle, jpeg.getBuffer(),
+                                 static_cast<unsigned long>(jpeg.getSize()), data->getBuffer(),
+                                 static_cast<int>(width), 0, static_cast<int>(height), TJPF_RGB, 0);
+    const bool ok = rc == 0 || tjGetErrorCode(handle) == TJERR_WARNING;
+    tjDestroy(handle);
+    return ok ? data : nullptr;
+#else
+    (void)jpeg;
+    (void)width;
+    (void)height;
+    return nullptr;
+#endif
+}
+
+std::shared_ptr<Buffer> JpegBytes(QPDF* scratch, const std::shared_ptr<Buffer>& raw,
+                                  QPDFObjectHandle filter, QPDFObjectHandle parms) {
+    if (Name(filter) == "/DCTDecode") return raw;
+    if (!filter.isArray() || filter.getArrayNItems() < 2 ||
+        Name(filter.getArrayItem(filter.getArrayNItems() - 1)) != "/DCTDecode") {
+        return nullptr;
+    }
+    QPDFObjectHandle before = QPDFObjectHandle::newArray();
+    QPDFObjectHandle before_parms = QPDFObjectHandle::newArray();
+    for (int i = 0; i + 1 < filter.getArrayNItems(); ++i) {
+        before.appendItem(filter.getArrayItem(i));
+        before_parms.appendItem(parms.isArray() && i < parms.getArrayNItems()
+                                    ? parms.getArrayItem(i)
+                                    : QPDFObjectHandle::newNull());
+    }
+    QPDFObjectHandle tmp = QPDFObjectHandle::newStream(
+        scratch, std::string(reinterpret_cast<const char*>(raw->getBuffer()), raw->getSize()));
+    tmp.getDict().replaceKey("/Filter", before);
+    tmp.getDict().replaceKey("/DecodeParms", before_parms);
+    try {
+        return tmp.getStreamData(qpdf_dl_all);
+    } catch (std::exception&) {
+        return nullptr;
+    }
+}
+
 std::shared_ptr<Buffer> Converter::DecodeImage(QPDFObjectHandle image, bool was_dct) {
     try {
         return image.getStreamData(qpdf_dl_all);
     } catch (std::exception&) {
     }
     QPDFObjectHandle dict = image.getDict();
-    QPDFObjectHandle filter = dict.getKey("/Filter");
-    QPDFObjectHandle parms = dict.getKey("/DecodeParms");
-    QPDFObjectHandle clean_parms = parms;
-    auto sanitise = [](QPDFObjectHandle f, QPDFObjectHandle p) {
-        if (Name(f) != "/DCTDecode" || !p.isDictionary()) return p;
-        QPDFObjectHandle kept = QPDFObjectHandle::newDictionary();
-        if (p.hasKey("/ColorTransform"))
-            kept.replaceKey("/ColorTransform", p.getKey("/ColorTransform"));
-        return kept.getKeys().empty() ? QPDFObjectHandle::newNull() : kept;
-    };
-    if (filter.isArray() && parms.isArray()) {
-        clean_parms = QPDFObjectHandle::newArray();
-        for (int i = 0; i < filter.getArrayNItems(); ++i) {
-            QPDFObjectHandle p =
-                i < parms.getArrayNItems() ? parms.getArrayItem(i) : QPDFObjectHandle::newNull();
-            clean_parms.appendItem(sanitise(filter.getArrayItem(i), p));
-        }
-    } else if (filter.isName()) {
-        clean_parms = sanitise(filter, parms);
-    }
+    QPDFObjectHandle filter = Detached(dict.getKey("/Filter"));
+    QPDFObjectHandle parms = Detached(SanitisedParms(filter, dict.getKey("/DecodeParms")));
     std::shared_ptr<Buffer> raw;
     try {
         raw = image.getRawStreamData();
     } catch (std::exception&) {
         return nullptr;
     }
+    auto scratch = QPDF::create();
+    scratch->emptyPDF();
     QPDFObjectHandle tmp = QPDFObjectHandle::newStream(
-        &pdf_, std::string(reinterpret_cast<const char*>(raw->getBuffer()), raw->getSize()));
+        scratch.get(),
+        std::string(reinterpret_cast<const char*>(raw->getBuffer()), raw->getSize()));
     tmp.getDict().replaceKey("/Filter", filter);
-    if (!clean_parms.isNull()) tmp.getDict().replaceKey("/DecodeParms", clean_parms);
+    if (!parms.isNull()) tmp.getDict().replaceKey("/DecodeParms", parms);
     try {
         return tmp.getStreamData(qpdf_dl_all);
     } catch (std::exception&) {
     }
-    if (!was_dct) return nullptr;
-    static std::mutex lenient;
-    std::lock_guard<std::mutex> guard(lenient);
-    Pl_DCT::setThrowOnCorruptData(false);
-    std::shared_ptr<Buffer> decoded;
-    try {
-        decoded = tmp.getStreamData(qpdf_dl_all);
-    } catch (std::exception&) {
-        decoded.reset();
-    }
-    Pl_DCT::setThrowOnCorruptData(true);
-    return decoded;
+    std::shared_ptr<Buffer> jpeg = JpegBytes(scratch.get(), raw, filter, parms);
+    if (!was_dct || !jpeg) return nullptr;
+    const int64_t width =
+        dict.getKey("/Width").isInteger() ? dict.getKey("/Width").getIntValue() : 0;
+    const int64_t height =
+        dict.getKey("/Height").isInteger() ? dict.getKey("/Height").getIntValue() : 0;
+    if (width <= 0 || height <= 0) return nullptr;
+    return DecodeJpegLeniently(*jpeg, width, height);
 }
 
 struct Raster {
@@ -1705,8 +1786,9 @@ JPDFIUM_EXPORT int32_t jpdfium_pdfx_prepare_file(const char* in_path, const char
 #else
     if (!in_path || !out_path) return JPDFIUM_ERR_INVALID;
     if (lut && (lut_grid < 2 || lut_grid > 256)) return JPDFIUM_ERR_INVALID;
-    const std::string staging = std::string(out_path) + ".pdfx-tmp";
+    std::string staging;
     try {
+        staging = jpdfium_staging::CreateUniqueSibling(out_path);
         Options options = MakeOptions(level, lut, lut_grid, flags, quality);
         {
             auto pdf = QPDF::create();
@@ -1719,12 +1801,12 @@ JPDFIUM_EXPORT int32_t jpdfium_pdfx_prepare_file(const char* in_path, const char
             writer.write();
         }
         std::error_code ec;
-        std::filesystem::rename(staging, out_path, ec);
-        if (ec) {
+        if (std::filesystem::file_size(staging, ec) == 0 || ec) {
             std::filesystem::remove(staging, ec);
             return JPDFIUM_ERR_IO;
         }
-        return JPDFIUM_OK;
+        jpdfium_staging::ApplyPublishMode(staging, out_path);
+        return jpdfium_staging::PublishStaged(staging, out_path) ? JPDFIUM_OK : JPDFIUM_ERR_IO;
     } catch (const PdfxNonconformance& e) {
         std::error_code ec;
         std::filesystem::remove(staging, ec);

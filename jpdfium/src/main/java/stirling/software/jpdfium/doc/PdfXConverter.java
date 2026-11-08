@@ -61,6 +61,15 @@ public final class PdfXConverter {
 
     /** Convert colours and apply PDF/X intent metadata into a new document; {@code doc} is not modified. */
     public static PdfDocument applyMetadata(PdfDocument doc, PdfXOptions options) {
+        if (doc == null) {
+            throw new JPDFiumException("PDF/X metadata application requires a document");
+        }
+        try (PdfDocument copy = PdfDocument.open(doc.saveBytes())) {
+            return applyMetadataToCopy(copy, options);
+        }
+    }
+
+    private static PdfDocument applyMetadataToCopy(PdfDocument doc, PdfXOptions options) {
         prepare(doc, options);
         applyDocumentInfo(doc, options);
         PdfXStandard standard = options.standard();
@@ -114,10 +123,7 @@ public final class PdfXConverter {
             if (!options.fontData().isEmpty()) {
                 applyFontData(metadata, options);
             }
-            if (options.embedMissingFonts() && PdfFontEmbedder.isAvailable()) {
-                Files.write(metadata, PdfFontEmbedder.embedMissing(metadata,
-                        options.fontDirectories().toArray(Path[]::new)).pdf());
-            }
+            embedMissingFonts(metadata, options);
             try (PdfDocument document = PdfDocument.open(metadata)) {
                 requireSamePageCount(pages, document.pageCount());
                 applyPageBoxes(document);
@@ -137,9 +143,32 @@ public final class PdfXConverter {
         if (!options.embedMissingFonts() || !PdfFontEmbedder.isAvailable()) return pdf;
         try {
             return PdfFontEmbedder.embedMissing(pdf, options.fontDirectories().toArray(Path[]::new)).pdf();
-        } catch (IOException e) {
-            throw new JPDFiumException("PDF/X font embedding failed: " + e.getMessage(), e);
+        } catch (IOException | JPDFiumException e) {
+            if (options.requireEmbeddedFonts()) {
+                throw new JPDFiumException("PDF/X font embedding failed: " + e.getMessage(), e);
+            }
+            return pdf;
         }
+    }
+
+    private static void embedMissingFonts(Path pdf, PdfXOptions options) throws IOException {
+        if (!options.embedMissingFonts() || !PdfFontEmbedder.isAvailable()) return;
+        PdfFontEmbedder.Result result;
+        try {
+            result = PdfFontEmbedder.embedMissing(pdf, options.fontDirectories().toArray(Path[]::new));
+        } catch (JPDFiumException e) {
+            if (options.requireEmbeddedFonts()) throw e;
+            return;
+        }
+        if (!result.embedded().isEmpty()) Files.write(pdf, result.pdf());
+    }
+
+    private static boolean isSigned(PdfDocument doc) {
+        int count = PdfSignatures.count(doc.rawHandleForRead());
+        for (int i = 0; i < count; i++) {
+            if (PdfSignatures.details(doc.nativeHandle(), i).byteRange() != null) return true;
+        }
+        return false;
     }
 
     private static void applyFontData(Path pdf, PdfXOptions options) throws IOException {
@@ -341,7 +370,7 @@ public final class PdfXConverter {
             throw new JPDFiumException("PDF/X metadata requires an output intent ICC profile");
         }
         validateCmykProfile(profile);
-        if (PdfSignatures.count(doc.rawHandleForRead()) > 0) {
+        if (isSigned(doc)) {
             throw new JPDFiumException("PDF/X conversion rewrites the document and would invalidate"
                     + " its digital signature; remove the signature first");
         }

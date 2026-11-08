@@ -503,6 +503,7 @@ public final class ColorBindings {
             throw new JPDFiumException(
                     "This native build has no PDF/X preparation pass");
         }
+        requireValidLut(lut, lutGrid);
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment in = arena.allocateFrom(JAVA_BYTE, pdf);
             MemorySegment lutSeg = lut == null ? MemorySegment.NULL : arena.allocateFrom(JAVA_BYTE, lut);
@@ -529,6 +530,7 @@ public final class ColorBindings {
             throw new JPDFiumException(
                     "This native build has no PDF/X preparation pass");
         }
+        requireValidLut(lut, lutGrid);
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment in = arena.allocateFrom(inPath);
             MemorySegment out = arena.allocateFrom(outPath);
@@ -543,6 +545,15 @@ public final class ColorBindings {
             NativeRuntime.rethrowFatal(t);
             throw new JPDFiumException(
                     "PDF/X preparation failed", t);
+        }
+    }
+
+    private static void requireValidLut(byte[] lut, int lutGrid) {
+        if (lut == null) return;
+        if (lutGrid < 2 || lutGrid > 256
+                || lut.length != (long) lutGrid * lutGrid * lutGrid * 4) {
+            throw new IllegalArgumentException("CMYK LUT must hold grid^3 * 4 bytes for a grid of"
+                    + " 2 to 256; got " + lut.length + " bytes for grid " + lutGrid);
         }
     }
 
