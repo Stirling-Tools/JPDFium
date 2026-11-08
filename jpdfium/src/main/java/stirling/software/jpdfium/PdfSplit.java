@@ -501,18 +501,32 @@ public final class PdfSplit {
     }
 
     private static void rejectSharedOutputs(Path input, List<Path> outputs) throws IOException {
-        Path source = input.toAbsolutePath().normalize();
+        Path source = canonical(input);
         Set<Path> seen = new HashSet<>();
         for (Path output : outputs) {
-            Path target = output.toAbsolutePath().normalize();
-            if (target.equals(source) || (Files.exists(target) && Files.isSameFile(source, target))) {
+            Path target = canonical(output);
+            if (target.equals(source)) {
                 throw new IllegalArgumentException("output must not be the input: " + output);
             }
-            Path resolved = Files.exists(target) ? target.toRealPath() : target;
-            if (!seen.add(resolved)) {
+            if (!seen.add(target)) {
                 throw new IllegalArgumentException("each range needs its own output: " + output);
             }
         }
+    }
+
+    private static Path canonical(Path path) throws IOException {
+        Path absolute = path.toAbsolutePath().normalize();
+        if (Files.exists(absolute)) return absolute.toRealPath();
+        Path parent = absolute.getParent();
+        Path resolvedParent = parent != null && Files.exists(parent) ? parent.toRealPath() : parent;
+        Path name = absolute.getFileName();
+        Path target = resolvedParent == null ? absolute : resolvedParent.resolve(name);
+        if (Files.isSymbolicLink(target)) {
+            Path link = Files.readSymbolicLink(target);
+            Path linked = target.resolveSibling(link).normalize();
+            return linked.equals(absolute) ? linked : canonical(linked);
+        }
+        return target;
     }
 
     /**

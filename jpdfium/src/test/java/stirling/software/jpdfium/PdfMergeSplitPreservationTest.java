@@ -277,6 +277,25 @@ class PdfMergeSplitPreservationTest {
         assertArrayEquals(original, Files.readAllBytes(source));
     }
 
+    @Test
+    void manyRangesRejectOutputsThatMeetThroughSymlinks(@TempDir Path tmp) throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real PDFium native library");
+        Path source = tmp.resolve("source.pdf");
+        Files.write(source, catalogRichPdf(2, "A"));
+        Path real = Files.createDirectory(tmp.resolve("real"));
+        Path alias = Files.createSymbolicLink(tmp.resolve("alias"), real);
+        Path dangling = Files.createSymbolicLink(tmp.resolve("dangling.pdf"), real.resolve("out.pdf"));
+        List<int[]> ranges = List.of(new int[] {0, 0}, new int[] {1, 1});
+
+        for (StorageOptions options : List.of(FILE_ONLY, StorageOptions.builder().memory().build())) {
+            assertThrows(IllegalArgumentException.class, () -> PdfSplit.extractPageRangesToFiles(
+                    source, ranges, List.of(alias.resolve("out.pdf"), real.resolve("out.pdf")), options));
+            assertThrows(IllegalArgumentException.class, () -> PdfSplit.extractPageRangesToFiles(
+                    source, ranges, List.of(dangling, real.resolve("out.pdf")), options));
+        }
+        assertFalse(Files.exists(real.resolve("out.pdf")));
+    }
+
     private static int[] pixels(BufferedImage image) {
         return image.getRGB(0, 0, image.getWidth(), image.getHeight(), null, 0, image.getWidth());
     }
