@@ -31,6 +31,10 @@ publishing workflows, not library releases, so they are not listed here.
   through `extractPageRangeToFile` one at a time. 400 single-page parts of a 4.3 MB PDF take 0.12 s instead of
   7.3 s, and 400 parts of a 28.7 MB PDF 0.5 s instead of 45 s. Parts match
   `extractPageRangeToFile` page for page, form fields and page labels included.
+- Native qpdf font-stream replacement. `PdfFontEmbedder.embed(...)` replaces
+  `/FontFile2` or `/FontFile3` streams by exact `/BaseFont`, updating
+  `/Length1`; Type 1 `/FontFile` streams are rejected. `PdfXOptions.fontData(...)`
+  applies the same replacement before PDF/X validation.
 - Font embedding. `PdfFontEmbedder.embed(...)` embeds TrueType, OpenType, CFF
   and Type 1 programs by exact `/BaseFont` in one qpdf rewrite, into fonts that
   have no program as well as ones that do, building a missing descriptor and

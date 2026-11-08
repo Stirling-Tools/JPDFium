@@ -1469,23 +1469,6 @@ EmbedFontsResult embedFonts(std::span<const uint8_t> input, std::vector<FontSour
             return field.hasKey("/ByteRange") ||
                    (value.isDictionary() && value.hasKey("/ByteRange"));
         };
-        std::function<bool(QPDFObjectHandle const&)> signedField =
-            [&](QPDFObjectHandle const& field) {
-                if (!field.isDictionary()) return false;
-                if (hasSignatureValue(field)) return true;
-                for (auto const& child : field.getKey("/Fields").isArray()
-                                             ? field.getKey("/Fields").getArrayAsVector()
-                                             : std::vector<QPDFObjectHandle>{}) {
-                    if (signedField(child)) return true;
-                }
-                for (auto const& child : field.getKey("/Kids").isArray()
-                                             ? field.getKey("/Kids").getArrayAsVector()
-                                             : std::vector<QPDFObjectHandle>{}) {
-                    if (signedField(child)) return true;
-                }
-                return false;
-            };
-
         std::vector<QPDFObjectHandle> fonts;
         auto collectFromResources = [&](QPDFObjectHandle const& res) {
             auto fontDict = res.isDictionary() ? res.getKey("/Font") : QPDFObjectHandle();
@@ -1508,8 +1491,26 @@ EmbedFontsResult embedFonts(std::span<const uint8_t> input, std::vector<FontSour
             collectFromResources(dict.getKey("/Resources"));
         }
         auto acroForm = qpdf->getRoot().getKey("/AcroForm");
+        std::vector<QPDFObjectHandle> pendingFields{acroForm};
+        std::set<QPDFObjGen> visitedFields;
+        bool signedForm = false;
+        while (!pendingFields.empty()) {
+            QPDFObjectHandle field = pendingFields.back();
+            pendingFields.pop_back();
+            if (!field.isDictionary()) continue;
+            if (field.isIndirect() && !visitedFields.insert(field.getObjGen()).second) continue;
+            if (hasSignatureValue(field)) {
+                signedForm = true;
+                break;
+            }
+            for (char const* key : {"/Fields", "/Kids"}) {
+                QPDFObjectHandle children = field.getKey(key);
+                if (!children.isArray()) continue;
+                for (auto& child : children.getArrayAsVector()) pendingFields.push_back(child);
+            }
+        }
         if (acroForm.isDictionary()) {
-            if (signedField(acroForm)) {
+            if (signedForm) {
                 return {nullptr, "document is signed; refusing to rewrite", -3};
             }
             collectFromResources(acroForm.getKey("/DR"));
@@ -1536,7 +1537,6 @@ EmbedFontsResult embedFonts(std::span<const uint8_t> input, std::vector<FontSour
         int embedded = 0;
         bool openType = false;
         std::set<QPDFObjGen> seen;
-        std::map<QPDFObjGen, QPDFObjGen> filledBy;
         for (auto& font : fonts) {
             if (font.isIndirect() && !seen.insert(font.getObjGen()).second) continue;
             auto descendants = font.getKey("/DescendantFonts");
@@ -1567,21 +1567,21 @@ EmbedFontsResult embedFonts(std::span<const uint8_t> input, std::vector<FontSour
                         "MacExpertEncoding fonts cannot be substituted safely: " + fontName, -4};
             }
             auto descriptor = target.getKey("/FontDescriptor");
-            if (descriptor.isIndirect()) {
-                auto owner = filledBy.find(descriptor.getObjGen());
-                if (owner != filledBy.end() && owner->second != target.getObjGen()) {
-                    descriptor = qpdf->makeIndirectObject(
-                        QPDFObjectHandle::newDictionary(descriptor.getDictAsMap()));
-                    for (char const* key : {"/FontFile", "/FontFile2", "/FontFile3"})
-                        descriptor.removeKey(key);
-                    descriptor.replaceKey("/FontName", target.getKey("/BaseFont"));
-                    target.replaceKey("/FontDescriptor", descriptor);
-                }
-            }
             bool hasProgram = descriptor.isDictionary() &&
                               (descriptor.hasKey("/FontFile") || descriptor.hasKey("/FontFile2") ||
                                descriptor.hasKey("/FontFile3"));
             if (hasProgram && onlyMissing) continue;
+            if (descriptor.isIndirect()) {
+                // A descriptor can be shared by a font that is not being
+                // replaced. Always isolate it before installing a program so
+                // the other font keeps its original glyphs.
+                descriptor = qpdf->makeIndirectObject(
+                    QPDFObjectHandle::newDictionary(descriptor.getDictAsMap()));
+                for (char const* key : {"/FontFile", "/FontFile2", "/FontFile3"})
+                    descriptor.removeKey(key);
+                descriptor.replaceKey("/FontName", target.getKey("/BaseFont"));
+                target.replaceKey("/FontDescriptor", descriptor);
+            }
             auto flags =
                 descriptor.isDictionary() ? descriptor.getKey("/Flags") : QPDFObjectHandle();
             bool symbolic = flags.isInteger()
@@ -1591,8 +1591,6 @@ EmbedFontsResult embedFonts(std::span<const uint8_t> input, std::vector<FontSour
                 descriptor = newDescriptor(*qpdf, target, program.face, symbolic);
                 target.replaceKey("/FontDescriptor", descriptor);
             }
-            if (descriptor.isIndirect())
-                filledBy.try_emplace(descriptor.getObjGen(), target.getObjGen());
             if (!cid && !target.getKey("/Widths").isArray())
                 addWidths(target, program.face, symbolic);
             std::set<FT_UInt> glyphs;

@@ -116,9 +116,11 @@ public final class PdfFontEmbedder {
         Map<String, byte[]> normalized = new LinkedHashMap<>();
         Map<String, byte[]> originals = new HashMap<>();
         for (var entry : fonts.entrySet()) {
-            String name = entry.getKey() == null ? "" : entry.getKey().trim().replaceFirst("^/", "");
+            String rawName = entry.getKey();
+            String name = rawName == null ? "" : rawName.trim().replaceFirst("^/", "");
             byte[] data = entry.getValue();
-            if (name.isBlank() || name.indexOf('\0') >= 0 || data == null || data.length == 0) {
+            if (name.isBlank() || (rawName != null && rawName.indexOf('\0') >= 0)
+                    || data == null || data.length == 0) {
                 throw new IllegalArgumentException("font name and data must not be empty");
             }
             byte[] previous = originals.putIfAbsent(name, data);
@@ -156,17 +158,7 @@ public final class PdfFontEmbedder {
      */
     public static Result embedMissing(byte[] pdf, Path... fontDirs) throws IOException {
         List<String> missing = nonEmbedded(pdf);
-        Map<String, Face> index = INDEXES.computeIfAbsent(
-                fontDirs.length == 0 ? SYSTEM_FONT_DIRS : List.of(fontDirs), PdfFontEmbedder::index);
-        Map<String, byte[]> found = new LinkedHashMap<>();
-        Map<Face, byte[]> programs = new HashMap<>();
-        for (String name : missing) {
-            Face face = resolve(index, key(name));
-            if (face == null) continue;
-            byte[] data = programs.get(face);
-            if (data == null) programs.put(face, data = program(face));
-            found.put(name, data);
-        }
+        Map<String, byte[]> found = programsFor(missing, fontDirs);
         byte[] out = found.isEmpty() ? null : QpdfLib.embedFonts(pdf, found, true);
         if (out == null) return new Result(pdf, List.of(), missing);
         List<String> unresolved = nonEmbedded(out);
@@ -181,6 +173,17 @@ public final class PdfFontEmbedder {
     public static FileResult embedMissingTo(Path input, Path output, Path... fontDirs)
             throws IOException {
         List<String> missing = nonEmbedded(input);
+        Map<String, byte[]> found = programsFor(missing, fontDirs);
+        if (found.isEmpty() || !QpdfLib.embedFontsToFile(input, output, found, true)) {
+            return new FileResult(List.of(), missing);
+        }
+        List<String> unresolved = nonEmbedded(output);
+        return new FileResult(
+                missing.stream().filter(n -> !unresolved.contains(n)).toList(), unresolved);
+    }
+
+    private static Map<String, byte[]> programsFor(List<String> missing, Path... fontDirs)
+            throws IOException {
         Map<String, Face> index = INDEXES.computeIfAbsent(
                 fontDirs.length == 0 ? SYSTEM_FONT_DIRS : List.of(fontDirs), PdfFontEmbedder::index);
         Map<String, byte[]> found = new LinkedHashMap<>();
@@ -192,13 +195,7 @@ public final class PdfFontEmbedder {
             if (data == null) programs.put(face, data = program(face));
             found.put(name, data);
         }
-        if (found.isEmpty()) return new FileResult(List.of(), missing);
-        if (!QpdfLib.embedFontsToFile(input, output, found, true)) {
-            return new FileResult(List.of(), missing);
-        }
-        List<String> unresolved = nonEmbedded(output);
-        return new FileResult(
-                missing.stream().filter(n -> !unresolved.contains(n)).toList(), unresolved);
+        return found;
     }
 
     private static List<String> nonEmbedded(byte[] pdf) {
@@ -260,7 +257,9 @@ public final class PdfFontEmbedder {
                             public FileVisitResult visitFile(
                                     Path file, BasicFileAttributes attrs) {
                                 String name = file.getFileName().toString().toLowerCase(Locale.ROOT);
-                                if (attrs.isRegularFile()
+                                if ((attrs.isRegularFile()
+                                                || (attrs.isSymbolicLink()
+                                                    && Files.isRegularFile(file)))
                                         && name.matches(".*\\.(ttf|otf|ttc|otc|pfb|pfa|t1)")) {
                                     files.add(file);
                                 }
