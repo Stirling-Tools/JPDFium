@@ -440,18 +440,17 @@ public final class OutputTransaction implements AutoCloseable {
             probeDefaultCreatePermissions();
 
     private static Set<PosixFilePermission> probeDefaultCreatePermissions() {
+        Path dir = null;
         Path probe = null;
         try {
-            Path dir = Path.of(System.getProperty("java.io.tmpdir", "."));
-            String name = ".jpdfium-umask-probe-"
-                    + ProcessHandle.current().pid() + "-" + System.nanoTime();
-            probe = dir.resolve(name);
-            Files.createFile(probe);
+            dir = Files.createTempDirectory("jpdfium-umask-probe-");
+            probe = Files.createFile(dir.resolve("probe"));
             return Set.copyOf(Files.getPosixFilePermissions(probe));
         } catch (UnsupportedOperationException | IOException _) {
             return null;
         } finally {
             deleteQuietly(probe);
+            deleteQuietly(dir);
         }
     }
 
