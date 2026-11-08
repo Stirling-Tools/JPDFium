@@ -136,6 +136,8 @@ class PdfImageEdgeAndReencodeTest {
         try (PdfDocument doc = PdfDocument.open(input)) {
             assertEquals(0, PdfImageOptimizer.optimize(doc, 300),
                     "the DPI-only overload must not quality-reencode a below-threshold JPEG");
+            assertEquals(0, PdfImageOptimizer.optimize(doc, 300, 60),
+                    "the legacy three-argument overload keeps its downsampling-only behavior");
         }
     }
 
@@ -219,10 +221,14 @@ class PdfImageEdgeAndReencodeTest {
                             .imageQuality(70)
                             .preservationMode(PreservationMode.DESTRUCTIVE)
                             .build());
+            assertEquals(1, out.result().imagesOptimized(),
+                    "the grayscale image must actually be rewritten");
             try (PDDocument check = Loader.loadPDF(out.bytes())) {
                 PDImageXObject rewritten = firstImage(check);
                 assertEquals("DeviceGray", rewritten.getColorSpace().getName(),
                         "grayscale sources must not be expanded to RGB");
+                assertEquals(400, rewritten.getWidth(), "grayscale image must be downsampled");
+                assertEquals(600, rewritten.getHeight(), "grayscale image must be downsampled");
             }
         }
     }

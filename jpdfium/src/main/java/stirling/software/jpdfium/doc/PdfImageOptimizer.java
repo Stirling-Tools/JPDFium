@@ -159,7 +159,7 @@ public final class PdfImageOptimizer {
      * {@code jpegQuality} ({@code <= 0} keeps the flate path). Returns the number rewritten.
      */
     public static int optimize(PdfDocument doc, int maxImageDpi, int jpegQuality) {
-        return optimize(doc, maxImageDpi, jpegQuality, 0, false);
+        return optimize(doc, maxImageDpi, jpegQuality, 0, false, false, false);
     }
 
     /**
@@ -176,7 +176,7 @@ public final class PdfImageOptimizer {
      */
     public static int optimize(PdfDocument doc, int maxImageDpi, int jpegQuality,
             int maxImageEdgePx, boolean convertPngToJpeg) {
-        return optimize(doc, maxImageDpi, jpegQuality, maxImageEdgePx, convertPngToJpeg, false);
+        return optimize(doc, maxImageDpi, jpegQuality, maxImageEdgePx, convertPngToJpeg, false, true);
     }
 
     /**
@@ -186,6 +186,13 @@ public final class PdfImageOptimizer {
      */
     public static int optimize(PdfDocument doc, int maxImageDpi, int jpegQuality,
             int maxImageEdgePx, boolean convertPngToJpeg, boolean jpegProgressive) {
+        return optimize(doc, maxImageDpi, jpegQuality, maxImageEdgePx, convertPngToJpeg,
+                jpegProgressive, true);
+    }
+
+    private static int optimize(PdfDocument doc, int maxImageDpi, int jpegQuality,
+            int maxImageEdgePx, boolean convertPngToJpeg, boolean jpegProgressive,
+            boolean allowQualityOnly) {
         if (!isSupported()) return 0;
         if (maxImageDpi <= 0 && maxImageEdgePx <= 0 && jpegQuality <= 0) return 0;
         MemorySegment rawDoc = doc.rawHandle();
@@ -223,7 +230,7 @@ public final class PdfImageOptimizer {
                     if (type != FPDF_PAGEOBJ_IMAGE) continue;
 
                     if (optimizeImage(rawDoc, rawPage, obj, maxImageDpi, jpegQuality,
-                            maxImageEdgePx, convertPngToJpeg, jpegProgressive)) {
+                            maxImageEdgePx, convertPngToJpeg, jpegProgressive, allowQualityOnly)) {
                         pageChanged = true;
                         rewritten++;
                     }
@@ -254,7 +261,7 @@ public final class PdfImageOptimizer {
     private static boolean optimizeImage(MemorySegment rawDoc, MemorySegment rawPage,
                                          MemorySegment imgObj, int maxImageDpi, int jpegQuality,
                                          int maxImageEdgePx, boolean convertPngToJpeg,
-                                         boolean jpegProgressive) {
+                                         boolean jpegProgressive, boolean allowQualityOnly) {
         ImageMeta meta = readMeta(imgObj, rawPage);
         if (meta == null || meta.width() <= 0 || meta.height() <= 0) return false;
 
@@ -277,7 +284,8 @@ public final class PdfImageOptimizer {
         boolean wantJpeg = jpegQuality > 0 && (jpegOriginal || convertPngToJpeg);
         // Below the resize threshold a JPEG is only re-encoded when it is large enough
         // for the saving to matter; resized images always go through the encoder.
-        boolean reencode = wantJpeg && (resize || rawLength >= MIN_REENCODE_BYTES);
+        boolean reencode = wantJpeg
+                && (resize || (allowQualityOnly && rawLength >= MIN_REENCODE_BYTES));
         if (!resize && !reencode) return false;
 
         // Skip anything that cannot round-trip safely through a PDFium bitmap:
@@ -384,6 +392,7 @@ public final class PdfImageOptimizer {
     // FPDFImageObj_HasTransparency covers SMask/alpha. Re-encoding such an image
     // as an opaque JPEG would make formerly transparent pixels visible.
     private static boolean hasTransparency(MemorySegment imgObj) {
+        if (ImageObjBindings.FPDFImageObj_HasTransparency == null) return true;
         try {
             return (int) ImageObjBindings.FPDFImageObj_HasTransparency.invokeExact(imgObj) == 1;
         } catch (Throwable t) {
@@ -420,23 +429,9 @@ public final class PdfImageOptimizer {
         ImageSource decoded = decodedSource(imgObj, meta);
         if (decoded != null) return decoded;
 
-        try {
-            MemorySegment bmp = (MemorySegment) ImageObjBindings.FPDFImageObj_GetRenderedBitmap
-                    .invokeExact(rawDoc, rawPage, imgObj);
-            if (bmp.equals(MemorySegment.NULL)) return null;
-            try {
-                return bitmapToSource(bmp);
-            } finally {
-                try {
-                    PageEditBindings.FPDFBitmap_Destroy.invokeExact(bmp);
-                } catch (Throwable t) {
-                    NativeRuntime.rethrowFatal(t);
-                }
-            }
-        } catch (Throwable t) {
-            NativeRuntime.rethrowFatal(t);
-            return null;
-        }
+        // The rendered fallback applies the image matrix, so feeding those pixels
+        // back into the original object would transform it twice. Skip the rewrite.
+        return null;
     }
 
     private static ImageSource decodedSource(MemorySegment imgObj, ImageMeta meta) {

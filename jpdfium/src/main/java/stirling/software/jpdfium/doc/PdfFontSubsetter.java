@@ -65,6 +65,10 @@ public final class PdfFontSubsetter {
                 subset = FontNormalizer.subset(
                         request.fontProgram(), request.codepoints(), true);
             } catch (RuntimeException unsupportedFormat) {
+                String message = unsupportedFormat.getMessage();
+                if (message != null && message.contains("runtime is")) {
+                    throw unsupportedFormat; // admission rejection is not an unsupported font
+                }
                 // Type1/CFF programs that HarfBuzz cannot subset are left untouched.
                 continue;
             }

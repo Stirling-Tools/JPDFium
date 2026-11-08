@@ -221,7 +221,7 @@ size_t imageFingerprint(QPDFObjectHandle& image, std::string& dict) {
 }
 
 bool sameImage(QPDFObjectHandle& left, QPDFObjectHandle& right, std::string const& dict) {
-    if (left.getDict().unparse() != dict) return false;
+    if (right.getDict().unparse() != dict) return false;
     auto a = left.getRawStreamData();
     auto b = right.getRawStreamData();
     if (!a || !b || a->getSize() != b->getSize()) return false;

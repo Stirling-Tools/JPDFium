@@ -218,6 +218,7 @@ public final class RustBridgeBindings {
             }
             return extractAndFree(outPtr, outLen);
         } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
             return null;
         }
     }

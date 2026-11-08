@@ -75,6 +75,7 @@ public final class ImageObjBindings {
             FunctionDescriptor.of(JAVA_LONG, ADDRESS, JAVA_INT, ADDRESS, JAVA_LONG));
 
     /** Whether the image carries transparency (SMask/alpha). */
-    public static final MethodHandle FPDFImageObj_HasTransparency = downcall("FPDFImageObj_HasTransparency",
-            FunctionDescriptor.of(JAVA_INT, ADDRESS));
+    public static final MethodHandle FPDFImageObj_HasTransparency =
+            Symbols.downcallOptional("FPDFImageObj_HasTransparency",
+                    FunctionDescriptor.of(JAVA_INT, ADDRESS));
 }
