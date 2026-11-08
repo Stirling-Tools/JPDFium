@@ -71,10 +71,16 @@ int main(int argc,char**argv){
  cmsPipelineInsertStage(b,cmsAT_BEGIN,cmsStageAllocCLut16bit(NULL,GB,3,4,b2a));
  cmsPipelineInsertStage(b1,cmsAT_BEGIN,cmsStageAllocCLut16bit(NULL,GB,3,4,b2a));
  cmsPipelineInsertStage(g,cmsAT_BEGIN,cmsStageAllocCLut16bit(NULL,GB,3,1,gamt));
- cmsWriteTag(h,cmsSigAToB0Tag,a);cmsWriteTag(h,cmsSigAToB1Tag,a1);cmsWriteTag(h,cmsSigBToA0Tag,b);cmsWriteTag(h,cmsSigBToA1Tag,b1);cmsWriteTag(h,cmsSigGamutTag,g);cmsWriteTag(h,cmsSigMediaWhitePointTag,cmsD50_XYZ());
+ if(!cmsWriteTag(h,cmsSigAToB0Tag,a)||!cmsWriteTag(h,cmsSigAToB1Tag,a1)||
+    !cmsWriteTag(h,cmsSigBToA0Tag,b)||!cmsWriteTag(h,cmsSigBToA1Tag,b1)||
+    !cmsWriteTag(h,cmsSigGamutTag,g)||!cmsWriteTag(h,cmsSigMediaWhitePointTag,cmsD50_XYZ())){
+  fprintf(stderr,"tag write failed\n");return 8;
+ }
  cmsMLU*desc=cmsMLUalloc(NULL,1),*cprt=cmsMLUalloc(NULL,1);
  cmsMLUsetASCII(desc,"en","US","JPDFium Compact CMYK (GS calibrated)");
  cmsMLUsetASCII(cprt,"en","US","Derived from CC0 CGATS001Compat and a synthetic RGB calibration chart");
- cmsWriteTag(h,cmsSigProfileDescriptionTag,desc);cmsWriteTag(h,cmsSigCopyrightTag,cprt);
+ if(!cmsWriteTag(h,cmsSigProfileDescriptionTag,desc)||!cmsWriteTag(h,cmsSigCopyrightTag,cprt)){
+  fprintf(stderr,"text tag write failed\n");return 8;
+ }
  return cmsSaveProfileToFile(h,argv[1])?0:7;
 }
