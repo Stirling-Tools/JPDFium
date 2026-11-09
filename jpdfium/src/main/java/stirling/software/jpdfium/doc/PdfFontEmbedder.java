@@ -263,7 +263,7 @@ public final class PdfFontEmbedder {
         for (FontStatus status : statuses) {
             finalStatuses.add(status.resolved() && unresolved.contains(status.baseName())
                     ? new FontStatus(status.baseName(), status.source(), status.fsType(), false,
-                            "native embedder left the font unchanged")
+                            "native embedder left the font unchanged (glyph order or width coverage)")
                     : status);
         }
         return new Result(out, missing.stream().filter(n -> !unresolved.contains(n)).toList(),
