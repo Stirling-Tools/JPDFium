@@ -45,6 +45,7 @@ extern "C" {
 #define JPDFIUM_ERR_REDACT_UNVERIFIABLE (-8)  // redaction could not run/verify (no silent degrade)
 #define JPDFIUM_ERR_TOO_LARGE (-9)            // save aborted: output exceeded the byte budget
 #define JPDFIUM_ERR_CONTENT_MUTATED (-10)     // operation modified content, then failed
+#define JPDFIUM_ERR_PDFX_NONCONFORMANT (-11)
 #define JPDFIUM_ERR_NATIVE (-99)
 
 // Bridge ABI version and layout probe surface. Packaged Java/native
@@ -655,11 +656,28 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_force_version(const uint8_t* input, int64_t 
                                                   int64_t* outputLen);
 
 // Replace the stream behind a matching /BaseFont font descriptor.
+// Retained for ABI compatibility; new code should use jpdfium_qpdf_embed_fonts.
 // Caller frees *output with jpdfium_free_buffer.
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_replace_font_stream(const uint8_t* input, int64_t inputLen,
                                                         const char* baseFont,
                                                         const uint8_t* fontData, int64_t fontLen,
                                                         uint8_t** output, int64_t* outputLen);
+
+// Embed font programs into fonts whose /BaseFont matches names[i] exactly, in one pass.
+// onlyMissing leaves fonts that already carry a program untouched.
+// Caller frees *output with jpdfium_free_buffer.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_embed_fonts(const uint8_t* input, int64_t inputLen,
+                                                int32_t count, const char* const* names,
+                                                const uint8_t* const* fonts,
+                                                const int64_t* fontLens, int32_t onlyMissing,
+                                                uint8_t** output, int64_t* outputLen);
+
+// File-backed form of jpdfium_qpdf_embed_fonts: reads in_path and writes out_path,
+// so callers do not materialize the PDF bytes in the Java heap.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_embed_fonts_file(const char* in_path, const char* out_path,
+                                                     int32_t count, const char* const* names,
+                                                     const uint8_t* const* fonts,
+                                                     const int64_t* fontLens, int32_t onlyMissing);
 
 // In-process qpdf structural sanitization (FFM, no CLI).
 // Scrubs metadata/info/structure, JavaScript actions, embedded files, AcroForm
@@ -927,6 +945,23 @@ JPDFIUM_EXPORT int32_t jpdfium_color_pdfx_file(const char* in_path, const char* 
                                                const uint8_t* icc, int64_t icc_len,
                                                const char* version, const char* conformance,
                                                const char* condition_identifier, const char* info);
+
+#define JPDFIUM_PDFX_CONVERT_COLOURS (0x01)
+#define JPDFIUM_PDFX_CONVERT_IMAGES (0x02)
+#define JPDFIUM_PDFX_NEUTRALS_TO_BLACK (0x04)
+#define JPDFIUM_PDFX_CONVERT_SPECIAL (0x08)
+#define JPDFIUM_PDFX_STRICT_IMAGES (0x10)
+
+JPDFIUM_EXPORT int32_t jpdfium_pdfx_prepare_bytes(const uint8_t* input, int64_t input_len,
+                                                  int32_t level, const uint8_t* lut,
+                                                  int32_t lut_grid, int32_t flags, int32_t quality,
+                                                  uint8_t** output, int64_t* output_len,
+                                                  char* message, int32_t message_cap);
+
+JPDFIUM_EXPORT int32_t jpdfium_pdfx_prepare_file(const char* in_path, const char* out_path,
+                                                 int32_t level, const uint8_t* lut,
+                                                 int32_t lut_grid, int32_t flags, int32_t quality,
+                                                 char* message, int32_t message_cap);
 
 // N-Up Layout
 //
