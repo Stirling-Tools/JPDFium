@@ -46,6 +46,7 @@ extern "C" {
 #define JPDFIUM_ERR_TOO_LARGE (-9)            // save aborted: output exceeded the byte budget
 #define JPDFIUM_ERR_CONTENT_MUTATED (-10)     // operation modified content, then failed
 #define JPDFIUM_ERR_ALLOC (-11)               // native output allocation failed
+#define JPDFIUM_ERR_PDFX_NONCONFORMANT (-12)  // PDF/X preparation failed
 #define JPDFIUM_ERR_NATIVE (-99)
 
 // Bridge ABI version and layout probe surface. Packaged Java/native
