@@ -113,20 +113,56 @@ public final class QpdfLib {
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, JAVA_INT, ADDRESS, ADDRESS, ADDRESS,
                     JAVA_INT, ADDRESS, ADDRESS));
 
+    private static final MethodHandle REPLACE_FONT_STREAM_HANDLE = Symbols.downcallOptionalUnguarded(
+            "jpdfium_qpdf_replace_font_stream",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS, ADDRESS, JAVA_LONG, ADDRESS,
+                    ADDRESS));
+
     /** True when this native build can embed font programs. */
     public static boolean isFontReplacementSupported() {
         return EMBED_FONTS_HANDLE != null;
     }
 
-    /** Single-font form of {@link #embedFonts}, embedding into every font named {@code baseFont}. */
+    /** True when this native build can replace only programs already present. */
+    public static boolean isReplaceFontStreamSupported() {
+        return REPLACE_FONT_STREAM_HANDLE != null;
+    }
+
+    /**
+     * Single-font form of {@link #embedFonts} that replaces only programs already present,
+     * preserving the legacy {@code replace_font_stream} contract.
+     */
     public static byte[] replaceFontStream(byte[] input, String baseFont, byte[] fontData) {
         if (input == null || input.length == 0 || baseFont == null || baseFont.isBlank()
                 || fontData == null || fontData.length == 0) {
             return null;
         }
-        byte[] out = embedFonts(input, Map.of(baseFont, fontData), false);
-        if (out == null) throw new JPDFiumException("no font matching /BaseFont " + baseFont);
-        return out;
+        if (REPLACE_FONT_STREAM_HANDLE == null) {
+            // Older bridges exported embedding without the stream-replacement entry point.
+            byte[] out = embedFonts(input, Map.of(baseFont, fontData), false);
+            if (out == null) throw new JPDFiumException("no font matching /BaseFont " + baseFont);
+            return out;
+        }
+        Semaphore held = acquireSlotOrThrow("font replacement");
+        try (QpdfCall call = new QpdfCall()) {
+            int rc = (int) REPLACE_FONT_STREAM_HANDLE.invokeExact(call.copyBytes(input),
+                    (long) input.length, call.cString(baseFont), call.copyBytes(fontData),
+                    (long) fontData.length, call.outPtr, call.outLen);
+            if (rc == 0) return call.copyAndFree("qpdfReplaceFontStream");
+            if (rc == 1) throw new JPDFiumException("no font matching /BaseFont " + baseFont);
+            throw new JPDFiumException(switch (rc) {
+                case -2 -> "cannot replace fonts in a password-protected document";
+                case -3 -> "cannot replace fonts in a signed document (/ByteRange present)";
+                case -4 -> "unusable font program for " + baseFont;
+                default -> "qpdf font replacement failed (rc=" + rc + ")";
+            });
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            if (t instanceof JPDFiumException jpe) throw jpe;
+            throw new JPDFiumException("qpdf font replacement failed", t);
+        } finally {
+            releaseSlot(held);
+        }
     }
 
     public static byte[] embedFonts(byte[] input, Map<String, byte[]> fonts, boolean onlyMissing) {

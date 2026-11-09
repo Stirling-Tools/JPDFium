@@ -2,24 +2,31 @@ package stirling.software.jpdfium.doc;
 
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.exception.JPDFiumException;
+import stirling.software.jpdfium.panama.QpdfLib;
 
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.cos.COSArray;
+import org.apache.pdfbox.cos.COSBase;
 import org.apache.pdfbox.cos.COSDictionary;
 import org.apache.pdfbox.cos.COSInteger;
 import org.apache.pdfbox.cos.COSName;
+import org.apache.pdfbox.cos.COSStream;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.pdmodel.common.PDStream;
 import org.apache.pdfbox.pdmodel.PDResources;
 import org.apache.pdfbox.pdmodel.font.PDFont;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -27,6 +34,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -241,30 +249,379 @@ class PdfFontEmbedderTest {
 
     @Test
     void adobeGlyphNamesResolveThroughTheUnicodeCmap() throws Exception {
-        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
+        assertTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
+        String[][] names = {
+                {"F1", "eacute"},
+                {"F2", "definitelynotaglyphname"},
+                {"F3", "uni0041"},
+                {"F4", "uni41Z1"},
+                {"F5", "u110000"},
+                {"F6", "u0041"},
+                {"F7", ".notdef"},
+        };
         byte[] input;
         try (PDDocument pdf = new PDDocument()) {
             PDPage page = new PDPage();
             pdf.addPage(page);
             COSDictionary fonts = new COSDictionary();
-            fonts.setItem("F1", differencesFont("eacute"));
-            fonts.setItem("F2", differencesFont("definitelynotaglyphname"));
+            StringBuilder content = new StringBuilder("BT ");
+            for (int i = 0; i < names.length; i++) {
+                fonts.setItem(names[i][0], differencesFont(names[i][1]));
+                content.append('/').append(names[i][0]).append(" 12 Tf 40 ")
+                        .append(700 - 14 * i).append(" Td (X) Tj ");
+            }
+            content.append("ET");
             COSDictionary resources = new COSDictionary();
             resources.setItem(COSName.FONT, fonts);
             page.setResources(new PDResources(resources));
+            page.setContents(new PDStream(pdf, new ByteArrayInputStream(
+                    content.toString().getBytes(StandardCharsets.US_ASCII))));
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             pdf.save(out);
             input = out.toByteArray();
         }
         PdfFontEmbedder.Result result = PdfFontEmbedder.embedMissing(input);
-        assumeTrue(result.embedded().contains("Helvetica"), "no Helvetica substitute installed");
+        assertTrue(result.embedded().contains("Helvetica"),
+                "Helvetica substitute must be installed: " + result.unresolved());
         try (PDDocument pdf = Loader.loadPDF(result.pdf())) {
             PDResources resources = pdf.getPage(0).getResources();
             float eacute = resources.getFont(COSName.getPDFName("F1")).getWidth(0xE9);
             float unknown = resources.getFont(COSName.getPDFName("F2")).getWidth(0xE9);
+            float uniA = resources.getFont(COSName.getPDFName("F3")).getWidth(0xE9);
+            float badUni = resources.getFont(COSName.getPDFName("F4")).getWidth(0xE9);
+            float outOfRange = resources.getFont(COSName.getPDFName("F5")).getWidth(0xE9);
+            float codeA = resources.getFont(COSName.getPDFName("F6")).getWidth(0xE9);
+            float notdef = resources.getFont(COSName.getPDFName("F7")).getWidth(0xE9);
             assertTrue(eacute > 0, "resolved eacute must have a positive width");
-            assertTrue(eacute != unknown,
+            assertNotEquals(eacute, unknown,
                     "Adobe glyph names must resolve through Unicode, not fall back to .notdef");
+            assertTrue(uniA > 0, "uni0041 must resolve to A");
+            assertEquals(uniA, codeA, "u0041 must resolve the same glyph as uni0041");
+            assertEquals(notdef, badUni, "uni41Z1 is not a valid glyph name");
+            assertEquals(notdef, outOfRange, "u110000 is outside Unicode");
+            assertNotEquals(uniA, badUni);
+            assertNotEquals(codeA, outOfRange);
+        }
+    }
+
+    @Test
+    void cidSubstituteIsRemappedToTheProgramGlyphOrder() throws Exception {
+        assertCidRemap("<0001> <0041>");
+    }
+
+    @Test
+    void cidRemapDecodesWhitespaceInsideHexStrings() throws Exception {
+        assertCidRemap("<00 01> <00 41>");
+    }
+
+    private static void assertCidRemap(String toUnicodeBody) throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
+        FontProgram source = findEmbeddedFont(
+                Files.readAllBytes(Path.of(PdfFontEmbedderTest.class
+                        .getResource("/pdfs/general/basic-text.pdf").toURI())), "ArialMT");
+        assertNotNull(source, "fixture must contain ArialMT");
+        Path dir = Files.createTempDirectory("jpdfium-cid-remap");
+        try {
+            Files.write(dir.resolve(source.baseName() + ".ttf"), source.data());
+            byte[] input = identityCidPdf(source.baseName(), toUnicodeBody);
+            PdfFontEmbedder.Result result = PdfFontEmbedder.embedMissing(input, dir);
+            assertTrue(result.embedded().contains(source.baseName()),
+                    "CID substitute must be embedded: " + result.unresolved());
+            try (PDDocument pdf = Loader.loadPDF(result.pdf())) {
+                COSDictionary descendant = identityCidDescendant(pdf);
+                COSDictionary descriptor =
+                        descendant.getCOSDictionary(COSName.FONT_DESC);
+                assertNotNull(descriptor);
+                assertTrue(descriptor.containsKey(COSName.FONT_FILE2),
+                        "the substitute program must be installed");
+                COSBase mapping = descendant.getDictionaryObject(COSName.CID_TO_GID_MAP);
+                assertTrue(mapping instanceof COSStream,
+                        "a differing glyph order must produce a /CIDToGIDMap stream");
+                byte[] bytes;
+                try (var in = ((COSStream) mapping).createInputStream()) {
+                    bytes = in.readAllBytes();
+                }
+                assertEquals(4, bytes.length, "CID 1 needs a two-byte glyph entry");
+                int gid = ((bytes[2] & 0xFF) << 8) | (bytes[3] & 0xFF);
+                assertEquals(36, gid, "CID 1 must select A in ArialMT");
+            }
+        } finally {
+            try (var files = Files.list(dir)) {
+                for (Path file : files.toList()) Files.deleteIfExists(file);
+            }
+            Files.deleteIfExists(dir);
+        }
+    }
+
+    @Test
+    void cidSubstituteWithoutFullGlyphCoverageIsLeftUnresolved() throws Exception {
+        assertCidSubstituteUnresolved("""
+                1 beginbfchar
+                <0001> <0041>
+                endbfchar
+                1 beginbfchar
+                <0002> <FFFF>
+                endbfchar
+                """);
+    }
+
+    @Test
+    void oversizedToUnicodeRangeLeavesCidFontUnresolved() throws Exception {
+        assertCidSubstituteUnresolved("""
+                1 beginbfrange
+                <0000> <FFFFFFFF> <0041>
+                endbfrange
+                """);
+    }
+
+    @Test
+    void unterminatedToUnicodeSectionLeavesCidFontUnresolved() throws Exception {
+        assertCidSubstituteUnresolved("""
+                1 beginbfchar
+                <0001> <0041>
+                """);
+    }
+    @Test
+    void multiCharacterToUnicodeDestinationLeavesCidFontUnresolved() throws Exception {
+        assertCidSubstituteUnresolved("""
+                2 beginbfchar
+                <0001> <0041>
+                <0002> <006600660069>
+                endbfchar
+                """);
+    }
+
+    @Test
+    void multiCharacterRangeDestinationLeavesCidFontUnresolved() throws Exception {
+        assertCidSubstituteUnresolved("""
+                1 beginbfrange
+                <0001> <0002> [<0041> <00660069>]
+                endbfrange
+                """);
+    }
+
+    @Test
+    void cidSubstituteMissingAUsedWidthIsLeftUnresolved() throws Exception {
+        assertCidSubstituteUnresolved("<0001> <0041>", 1, 2);
+    }
+
+    private static void assertCidSubstituteUnresolved(
+            String toUnicodeBody, int... widthCids) throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
+        FontProgram source = findEmbeddedFont(
+                Files.readAllBytes(Path.of(PdfFontEmbedderTest.class
+                        .getResource("/pdfs/general/basic-text.pdf").toURI())), "ArialMT");
+        assertNotNull(source, "fixture must contain ArialMT");
+        Path dir = Files.createTempDirectory("jpdfium-cid-unresolved");
+        try {
+            Files.write(dir.resolve(source.baseName() + ".ttf"), source.data());
+            byte[] input = identityCidPdf(source.baseName(), toUnicodeBody, widthCids);
+            PdfFontEmbedder.Result result = PdfFontEmbedder.embedMissing(input, dir);
+            assertTrue(result.embedded().isEmpty(),
+                    "an unusable mapping must not report the substitute as embedded");
+            assertTrue(result.unresolved().contains(source.baseName()));
+            assertArrayEquals(input, result.pdf(),
+                    "a rejected substitute must leave the document untouched");
+            try (PDDocument pdf = Loader.loadPDF(result.pdf())) {
+                COSDictionary descriptor = identityCidDescendant(pdf)
+                        .getCOSDictionary(COSName.FONT_DESC);
+                assertNotNull(descriptor);
+                assertFalse(descriptor.containsKey(COSName.FONT_FILE2)
+                                || descriptor.containsKey(COSName.FONT_FILE3),
+                        "the rejected substitute must not install a font program");
+            }
+        } finally {
+            try (var files = Files.list(dir)) {
+                for (Path file : files.toList()) Files.deleteIfExists(file);
+            }
+            Files.deleteIfExists(dir);
+        }
+    }
+
+    @Test
+    void explicitCidReplacementGeneratesToUnicode() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
+        FontProgram source = findEmbeddedFont(
+                Files.readAllBytes(Path.of(PdfFontEmbedderTest.class
+                        .getResource("/pdfs/general/basic-text.pdf").toURI())), "ArialMT");
+        assertNotNull(source, "fixture must contain ArialMT");
+        byte[] input = identityCidPdf(source.baseName(), null);
+        byte[] output = PdfFontEmbedder.embed(input, Map.of(source.baseName(), source.data()));
+        try (PDDocument pdf = Loader.loadPDF(output)) {
+            COSDictionary font = identityCidFont(pdf);
+            COSBase toUnicode = font.getDictionaryObject(COSName.TO_UNICODE);
+            assertTrue(toUnicode instanceof COSStream,
+                    "explicit replacement of a CID font without /ToUnicode must generate one");
+            String cmap;
+            try (var in = ((COSStream) toUnicode).createInputStream()) {
+                cmap = new String(in.readAllBytes(), StandardCharsets.ISO_8859_1);
+            }
+            assertTrue(cmap.contains("<0024> <0041>") || cmap.contains("<0024><0041>"),
+                    "glyph 36 is A in ArialMT: " + cmap);
+        }
+    }
+
+    @Test
+    void legacyReplaceStreamLeavesProgramlessFontsAlone() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
+        FontProgram source = findEmbeddedFont(
+                Files.readAllBytes(Path.of(PdfFontEmbedderTest.class
+                        .getResource("/pdfs/general/basic-text.pdf").toURI())), "ArialMT");
+        assertNotNull(source, "fixture must contain ArialMT");
+        byte[] program = source.data().clone();
+        program[program.length - 1] ^= 0x55;
+        byte[] input = sharedBaseFontPdf(source.baseName(), source.data());
+        byte[] output = QpdfLib.replaceFontStream(input, source.baseName(), program);
+        try (PDDocument pdf = Loader.loadPDF(output)) {
+            PDResources resources = pdf.getPage(0).getResources();
+            var withStream = resources.getFont(COSName.getPDFName("F1")).getFontDescriptor();
+            var withoutStream = resources.getFont(COSName.getPDFName("F2")).getFontDescriptor();
+            assertNotNull(withStream);
+            assertNotNull(withoutStream);
+            assertTrue(withStream.getFontFile2() != null, "the existing stream must be replaced");
+            assertArrayEquals(program, withStream.getFontFile2().createInputStream().readAllBytes());
+            assertTrue(withoutStream.getFontFile2() == null
+                            && withoutStream.getFontFile3() == null
+                            && withoutStream.getFontFile() == null,
+                    "the compatibility export must not embed a font that had no program");
+        }
+    }
+
+    private static byte[] identityCidPdf(String baseFont, String toUnicodeEntries, int... widthCids)
+            throws Exception {
+        try (PDDocument pdf = new PDDocument()) {
+            PDPage page = new PDPage(PDRectangle.LETTER);
+            pdf.addPage(page);
+            COSDictionary font = identityCidFont(baseFont);
+            COSDictionary descendant = (COSDictionary) ((COSArray) font.getDictionaryObject(
+                    COSName.DESCENDANT_FONTS)).getObject(0);
+            if (widthCids.length > 0) {
+                COSArray widths = new COSArray();
+                for (int cid : widthCids) {
+                    widths.add(COSInteger.get(cid));
+                    COSArray range = new COSArray();
+                    range.add(COSInteger.get(500));
+                    widths.add(range);
+                }
+                descendant.setItem(COSName.W, widths);
+            }
+            if (toUnicodeEntries != null) {
+                String entries = toUnicodeEntries.strip();
+                String body = entries.contains("beginbfchar") || entries.contains("beginbfrange")
+                        ? entries
+                        : ("%d beginbfchar\n%s\nendbfchar")
+                                .formatted(entries.split("\\s*\n\\s*").length, entries);
+                COSStream toUnicode = new COSStream();
+                try (OutputStream out = toUnicode.createOutputStream()) {
+                    out.write(("""
+                            /CIDInit /ProcSet findresource begin
+                            12 dict begin
+                            begincmap
+                            /CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def
+                            /CMapName /Adobe-Identity-UCS def
+                            /CMapType 2 def
+                            1 begincodespacerange
+                            <0000> <FFFF>
+                            endcodespacerange
+                            %s
+                            endcmap
+                            CMapName currentdict /CMap defineresource pop
+                            end
+                            end
+                            """.formatted(body)).getBytes(StandardCharsets.US_ASCII));
+                }
+                font.setItem(COSName.TO_UNICODE, toUnicode);
+            }
+            COSDictionary fonts = new COSDictionary();
+            fonts.setItem("F1", font);
+            COSDictionary resources = new COSDictionary();
+            resources.setItem(COSName.FONT, fonts);
+            page.setResources(new PDResources(resources));
+            page.setContents(new PDStream(pdf, new ByteArrayInputStream(
+                    "BT /F1 12 Tf 72 700 Td <0001> Tj ET"
+                            .getBytes(StandardCharsets.US_ASCII))));
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            pdf.save(out);
+            return out.toByteArray();
+        }
+    }
+
+    private static COSDictionary identityCidFont(String baseFont) {
+        COSDictionary descriptor = new COSDictionary();
+        descriptor.setItem(COSName.TYPE, COSName.FONT_DESC);
+        descriptor.setName(COSName.FONT_NAME, baseFont);
+        descriptor.setInt(COSName.FLAGS, 4);
+        descriptor.setItem(COSName.FONT_BBOX, new COSArray());
+        descriptor.setInt(COSName.ITALIC_ANGLE, 0);
+        descriptor.setInt(COSName.ASCENT, 900);
+        descriptor.setInt(COSName.DESCENT, -200);
+        descriptor.setInt(COSName.CAP_HEIGHT, 700);
+        descriptor.setInt(COSName.STEM_V, 80);
+        COSDictionary cidSystemInfo = new COSDictionary();
+        cidSystemInfo.setString(COSName.REGISTRY, "Adobe");
+        cidSystemInfo.setString(COSName.ORDERING, "Identity");
+        cidSystemInfo.setInt(COSName.SUPPLEMENT, 0);
+        COSDictionary descendant = new COSDictionary();
+        descendant.setItem(COSName.TYPE, COSName.FONT);
+        descendant.setItem(COSName.SUBTYPE, COSName.CID_FONT_TYPE2);
+        descendant.setName(COSName.BASE_FONT, baseFont);
+        descendant.setItem(COSName.CIDSYSTEMINFO, cidSystemInfo);
+        descendant.setInt(COSName.DW, 1000);
+        descendant.setItem(COSName.FONT_DESC, descriptor);
+        COSArray descendants = new COSArray();
+        descendants.add(descendant);
+        COSDictionary font = new COSDictionary();
+        font.setItem(COSName.TYPE, COSName.FONT);
+        font.setItem(COSName.SUBTYPE, COSName.TYPE0);
+        font.setName(COSName.BASE_FONT, baseFont);
+        font.setItem(COSName.ENCODING, COSName.IDENTITY_H);
+        font.setItem(COSName.DESCENDANT_FONTS, descendants);
+        return font;
+    }
+
+    private static COSDictionary identityCidFont(PDDocument pdf) {
+        COSDictionary resources = pdf.getPage(0).getResources().getCOSObject();
+        COSDictionary fonts = (COSDictionary) resources.getDictionaryObject(COSName.FONT);
+        return (COSDictionary) fonts.getDictionaryObject(COSName.getPDFName("F1"));
+    }
+
+    private static COSDictionary identityCidDescendant(PDDocument pdf) {
+        COSArray descendants = (COSArray) identityCidFont(pdf)
+                .getDictionaryObject(COSName.DESCENDANT_FONTS);
+        return (COSDictionary) descendants.getObject(0);
+    }
+
+    private static byte[] sharedBaseFontPdf(String baseFont, byte[] program) throws Exception {
+        try (PDDocument pdf = new PDDocument()) {
+            PDPage page = new PDPage(PDRectangle.LETTER);
+            pdf.addPage(page);
+            COSDictionary fonts = new COSDictionary();
+            for (String key : new String[] {"F1", "F2"}) {
+                COSDictionary descriptor = new COSDictionary();
+                descriptor.setItem(COSName.TYPE, COSName.FONT_DESC);
+                descriptor.setName(COSName.FONT_NAME, baseFont);
+                descriptor.setInt(COSName.FLAGS, 32);
+                if (key.equals("F1")) {
+                    descriptor.setItem(COSName.FONT_FILE2,
+                            new PDStream(pdf, new ByteArrayInputStream(program)).getCOSObject());
+                }
+                COSDictionary font = new COSDictionary();
+                font.setItem(COSName.TYPE, COSName.FONT);
+                font.setItem(COSName.SUBTYPE, COSName.TRUE_TYPE);
+                font.setName(COSName.BASE_FONT, baseFont);
+                font.setItem(COSName.ENCODING, COSName.WIN_ANSI_ENCODING);
+                font.setItem(COSName.FONT_DESC, descriptor);
+                fonts.setItem(key, font);
+            }
+            COSDictionary resources = new COSDictionary();
+            resources.setItem(COSName.FONT, fonts);
+            page.setResources(new PDResources(resources));
+            page.setContents(new PDStream(pdf, new ByteArrayInputStream(
+                    "BT /F1 12 Tf 40 700 Td (Hello) Tj /F2 12 Tf (World) Tj ET"
+                            .getBytes(StandardCharsets.US_ASCII))));
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            pdf.save(out);
+            return out.toByteArray();
         }
     }
 
@@ -416,6 +773,29 @@ class PdfFontEmbedderTest {
             }
         }
         return fonts;
+    }
+
+    private static FontProgram findEmbeddedFont(byte[] input, String baseName) throws Exception {
+        try (PDDocument pdf = Loader.loadPDF(input)) {
+            for (PDPage page : pdf.getPages()) {
+                PDResources resources = page.getResources();
+                if (resources == null) continue;
+                for (COSName name : resources.getFontNames()) {
+                    PDFont font = resources.getFont(name);
+                    String name1 = font.getName();
+                    if (name1.length() > 7 && name1.charAt(6) == '+') name1 = name1.substring(7);
+                    if (!baseName.equals(name1)) continue;
+                    var descriptor = font.getFontDescriptor();
+                    if (descriptor == null || descriptor.getFontFile2() == null) continue;
+                    ByteArrayOutputStream out = new ByteArrayOutputStream();
+                    try (var in = descriptor.getFontFile2().createInputStream()) {
+                        in.transferTo(out);
+                    }
+                    return new FontProgram(name1, out.toByteArray());
+                }
+            }
+        }
+        return null;
     }
 
     private static FontProgram findEmbeddedFont(byte[] input) throws Exception {
