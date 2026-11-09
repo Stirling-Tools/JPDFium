@@ -19,6 +19,7 @@ import java.awt.image.ComponentSampleModel;
 import java.awt.image.DataBufferByte;
 import java.awt.image.DataBufferInt;
 import java.awt.image.SinglePixelPackedSampleModel;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.lang.foreign.Arena;
 import java.lang.foreign.FunctionDescriptor;
@@ -29,6 +30,8 @@ import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.util.zip.Deflater;
+
+import javax.imageio.ImageIO;
 
 import static java.lang.foreign.ValueLayout.ADDRESS;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
@@ -473,9 +476,37 @@ public final class PdfImageOptimizer {
         ImageSource decoded = decodedSource(imgObj, meta);
         if (decoded != null) return decoded;
 
+        // Inline JPEGs with an indirect colour-space resource cannot always be
+        // decoded by PDFium without page context. The raw DCT stream is already
+        // at native resolution, so decode that directly instead of rendering.
+        ImageSource jpeg = rawJpegSource(imgObj, meta);
+        if (jpeg != null) return jpeg;
+
         // The rendered fallback applies the image matrix, so feeding those pixels
         // back into the original object would transform it twice. Skip the rewrite.
         return null;
+    }
+
+    private static ImageSource rawJpegSource(MemorySegment imgObj, ImageMeta meta) {
+        if (!isJpegOriginal(imgObj)) return null;
+        long size = ImageObjBindings.imageDataRawLength(imgObj);
+        if (size <= 0 || size > Integer.MAX_VALUE) return null;
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment buf = arena.allocate(size);
+            long written = (long) ImageObjBindings.FPDFImageObj_GetImageDataRaw
+                    .invokeExact(imgObj, buf, size);
+            if (written <= 0) return null;
+            byte[] bytes = buf.asSlice(0, written).toArray(JAVA_BYTE);
+            BufferedImage image = ImageIO.read(new ByteArrayInputStream(bytes));
+            if (image == null) return null;
+            if (image.getWidth() != meta.width() || image.getHeight() != meta.height()) {
+                return null;
+            }
+            return new ImageSource(image, image.getWidth(), image.getHeight());
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            return null;
+        }
     }
 
     private static ImageSource decodedSource(MemorySegment imgObj, ImageMeta meta) {

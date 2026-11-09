@@ -21,11 +21,55 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.stream.Collectors;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @EnabledIfSystemProperty(named = "jpdfium.integration", matches = "true")
 class PdfFontSubsetterTest {
+
+    @Test
+    void standaloneCffProgramIsLeftUntouched() throws Exception {
+        assertTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
+        URL url = PdfFontSubsetterTest.class.getResource(
+                "/pdfs/general/pdfjs_annotation-choice-widget.pdf");
+        assertTrue(url != null, "CFF fixture is missing");
+        byte[] input = Files.readAllBytes(Path.of(url.toURI()));
+
+        String baseName = null;
+        byte[] program = null;
+        int[] codepoints = {0x41, 0x42};
+        try (PDDocument doc = Loader.loadPDF(input)) {
+            for (PDPage page : doc.getPages()) {
+                for (COSName name : page.getResources().getFontNames()) {
+                    PDFont font = page.getResources().getFont(name);
+                    if (font.getFontDescriptor() == null
+                            || font.getFontDescriptor().getFontFile3() == null) {
+                        continue;
+                    }
+                    var file = font.getFontDescriptor().getFontFile3();
+                    String subtype = file.getCOSObject().getNameAsString(COSName.SUBTYPE);
+                    if (!"Type1C".equals(subtype) && !"CIDFontType0C".equals(subtype)) {
+                        continue;
+                    }
+                    ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+                    try (var in = file.createInputStream()) {
+                        in.transferTo(bytes);
+                    }
+                    baseName = font.getName();
+                    program = bytes.toByteArray();
+                    break;
+                }
+                if (program != null) break;
+            }
+        }
+        assertTrue(program != null, "fixture must contain a standalone CFF program");
+
+        byte[] output = PdfFontSubsetter.subset(input, Map.of(
+                baseName, new PdfFontSubsetter.Request(program, codepoints)));
+        assertArrayEquals(input, output,
+                "bare CFF programs must be left untouched instead of throwing or corrupting the PDF");
+    }
 
     @Test
     void subsetsSuppliedFontProgramsAndPreservesText() throws Exception {
