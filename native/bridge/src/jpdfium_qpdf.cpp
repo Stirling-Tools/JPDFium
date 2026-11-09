@@ -1588,9 +1588,13 @@ std::set<uint32_t> widthCids(QPDFObjectHandle const& font) {
     return cids;
 }
 
-bool coversWidthCids(QPDFObjectHandle const& font,
-                     std::map<uint32_t, uint32_t> const& unicodeByCid) {
-    for (uint32_t cid : widthCids(font))
+std::set<uint32_t> usedCidsForFont(QPDF&, QPDFObjectHandle const& font) {
+    return widthCids(font);
+}
+
+bool coversWidthCids(QPDFObjectHandle const&, std::map<uint32_t, uint32_t> const& unicodeByCid,
+                     std::set<uint32_t> const& used) {
+    for (uint32_t cid : used)
         if (cid && !unicodeByCid.contains(cid)) return false;
     return true;
 }
