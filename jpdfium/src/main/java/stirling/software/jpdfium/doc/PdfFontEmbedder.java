@@ -231,7 +231,9 @@ public final class PdfFontEmbedder {
             substitutable.merge(resource.baseName(), safeToSubstitute(resource), Boolean::logicalAnd);
         }
         List<String> missing = List.copyOf(names);
-        Map<String, Face> index = indexFor(fontDirs);
+        if (missing.isEmpty()) return new Result(pdf, List.of(), List.of(), List.of());
+        Map<String, Face> bundled = fontDirs.length == 0 ? bundledFaces() : null;
+        Map<String, Face> index = null;
         Map<String, byte[]> found = new LinkedHashMap<>();
         Map<Face, byte[]> programs = new HashMap<>();
         List<FontStatus> statuses = new ArrayList<>(missing.size());
@@ -242,8 +244,13 @@ public final class PdfFontEmbedder {
                 continue;
             }
             String key = key(name);
-            Face face = resolve(index, key);
+            Face face = bundled == null ? null : resolve(bundled, key);
             if (face == null) {
+                if (index == null) index = indexFor(fontDirs);
+                face = resolve(index, key);
+            }
+            if (face == null) {
+                if (index == null) index = indexFor(fontDirs);
                 Face restricted = restricted(index, key);
                 statuses.add(restricted == null
                         ? new FontStatus(name, "", -1, false, "no matching font")
@@ -303,8 +310,15 @@ public final class PdfFontEmbedder {
      * or the given directories, without rewriting a document.
      */
     public static FontStatus diagnose(String baseName, Path... fontDirs) {
-        Map<String, Face> index = indexFor(fontDirs);
         String key = key(baseName);
+        if (fontDirs.length == 0) {
+            Face bundledFace = resolve(bundledFaces(), key);
+            if (bundledFace != null) {
+                return new FontStatus(baseName, source(bundledFace), bundledFace.fsType(), true,
+                        "available");
+            }
+        }
+        Map<String, Face> index = indexFor(fontDirs);
         Face face = resolve(index, key);
         if (face != null) {
             return new FontStatus(baseName, source(face), face.fsType(), true, "available");
