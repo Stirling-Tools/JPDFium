@@ -33,5 +33,5 @@ libskia*         8000000
 skia.dll         8000000
 libpdfium*      10500000
 pdfium.dll      10500000
-libjpdfium*     13500000
-jpdfium.dll     13500000
+libjpdfium*     15600000
+jpdfium.dll     15600000

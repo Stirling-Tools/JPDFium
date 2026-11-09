@@ -1716,6 +1716,12 @@ int32_t jpdfium_qpdf_merge_files(const char* const* paths, int32_t count, const 
     return 0;
 }
 
+int32_t jpdfium_qpdf_extract_ranges_files(const char* /*in_path*/, const int32_t* /*firstPages*/,
+                                          const int32_t* /*lastPages*/, int32_t /*rangeCount*/,
+                                          const char* const* /*out_paths*/) {
+    return -1;
+}
+
 int32_t jpdfium_qpdf_extract_pages_file(const char* in_path, const int32_t* /*pageIndices*/,
                                         int32_t pageCount, const char* out_path) {
     if (!in_path || !*in_path || !out_path || !*out_path || pageCount <= 0) return -1;
@@ -1855,6 +1861,18 @@ int32_t jpdfium_color_pdfx_bytes(const uint8_t*, int64_t, const uint8_t*, int64_
 
 int32_t jpdfium_color_pdfx_file(const char*, const char*, const uint8_t*, int64_t, const char*,
                                 const char*, const char*, const char*) {
+    return JPDFIUM_ERR_NOT_FOUND;
+}
+
+int32_t jpdfium_pdfx_prepare_bytes(const uint8_t*, int64_t, int32_t, const uint8_t*, int32_t,
+                                   int32_t, int32_t, uint8_t** output, int64_t* output_len, char*,
+                                   int32_t) {
+    (void)fail_native_bytes(output, output_len);
+    return JPDFIUM_ERR_NOT_FOUND;
+}
+
+int32_t jpdfium_pdfx_prepare_file(const char*, const char*, int32_t, const uint8_t*, int32_t,
+                                  int32_t, int32_t, char*, int32_t) {
     return JPDFIUM_ERR_NOT_FOUND;
 }
 

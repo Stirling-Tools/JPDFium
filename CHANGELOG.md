@@ -19,10 +19,29 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Added
 
+- `PdfXOptions.neutralsToBlack(boolean)`, on by default, maps neutral RGB
+  vector colours to K only instead of four-colour black.
+
+- `PdfXOptions.embedMissingFonts(boolean)`, on by default, and
+  `fontDirectories(Path...)`: PDF/X conversion embeds fonts used without a
+  program through `PdfFontEmbedder.embedMissing`.
+
+- `PdfSplit.extractPageRangesToFiles` writes many page ranges of one file from a single qpdf
+  parse instead of one parse per range. Ranges qpdf cannot write, and `MEMORY` storage, go
+  through `extractPageRangeToFile` one at a time. 400 single-page parts of a 4.3 MB PDF take 0.12 s instead of
+  7.3 s, and 400 parts of a 28.7 MB PDF 0.5 s instead of 45 s. Parts match
+  `extractPageRangeToFile` page for page, form fields and page labels included.
 - Native qpdf font-stream replacement. `PdfFontEmbedder.embed(...)` replaces
   `/FontFile2` or `/FontFile3` streams by exact `/BaseFont`, updating
   `/Length1`; Type 1 `/FontFile` streams are rejected. `PdfXOptions.fontData(...)`
   applies the same replacement before PDF/X validation.
+- Font embedding. `PdfFontEmbedder.embed(...)` embeds TrueType, OpenType, CFF
+  and Type 1 programs by exact `/BaseFont` in one qpdf rewrite, into fonts that
+  have no program as well as ones that do, building a missing descriptor and
+  widths from the program. `PdfFontEmbedder.embedMissing(...)` embeds every
+  non-embedded font from the system (or given) font directories, with
+  metric-compatible substitutes for the standard 14. `PdfXOptions.fontData(...)`
+  applies `embed(...)` before PDF/X validation.
 - PDF/X-1a, PDF/X-3, PDF/X-4, and PDF/X-6 metadata bootstrap. `PdfXConverter`
   now sets the standard base version, writes a missing `/TrimBox`, and
   optionally fails on non-embedded fonts. `PdfXOptions` gains
@@ -40,6 +59,14 @@ publishing workflows, not library releases, so they are not listed here.
   was most of the cost of text extraction.
 
 ### Changed
+
+- `PdfXConverter` converts colours through a QPDF content-stream rewrite instead
+  of PDFium page regeneration. Conversion time is now linear in page count (a
+  6,269-page spreadsheet went from 582 s to 2 s), text runs and marked content
+  are kept, and `applyMetadata(PdfDocument, ...)` no longer modifies its input.
+  Form XObjects, patterns, Type 3 glyphs and annotation appearances are always
+  converted, so `convertForms` and `convertLosslessImages` no longer affect
+  PDF/X output.
 
 - `PdfMerge.mergeFilesToFile` and `PdfSplit.extractPageRangeToFile` write their
   staging file without fsync and flush once when they publish the output, which
