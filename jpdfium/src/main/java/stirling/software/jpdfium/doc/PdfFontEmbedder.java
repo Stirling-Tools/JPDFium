@@ -352,7 +352,11 @@ public final class PdfFontEmbedder {
     public static FileResult embedMissingTo(Path input, Path output, Path... fontDirs)
             throws IOException {
         List<String> missing = nonEmbedded(input);
-        Map<String, byte[]> found = programsFor(missing, fontDirs);
+        Map<String, Boolean> substitutable = new HashMap<>();
+        for (PdfFontAuditor.FontResource resource : PdfFontAuditor.unembeddedResources(Files.readAllBytes(input))) {
+            substitutable.merge(resource.baseName(), safeToSubstitute(resource), Boolean::logicalAnd);
+        }
+        Map<String, byte[]> found = programsFor(missing, substitutable, fontDirs);
         if (found.isEmpty() || !QpdfLib.embedFontsToFile(input, output, found, true)) {
             Files.copy(input, output, StandardCopyOption.REPLACE_EXISTING);
             return new FileResult(List.of(), missing);
@@ -362,32 +366,19 @@ public final class PdfFontEmbedder {
                 missing.stream().filter(n -> !unresolved.contains(n)).toList(), unresolved);
     }
 
-    private static Map<String, byte[]> programsFor(List<String> missing, Path... fontDirs)
+    private static Map<String, byte[]> programsFor(
+            List<String> missing, Map<String, Boolean> substitutable, Path... fontDirs)
             throws IOException {
         Map<String, Face> index = indexFor(fontDirs);
         Map<String, byte[]> found = new LinkedHashMap<>();
         Map<Face, byte[]> programs = new HashMap<>();
-        List<FontStatus> statuses = new ArrayList<>(missing.size());
         for (String name : missing) {
-            if (!substitutable.getOrDefault(name, true)) {
-                statuses.add(new FontStatus(name, "", -1, false,
-                        "CID encoding cannot be rewritten safely"));
-                continue;
-            }
-            String key = key(name);
-            Face face = resolve(index, key);
-            if (face == null) {
-                Face restricted = restricted(index, key);
-                statuses.add(restricted == null
-                        ? new FontStatus(name, "", -1, false, "no matching font")
-                        : new FontStatus(name, source(restricted), restricted.fsType(), false,
-                                "embedding restricted by fsType " + restricted.fsType()));
-                continue;
-            }
+            if (!substitutable.getOrDefault(name, true)) continue;
+            Face face = resolve(index, key(name));
+            if (face == null) continue;
             byte[] data = programs.get(face);
             if (data == null) programs.put(face, data = program(face));
             found.put(name, data);
-            statuses.add(new FontStatus(name, source(face), face.fsType(), true, "embedded"));
         }
         return found;
     }
