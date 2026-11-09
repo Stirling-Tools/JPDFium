@@ -113,6 +113,13 @@ public final class QpdfLib {
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, JAVA_INT, ADDRESS, ADDRESS, ADDRESS,
                     JAVA_INT, ADDRESS, ADDRESS));
 
+    private static final MethodHandle EMBED_FONTS_FILE_HANDLE =
+            Symbols.downcallOptionalUnguarded(
+                    "jpdfium_qpdf_embed_fonts_file",
+                    FunctionDescriptor.of(
+                            JAVA_INT, ADDRESS, ADDRESS, JAVA_INT, ADDRESS, ADDRESS, ADDRESS,
+                            JAVA_INT));
+
     /** True when this native build can embed font programs. */
     public static boolean isFontReplacementSupported() {
         return EMBED_FONTS_HANDLE != null;
@@ -156,6 +163,68 @@ public final class QpdfLib {
             if (t instanceof JPDFiumException jpe) throw jpe;
             throw new JPDFiumException("qpdf font embedding failed", t);
         } finally {
+            releaseSlot(held);
+        }
+    }
+
+    /**
+     * File-backed {@link #embedFonts(byte[], Map, boolean)}. The PDF is read and rewritten by
+     * native qpdf; the Java heap never holds the input or output document.
+     *
+     * @return true when at least one font was embedded; false when no font matched
+     */
+    public static boolean embedFontsToFile(
+            Path input, Path output, Map<String, byte[]> fonts, boolean onlyMissing)
+            throws IOException {
+        if (EMBED_FONTS_FILE_HANDLE == null) {
+            throw new JPDFiumException("font embedding requires native qpdf support");
+        }
+        if (input == null || output == null || fonts == null || fonts.isEmpty()) return false;
+        Semaphore held = acquireSlotOrThrow("font embedding");
+        Path staging = null;
+        try (QpdfCall call = new QpdfCall();
+                OutputTransaction tx = OutputTransaction.begin(output)) {
+            int n = fonts.size();
+            int i = 0;
+            MemorySegment names = call.arena.allocate(ADDRESS, n);
+            MemorySegment data = call.arena.allocate(ADDRESS, n);
+            MemorySegment lens = call.arena.allocate(JAVA_LONG, n);
+            for (var e : fonts.entrySet()) {
+                names.setAtIndex(ADDRESS, i, call.cString(e.getKey()));
+                data.setAtIndex(ADDRESS, i, call.copyBytes(e.getValue()));
+                lens.setAtIndex(JAVA_LONG, i++, e.getValue().length);
+            }
+            staging = tx.staging();
+            int rc =
+                    (int)
+                            EMBED_FONTS_FILE_HANDLE.invokeExact(
+                                    call.cString(input.toAbsolutePath().toString()),
+                                    call.cString(staging.toAbsolutePath().toString()),
+                                    n,
+                                    names,
+                                    data,
+                                    lens,
+                                    onlyMissing ? 1 : 0);
+            if (rc == 1) return false;
+            if (rc != 0) {
+                throw new JPDFiumException(
+                        switch (rc) {
+                            case -2 -> "cannot embed fonts in a password-protected document";
+                            case -3 -> "cannot embed fonts in a signed document (/ByteRange present)";
+                            case -4 -> "unusable font program for " + fonts.keySet();
+                            default -> "qpdf font embedding failed (rc=" + rc + ")";
+                        });
+            }
+            tx.publish(SaveOptions.validated());
+            staging = null;
+            return true;
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            if (t instanceof IOException io) throw io;
+            if (t instanceof JPDFiumException jpe) throw jpe;
+            throw new JPDFiumException("qpdf file font embedding failed", t);
+        } finally {
+            deleteQuietly(staging);
             releaseSlot(held);
         }
     }

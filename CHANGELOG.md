@@ -19,6 +19,13 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Added
 
+- `PdfXOptions.neutralsToBlack(boolean)`, on by default, maps neutral RGB
+  vector colours to K only instead of four-colour black.
+
+- `PdfXOptions.embedMissingFonts(boolean)`, on by default, and
+  `fontDirectories(Path...)`: PDF/X conversion embeds fonts used without a
+  program through `PdfFontEmbedder.embedMissing`.
+
 - `PdfSplit.extractPageRangesToFiles` writes many page ranges of one file from a single qpdf
   parse instead of one parse per range. Ranges qpdf cannot write, and `MEMORY` storage, go
   through `extractPageRangeToFile` one at a time. 400 single-page parts of a 4.3 MB PDF take 0.12 s instead of
@@ -53,6 +60,14 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Changed
 
+- `PdfXConverter` converts colours through a QPDF content-stream rewrite instead
+  of PDFium page regeneration. Conversion time is now linear in page count (a
+  6,269-page spreadsheet went from 582 s to 2 s), text runs and marked content
+  are kept, and `applyMetadata(PdfDocument, ...)` no longer modifies its input.
+  Form XObjects, patterns, Type 3 glyphs and annotation appearances are always
+  converted, so `convertForms` and `convertLosslessImages` no longer affect
+  PDF/X output.
+
 - `PdfMerge.mergeFilesToFile` and `PdfSplit.extractPageRangeToFile` write their
   staging file without fsync and flush once when they publish the output, which
   now gets the destination's permissions as other saves do. They previously
@@ -78,6 +93,25 @@ publishing workflows, not library releases, so they are not listed here.
   99,000 matches redacts in about 4 s instead of 16 s; output text is unchanged.
 
 ### Fixed
+
+- PDF/X-1a and PDF/X-3 no longer accept images with soft masks, which the page
+  transparency probe missed, and drop transparency groups from pages that have
+  no transparent content.
+
+- PDF/X no longer leaves soft-masked or lossless RGB images, Indexed RGB
+  lookups or RGB Separation alternates unconverted.
+
+- PDF/X-4 and PDF/X-6 XMP now carries `xmp:CreateDate`, `xmp:MetadataDate`,
+  `xmpMM:DocumentID`, `xmpMM:InstanceID`, `xmpMM:VersionID` and
+  `xmpMM:RenditionClass`; an existing document ID is kept.
+
+- PDF/X output removes JavaScript, flattens printable annotations, drops an
+  `/ArtBox` that sits beside a `/TrimBox`, replaces PostScript XObjects, and is
+  never encrypted.
+
+- PDF/X conversion fails instead of writing a document with fewer pages when
+  the source page tree cannot be rewritten, and refuses signed documents
+  instead of silently invalidating the signature.
 
 - Word and regex redaction finds words PDFium reports hyphenated across a line
   break (`Trace-` / `Monkey`), and removes the hyphen with them; it previously
