@@ -1801,7 +1801,8 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
                 // the Identity encodings this rewrite can remap.
                 if (!identityCidMap || !identityEncoding) continue;
                 cidUnicode = parseToUnicode(font);
-                if (cidUnicode.empty() || !coversWidthCids(target, cidUnicode)) continue;
+                auto usedCids = usedCidsForFont(*qpdf, font);
+                if (cidUnicode.empty() || !coversWidthCids(target, cidUnicode, usedCids)) continue;
                 if (!cidGlyphOrderMatches(program.face, cidUnicode)) {
                     if (program.kind != ProgramKind::TrueType) continue;
                     // Every mapped CID must reach a glyph before the font is touched;
