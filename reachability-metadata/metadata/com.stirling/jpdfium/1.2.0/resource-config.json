@@ -11,6 +11,9 @@
         "pattern": ".*pdfs/.*"
       },
       {
+        "pattern": ".*fonts/.*"
+      },
+      {
         "pattern": ".*META-INF/native-image/.*"
       }
     ]
