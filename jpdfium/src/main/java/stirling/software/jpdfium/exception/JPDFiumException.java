@@ -21,6 +21,9 @@ public class JPDFiumException extends RuntimeException {
     /** Native code {@code JPDFIUM_ERR_CONTENT_MUTATED} (-10). */
     public static final int CONTENT_MUTATED = -10;
 
+    /** Native code {@code JPDFIUM_ERR_ALLOC} (-11). */
+    public static final int ALLOC = -11;
+
     private final int nativeCode;
 
     public JPDFiumException(String msg) {
