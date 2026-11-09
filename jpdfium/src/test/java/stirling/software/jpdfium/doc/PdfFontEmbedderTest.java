@@ -583,6 +583,12 @@ class PdfFontEmbedderTest {
 
     private static byte[] identityCidPdf(String baseFont, String toUnicodeEntries, int... widthCids)
             throws Exception {
+        return identityCidPdfWithCode(baseFont, toUnicodeEntries, 1, widthCids);
+    }
+
+    private static byte[] identityCidPdfWithCode(
+            String baseFont, String toUnicodeEntries, int contentCid, int... widthCids)
+            throws Exception {
         try (PDDocument pdf = new PDDocument()) {
             PDPage page = new PDPage(PDRectangle.LETTER);
             pdf.addPage(page);
@@ -632,7 +638,7 @@ class PdfFontEmbedderTest {
             resources.setItem(COSName.FONT, fonts);
             page.setResources(new PDResources(resources));
             page.setContents(new PDStream(pdf, new ByteArrayInputStream(
-                    "BT /F1 12 Tf 72 700 Td <0001> Tj ET"
+                    ("BT /F1 12 Tf 72 700 Td <" + String.format("%04X", contentCid) + "> Tj ET")
                             .getBytes(StandardCharsets.US_ASCII))));
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             pdf.save(out);
