@@ -2013,8 +2013,9 @@
           "void*",
           "jlong",
           "jint",
-          "jint",
-          "jint",
+          "void*",
+          "void*",
+          "void*",
           "jint",
           "void*",
           "void*"
