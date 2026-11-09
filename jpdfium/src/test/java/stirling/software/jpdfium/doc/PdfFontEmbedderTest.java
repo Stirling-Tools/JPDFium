@@ -240,6 +240,50 @@ class PdfFontEmbedderTest {
     }
 
     @Test
+    void adobeGlyphNamesResolveThroughTheUnicodeCmap() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
+        byte[] input;
+        try (PDDocument pdf = new PDDocument()) {
+            PDPage page = new PDPage();
+            pdf.addPage(page);
+            COSDictionary fonts = new COSDictionary();
+            fonts.setItem("F1", differencesFont("eacute"));
+            fonts.setItem("F2", differencesFont("definitelynotaglyphname"));
+            COSDictionary resources = new COSDictionary();
+            resources.setItem(COSName.FONT, fonts);
+            page.setResources(new PDResources(resources));
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            pdf.save(out);
+            input = out.toByteArray();
+        }
+        PdfFontEmbedder.Result result = PdfFontEmbedder.embedMissing(input);
+        assumeTrue(result.embedded().contains("Helvetica"), "no Helvetica substitute installed");
+        try (PDDocument pdf = Loader.loadPDF(result.pdf())) {
+            PDResources resources = pdf.getPage(0).getResources();
+            float eacute = resources.getFont(COSName.getPDFName("F1")).getWidth(0xE9);
+            float unknown = resources.getFont(COSName.getPDFName("F2")).getWidth(0xE9);
+            assertTrue(eacute > 0, "resolved eacute must have a positive width");
+            assertTrue(eacute != unknown,
+                    "Adobe glyph names must resolve through Unicode, not fall back to .notdef");
+        }
+    }
+
+    private static COSDictionary differencesFont(String glyphName) {
+        COSDictionary font = new COSDictionary();
+        font.setItem(COSName.TYPE, COSName.FONT);
+        font.setItem(COSName.SUBTYPE, COSName.TYPE1);
+        font.setName(COSName.BASE_FONT, "Helvetica");
+        COSDictionary encoding = new COSDictionary();
+        COSArray differences = new COSArray();
+        differences.add(COSInteger.get(0xE9));
+        differences.add(COSName.getPDFName(glyphName));
+        encoding.setItem(COSName.DIFFERENCES, differences);
+        font.setItem(COSName.ENCODING, encoding);
+        font.setItem(COSName.FONT_DESC, new COSDictionary());
+        return font;
+    }
+
+    @Test
     void missingFontDescriptorFailsInsteadOfReturningTheInput() throws Exception {
         assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
         Path source = Path.of(PdfFontEmbedderTest.class.getResource("/pdfs/general/minimal.pdf")
