@@ -4,6 +4,7 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 
+#include <cerrno>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -93,22 +94,37 @@ inline void DiscardStaged(StagedFile* staged) {
 }
 
 #ifndef _WIN32
-inline mode_t ProcessUmask() {
-    static const mode_t mask = [] {
-        const mode_t current = ::umask(0);
-        ::umask(current);
-        return current;
-    }();
-    return mask;
+// A new destination gets the mode a plain create in its directory would give it.
+// That is measured on a throwaway file rather than by reading the umask, because
+// reading the umask means setting it process-wide while other threads create files.
+inline mode_t NewFileMode(const std::filesystem::path& dir) {
+    std::random_device rd;
+    for (int attempt = 0; attempt < 64; ++attempt) {
+        const uint64_t token = (static_cast<uint64_t>(rd()) << 32) | rd();
+        const std::filesystem::path probe = dir / (".jpdfium-mode." + std::to_string(token));
+        const int fd = ::open(probe.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0666);
+        if (fd < 0) {
+            if (errno == EEXIST) continue;
+            break;
+        }
+        struct stat st;
+        std::memset(&st, 0, sizeof(st));
+        const bool measured = ::fstat(fd, &st) == 0;
+        ::close(fd);
+        ::unlink(probe.c_str());
+        if (measured) return st.st_mode & 07777;
+        break;
+    }
+    return 0600;
 }
 
-// An existing destination keeps its mode; a new one gets what a plain create
-// would have given it, since the staging file itself is created owner-only.
 inline mode_t PublishMode(const char* destination) {
     struct stat st;
     std::memset(&st, 0, sizeof(st));
     if (::stat(destination, &st) == 0) return st.st_mode & 07777;
-    return static_cast<mode_t>(0666 & ~ProcessUmask());
+    const std::filesystem::path target = NativePath(destination);
+    return NewFileMode(target.has_parent_path() ? target.parent_path()
+                                                : std::filesystem::path("."));
 }
 #endif
 

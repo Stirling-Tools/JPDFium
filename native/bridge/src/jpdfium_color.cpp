@@ -1437,9 +1437,9 @@ JPDFIUM_EXPORT int32_t jpdfium_color_output_intent_file(const char* in_path, con
         // in-place target can never be truncated while qpdf still streams it.
         auto qpdf = QPDF::create();
         qpdf->processFile(in_path);
-        qpdf->getRoot().replaceKey(
-            "/OutputIntents", MergeOutputIntents(qpdf.get(), icc, static_cast<size_t>(icc_len),
-                                                 subtype, condition_identifier, info));
+        qpdf->getRoot().replaceKey("/OutputIntents",
+                                   MergeOutputIntents(qpdf.get(), icc, static_cast<size_t>(icc_len),
+                                                      subtype, condition_identifier, info));
         std::string error;
         const bool published = WriteAndPublish(
             out_path,
@@ -1533,9 +1533,9 @@ JPDFIUM_EXPORT int32_t jpdfium_color_pdfx_file(const char* in_path, const char* 
         }
         auto qpdf = QPDF::create();
         qpdf->processFile(in_path);
-        qpdf->getRoot().replaceKey(
-            "/OutputIntents", MergeOutputIntents(qpdf.get(), icc, static_cast<size_t>(icc_len),
-                                                 "GTS_PDFX", condition_identifier, info));
+        qpdf->getRoot().replaceKey("/OutputIntents",
+                                   MergeOutputIntents(qpdf.get(), icc, static_cast<size_t>(icc_len),
+                                                      "GTS_PDFX", condition_identifier, info));
         UpdateOrCreatePdfxMetadata(qpdf.get(), version, conformance);
         std::string error;
         const bool published = WriteAndPublish(

@@ -103,6 +103,15 @@ void PosixChecks(const std::filesystem::path& dir) {
     Expect(PublishText(dest, "generated", nothing, true), "publish with mode");
     Expect((std::filesystem::status(dest).permissions() & std::filesystem::perms::all) == mode,
            "destination mode preserved");
+
+    const mode_t previous = ::umask(027);
+    const std::filesystem::path fresh = dir / "fresh.pdf";
+    Expect(PublishText(fresh, "generated", nothing, true), "publish to a new destination");
+    ::umask(previous);
+    Expect((std::filesystem::status(fresh).permissions() & std::filesystem::perms::all) ==
+               (std::filesystem::perms::owner_read | std::filesystem::perms::owner_write |
+                std::filesystem::perms::group_read),
+           "new destination gets the umask-derived mode");
 }
 #endif
 
