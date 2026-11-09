@@ -1644,7 +1644,7 @@ QPDFObjectHandle newDescriptor(QPDF& qpdf, QPDFObjectHandle font, FT_Face face, 
 
 EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
                             std::vector<FontSource> const& sources, bool onlyMissing,
-                            FILE* out = nullptr) {
+                            FILE* out = nullptr, bool existingOnly = false) {
     struct Programs : std::vector<FontProgram> {
         FT_Library lib = nullptr;
         ~Programs() {
@@ -2313,6 +2313,45 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_optimize_ex(const uint8_t* input, int64_t in
         std::memcpy(*output, buf->getBuffer(), static_cast<size_t>(*outputLen));
         return 0;
 
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
+    }
+}
+
+static int32_t embedFontsExport(const uint8_t* input, int64_t inputLen, int32_t count,
+                                const char* const* names, const uint8_t* const* fonts,
+                                const int64_t* fontLens, bool onlyMissing, bool existingOnly,
+                                uint8_t** output, int64_t* outputLen) {
+    try {
+        if (!input || inputLen <= 0 || count <= 0 || !names || !fonts || !fontLens || !output ||
+            !outputLen) {
+            return -1;
+        }
+        *output = nullptr;
+        *outputLen = 0;
+        std::vector<FontSource> sources;
+        for (int32_t i = 0; i < count; ++i) {
+            if (!names[i] || !*names[i] || !fonts[i] || fontLens[i] <= 0) return -1;
+            sources.push_back({names[i], {fonts[i], static_cast<size_t>(fontLens[i])}});
+        }
+        auto result = embedFonts(
+            [&](QPDF& qpdf) {
+                qpdf.processMemoryFile("font-in", reinterpret_cast<const char*>(input),
+                                       static_cast<size_t>(inputLen));
+            },
+            sources, onlyMissing, nullptr, existingOnly);
+        if (result.rc != 0) {
+            std::fprintf(stderr, "jpdfium qpdf embed fonts: %s\n", result.error.c_str());
+            return result.rc;
+        }
+        *outputLen = static_cast<int64_t>(result.buffer->getSize());
+        *output = static_cast<uint8_t*>(malloc(static_cast<size_t>(*outputLen)));
+        if (!*output) {
+            *outputLen = 0;
+            return -1;
+        }
+        std::memcpy(*output, result.buffer->getBuffer(), static_cast<size_t>(*outputLen));
+        return 0;
     } catch (...) {
         return JPDFIUM_ERR_NATIVE;
     }
