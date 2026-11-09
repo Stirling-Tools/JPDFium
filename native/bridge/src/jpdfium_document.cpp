@@ -743,9 +743,8 @@ int32_t jpdfium_doc_save_bytes(int64_t doc, uint8_t** data, int64_t* len) {
     return JPDFIUM_OK;
 }
 
-
 static int32_t save_incremental_to_file_impl(int64_t doc, const char* path, int64_t max_bytes,
-                                     int64_t* out_bytes, FPDF_DWORD save_flags) {
+                                             int64_t* out_bytes, FPDF_DWORD save_flags) {
     try {
         DocWrapper* w = decodeDoc(doc);
         if (!w || !w->core || !w->core->doc) return JPDFIUM_ERR_INVALID;
