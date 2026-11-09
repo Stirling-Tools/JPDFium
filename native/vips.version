@@ -12,4 +12,4 @@
 # The pinned release must contain every platform required by the publishing
 # workflows, including both Linux glibc architectures built on Ubuntu 24.04.
 
-vips-20261104-91839fb
+vips-20261109-9a3d94b
