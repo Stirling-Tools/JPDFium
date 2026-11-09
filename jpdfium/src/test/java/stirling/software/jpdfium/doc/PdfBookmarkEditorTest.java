@@ -141,6 +141,40 @@ class PdfBookmarkEditorTest {
     }
 
     @Test
+    void memoryMergeCountsVisibleOutlineItemsAtTheRoot() throws Exception {
+        assumeTrue(QpdfLib.isMergeSupported(), "QPDF memory merge unavailable");
+        try (PdfDocument a = PdfDocument.open(expandedBookmarkedPdf());
+             PdfDocument merged = PdfMerge.merge(List.of(a),
+                     StorageOptions.builder().memory().build())) {
+            try (PDDocument pdf = Loader.loadPDF(merged.saveBytes())) {
+                assertEquals(3, pdf.getDocumentCatalog().getDocumentOutline().getOpenCount(),
+                        "root /Count must include an open parent and its two visible children");
+            }
+        }
+    }
+
+    @Test
+    void memoryMergeKeepsDeepOutlineHierarchy() throws Exception {
+        assumeTrue(QpdfLib.isMergeSupported(), "QPDF memory merge unavailable");
+        int depth = 60;
+        try (PdfDocument a = PdfDocument.open(deeplyNestedBookmarkedPdf(depth));
+             PdfDocument merged = PdfMerge.merge(List.of(a),
+                     StorageOptions.builder().memory().build())) {
+            List<Bookmark> outline = merged.bookmarks();
+            assertEquals(1, outline.size());
+            Bookmark current = outline.getFirst();
+            for (int level = 0; level < depth; level++) {
+                assertEquals("L" + level, current.title());
+                if (level + 1 < depth) {
+                    assertEquals(1, current.children().size(), "level " + level + " child");
+                    current = current.children().getFirst();
+                }
+            }
+            assertTrue(current.children().isEmpty());
+        }
+    }
+
+    @Test
     void bytesOverloadKeepsDocumentInfo() throws Exception {
         byte[] withBookmarks = PdfBookmarkEditor.setBookmarks(bookmarkedPdf("A", 3),
                 PdfBookmarkEditor.BookmarkTree.builder().add("Only", 1).build());
@@ -242,6 +276,56 @@ class PdfBookmarkEditorTest {
             child.setDestination(childDestination);
             items.getFirst().addLast(child);
 
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            document.save(out);
+            return out.toByteArray();
+        }
+    }
+
+    private static byte[] expandedBookmarkedPdf() throws Exception {
+        try (PDDocument document = new PDDocument()) {
+            PDPage page = new PDPage(PDRectangle.LETTER);
+            document.addPage(page);
+            PDDocumentOutline outline = new PDDocumentOutline();
+            document.getDocumentCatalog().setDocumentOutline(outline);
+            PDOutlineItem parent = new PDOutlineItem();
+            parent.setTitle("P");
+            PDPageFitDestination destination = new PDPageFitDestination();
+            destination.setPage(page);
+            parent.setDestination(destination);
+            outline.addLast(parent);
+            for (int i = 0; i < 2; i++) {
+                PDOutlineItem child = new PDOutlineItem();
+                child.setTitle("P-" + i);
+                PDPageFitDestination childDestination = new PDPageFitDestination();
+                childDestination.setPage(page);
+                child.setDestination(childDestination);
+                parent.addLast(child);
+            }
+            parent.openNode();
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            document.save(out);
+            return out.toByteArray();
+        }
+    }
+
+    private static byte[] deeplyNestedBookmarkedPdf(int depth) throws Exception {
+        try (PDDocument document = new PDDocument()) {
+            PDPage page = new PDPage(PDRectangle.LETTER);
+            document.addPage(page);
+            PDDocumentOutline outline = new PDDocumentOutline();
+            document.getDocumentCatalog().setDocumentOutline(outline);
+            PDOutlineItem parent = null;
+            for (int level = 0; level < depth; level++) {
+                PDOutlineItem item = new PDOutlineItem();
+                item.setTitle("L" + level);
+                PDPageFitDestination destination = new PDPageFitDestination();
+                destination.setPage(page);
+                item.setDestination(destination);
+                if (parent == null) outline.addLast(item);
+                else parent.addLast(item);
+                parent = item;
+            }
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             document.save(out);
             return out.toByteArray();

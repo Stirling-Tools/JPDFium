@@ -476,6 +476,14 @@ QPDFObjectHandle buildOutlineList(QPDF& doc, std::vector<OutlineNode> const& nod
     return items.front();
 }
 
+long long visibleOutlineItems(OutlineNode const& node) {
+    long long count = 1;
+    if (!node.hasCount || node.count >= 0) {
+        for (auto const& child : node.children) count += visibleOutlineItems(child);
+    }
+    return count;
+}
+
 void installOutlines(QPDF& doc, std::vector<OutlineNode> const& outlines,
                      OutputPageMap const& outputPages) {
     if (outlines.empty()) return;
@@ -487,10 +495,7 @@ void installOutlines(QPDF& doc, std::vector<OutlineNode> const& outlines,
     outlineRoot.replaceKey("/First", first);
     outlineRoot.replaceKey("/Last", last);
     long long visible = 0;
-    for (auto const& node : outlines) {
-        visible += 1;
-        if (node.hasCount && node.count >= 0) visible += node.count;
-    }
+    for (auto const& node : outlines) visible += visibleOutlineItems(node);
     outlineRoot.replaceKey("/Count", QPDFObjectHandle::newInteger(visible));
     doc.getRoot().replaceKey("/Outlines", outlineRoot);
 }
