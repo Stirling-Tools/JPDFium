@@ -1755,6 +1755,17 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_embed_fonts(const uint8_t* input, int64_t in
     }
 }
 
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_replace_font_stream(const uint8_t* input, int64_t inputLen,
+                                                        const char* baseFont,
+                                                        const uint8_t* fontData, int64_t fontLen,
+                                                        uint8_t** output, int64_t* outputLen) {
+    if (!baseFont || !*baseFont) return -1;
+    const char* names[1] = {baseFont};
+    const uint8_t* fonts[1] = {fontData};
+    const int64_t lens[1] = {fontLen};
+    return jpdfium_qpdf_embed_fonts(input, inputLen, 1, names, fonts, lens, 0, output, outputLen);
+}
+
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_optimize(const uint8_t* input, int64_t inputLen,
                                              uint8_t** output, int64_t* outputLen, int32_t flags,
                                              int32_t compressionLevel, int32_t objectStreamMode,
