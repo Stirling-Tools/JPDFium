@@ -379,6 +379,7 @@ public final class PdfFontEmbedder {
         Map<String, Face> index = indexFor(fontDirs);
         Map<String, byte[]> found = new LinkedHashMap<>();
         Map<Face, byte[]> programs = new HashMap<>();
+        List<FontStatus> statuses = new ArrayList<>(missing.size());
         for (String name : missing) {
             if (!substitutable.getOrDefault(name, true)) continue;
             Face face = resolve(index, key(name));
@@ -386,6 +387,7 @@ public final class PdfFontEmbedder {
             byte[] data = programs.get(face);
             if (data == null) programs.put(face, data = program(face));
             found.put(name, data);
+            statuses.add(new FontStatus(name, source(face), face.fsType(), true, "embedded"));
         }
         return found;
     }
