@@ -200,6 +200,9 @@ bool WriteAndPublish(const char* destination, Write&& write, std::string* error)
     try {
         OpenUniqueSibling(destination, &staged);
         write(staged);
+        if (std::fflush(staged.file) != 0) {
+            throw std::runtime_error("cannot flush the staging file");
+        }
         if (!ApplyPublishModeTo(staged.file, destination)) {
             throw std::runtime_error("cannot set the permissions of the staging file");
         }
