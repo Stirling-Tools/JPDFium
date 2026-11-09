@@ -21,6 +21,8 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -41,11 +43,45 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 class PdfFontEmbedderTest {
 
     @Test
-    void fileBackedEmbeddingWritesTheOutputWithoutJavaDocumentBytes(@TempDir Path temp)
-            throws Exception {
+    void fileBackedEmbeddingWritesEmbeddedFontToOutput(@TempDir Path temp) throws Exception {
         assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
-        Path input = temp.resolve("input.pdf");
+        Path input = helveticaPage(temp.resolve("input.pdf"));
         Path output = temp.resolve("output.pdf");
+
+        PdfFontEmbedder.FileResult result =
+                PdfFontEmbedder.embedMissingTo(input, output, liberationSansDir(temp));
+
+        assertEquals(List.of("Helvetica"), result.embedded());
+        assertTrue(firstFontEmbedded(output), "file-backed output font must be embedded");
+    }
+
+    @Test
+    void fileBackedEmbeddingRewritesInPlace(@TempDir Path temp) throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
+        Path pdf = helveticaPage(temp.resolve("input.pdf"));
+
+        PdfFontEmbedder.FileResult result =
+                PdfFontEmbedder.embedMissingTo(pdf, pdf, liberationSansDir(temp));
+
+        assertEquals(List.of("Helvetica"), result.embedded());
+        assertTrue(firstFontEmbedded(pdf), "in-place output font must be embedded");
+    }
+
+    @Test
+    void fileBackedEmbeddingCopiesTheInputWhenNoFontMatches(@TempDir Path temp) throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
+        Path input = helveticaPage(temp.resolve("input.pdf"));
+        Path output = temp.resolve("output.pdf");
+        Path empty = Files.createDirectory(temp.resolve("no-fonts"));
+
+        PdfFontEmbedder.FileResult result = PdfFontEmbedder.embedMissingTo(input, output, empty);
+
+        assertTrue(result.embedded().isEmpty());
+        assertEquals(List.of("Helvetica"), result.unresolved());
+        assertArrayEquals(Files.readAllBytes(input), Files.readAllBytes(output));
+    }
+
+    private static Path helveticaPage(Path target) throws IOException {
         try (PDDocument doc = new PDDocument()) {
             PDPage page = new PDPage();
             doc.addPage(page);
@@ -56,17 +92,25 @@ class PdfFontEmbedderTest {
                 content.showText("file backed font embedding");
                 content.endText();
             }
-            doc.save(input.toFile());
+            doc.save(target.toFile());
         }
+        return target;
+    }
 
-        PdfFontEmbedder.FileResult result = PdfFontEmbedder.embedMissingTo(input, output);
-        assumeTrue(!result.embedded().isEmpty(), "no matching system font installed");
+    private static Path liberationSansDir(Path temp) throws IOException {
+        Path dir = Files.createDirectories(temp.resolve("fonts"));
+        try (InputStream font = PDDocument.class.getResourceAsStream(
+                "/org/apache/pdfbox/resources/ttf/LiberationSans-Regular.ttf")) {
+            assertNotNull(font, "PDFBox no longer bundles LiberationSans");
+            Files.copy(font, dir.resolve("LiberationSans-Regular.ttf"));
+        }
+        return dir;
+    }
 
-        assertTrue(Files.size(output) > 0, "file-backed output must be written");
-        try (PDDocument rewritten = Loader.loadPDF(output.toFile())) {
-            PDFont font = rewritten.getPage(0).getResources()
-                    .getFont(rewritten.getPage(0).getResources().getFontNames().iterator().next());
-            assertTrue(font.isEmbedded(), "file-backed output font must be embedded");
+    private static boolean firstFontEmbedded(Path pdf) throws IOException {
+        try (PDDocument doc = Loader.loadPDF(pdf.toFile())) {
+            PDResources resources = doc.getPage(0).getResources();
+            return resources.getFont(resources.getFontNames().iterator().next()).isEmbedded();
         }
     }
 

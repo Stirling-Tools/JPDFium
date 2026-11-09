@@ -4,12 +4,14 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <random>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #if defined(_WIN32)
 #include <io.h>
 #include <share.h>
@@ -20,34 +22,45 @@
 
 namespace jpdfium_staging {
 
+inline std::filesystem::path NativePath(const std::string& utf8) {
+    return std::filesystem::path(std::u8string(utf8.begin(), utf8.end()));
+}
+
+inline std::string Utf8(const std::filesystem::path& path) {
+    const std::u8string text = path.u8string();
+    return std::string(text.begin(), text.end());
+}
+
 struct StagedFile {
     std::string path;
     FILE* file = nullptr;
 };
 
-// Creates a unique sibling of out_path with an exclusive, owner-only create, so a
-// planted or aliased path cannot truncate anything while qpdf streams the input.
+// Creates a unique sibling of out_path with an exclusive, owner-only create that
+// refuses a symlink, and keeps it open so it is never reopened by name.
 inline void OpenUniqueSibling(const std::string& out_path, StagedFile* staged) {
-    const std::filesystem::path target(out_path);
+    const std::filesystem::path target = NativePath(out_path);
     const std::filesystem::path dir =
         target.has_parent_path() ? target.parent_path() : std::filesystem::path(".");
-    const std::string stem = target.filename().string();
+    const std::u8string stem = target.filename().u8string();
     std::random_device rd;
-    std::mt19937_64 rng(rd());
     for (int attempt = 0; attempt < 64; ++attempt) {
-        const std::string candidate =
-            (dir / (stem + "." + std::to_string(rng()) + ".jpdfium-tmp")).string();
+        const uint64_t token = (static_cast<uint64_t>(rd()) << 32) | rd();
+        const std::string suffix = "." + std::to_string(token) + ".jpdfium-tmp";
+        const std::filesystem::path candidate =
+            dir / (stem + std::u8string(suffix.begin(), suffix.end()));
 #if defined(_WIN32)
         int fd = -1;
-        if (::_sopen_s(&fd, candidate.c_str(),
-                       _O_WRONLY | _O_CREAT | _O_EXCL | _O_NOINHERIT | _O_BINARY, _SH_DENYRW,
-                       _S_IREAD | _S_IWRITE) != 0) {
+        if (::_wsopen_s(&fd, candidate.c_str(),
+                        _O_WRONLY | _O_CREAT | _O_EXCL | _O_NOINHERIT | _O_BINARY, _SH_DENYRW,
+                        _S_IREAD | _S_IWRITE) != 0) {
             continue;
         }
         FILE* file = ::_fdopen(fd, "wb");
         if (!file) {
             ::_close(fd);
-            std::remove(candidate.c_str());
+            std::error_code ec;
+            std::filesystem::remove(candidate, ec);
             continue;
         }
 #else
@@ -56,81 +69,57 @@ inline void OpenUniqueSibling(const std::string& out_path, StagedFile* staged) {
         FILE* file = ::fdopen(fd, "wb");
         if (!file) {
             ::close(fd);
-            std::remove(candidate.c_str());
+            std::error_code ec;
+            std::filesystem::remove(candidate, ec);
             continue;
         }
 #endif
-        staged->path = candidate;
+        staged->path = Utf8(candidate);
         staged->file = file;
         return;
     }
     throw std::runtime_error("cannot create a temporary output file");
 }
 
-inline std::string CreateUniqueSibling(const std::string& out_path) {
-    StagedFile staged;
-    OpenUniqueSibling(out_path, &staged);
-    std::fclose(staged.file);
-    return staged.path;
+inline void DiscardStaged(StagedFile* staged) {
+    if (staged->file) {
+        std::fclose(staged->file);
+        staged->file = nullptr;
+    }
+    if (!staged->path.empty()) {
+        std::error_code ec;
+        std::filesystem::remove(NativePath(staged->path), ec);
+    }
 }
+
+#ifndef _WIN32
+inline mode_t ProcessUmask() {
+    static const mode_t mask = [] {
+        const mode_t current = ::umask(0);
+        ::umask(current);
+        return current;
+    }();
+    return mask;
+}
+
+// An existing destination keeps its mode; a new one gets what a plain create
+// would have given it, since the staging file itself is created owner-only.
+inline mode_t PublishMode(const char* destination) {
+    struct stat st;
+    std::memset(&st, 0, sizeof(st));
+    if (::stat(destination, &st) == 0) return st.st_mode & 07777;
+    return static_cast<mode_t>(0666 & ~ProcessUmask());
+}
+#endif
 
 inline bool ApplyPublishModeTo(FILE* file, const char* destination) {
 #ifndef _WIN32
-    struct stat st;
-    std::memset(&st, 0, sizeof(st));
-    mode_t mode;
-    if (::stat(destination, &st) == 0) {
-        mode = st.st_mode & 07777;
-    } else {
-        const mode_t mask = ::umask(0);
-        ::umask(mask);
-        mode = static_cast<mode_t>(0666 & ~mask);
-    }
-    return ::fchmod(::fileno(file), mode) == 0;
+    return ::fchmod(::fileno(file), PublishMode(destination)) == 0;
 #else
     (void)file;
     (void)destination;
     return true;
 #endif
-}
-
-// Preserves an existing destination's mode; a brand-new file keeps the mode
-// created by the normal umask-aware 0666 staging file.
-inline void ApplyPublishMode(const std::string& staging, const char* destination) {
-#ifndef _WIN32
-    struct stat st;
-    std::memset(&st, 0, sizeof(st));
-    if (::stat(destination, &st) == 0) {
-        ::chmod(staging.c_str(), st.st_mode & 07777);
-    } else {
-        const mode_t mask = ::umask(0);
-        ::umask(mask);
-        ::chmod(staging.c_str(), static_cast<mode_t>(0666 & ~mask));
-    }
-#else
-    (void)staging;
-    (void)destination;
-#endif
-}
-
-// Publishes the staging file over the destination. The staging file survives a
-// failed publish so a written document is never lost.
-inline bool PublishStaged(const std::string& staging, const char* destination) {
-#if defined(_WIN32)
-    // MoveFileEx replaces an existing destination atomically. std::rename
-    // cannot replace on Windows, so a fallback would only hide the failure.
-    if (::MoveFileExA(staging.c_str(), destination,
-                      MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-        return true;
-    }
-#else
-    if (std::rename(staging.c_str(), destination) == 0) return true;
-#endif
-    // Keep the staging file so a fully written document is never lost, and
-    // make the retained path visible to the caller's logs.
-    std::fprintf(stderr, "jpdfium: failed to publish %s over %s; staging file retained\n",
-                 staging.c_str(), destination);
-    return false;
 }
 
 inline bool PublishStagedFile(StagedFile* staged, const char* destination, std::string* error) {
@@ -149,7 +138,9 @@ inline bool PublishStagedFile(StagedFile* staged, const char* destination, std::
         *error = "the staging file is empty";
         return false;
     }
-    if (!PublishStaged(staged->path, destination)) {
+    // MoveFileEx replaces an existing destination atomically; std::rename cannot.
+    if (!::MoveFileExW(NativePath(staged->path).c_str(), NativePath(destination).c_str(),
+                       MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
         *error = "cannot publish the staging file";
         return false;
     }
@@ -184,6 +175,26 @@ inline bool PublishStagedFile(StagedFile* staged, const char* destination, std::
     }
     return true;
 #endif
+}
+
+template <typename Write>
+bool WriteAndPublish(const char* destination, Write&& write, std::string* error) {
+    StagedFile staged;
+    try {
+        OpenUniqueSibling(destination, &staged);
+        if (!ApplyPublishModeTo(staged.file, destination)) {
+            throw std::runtime_error("cannot set the permissions of the staging file");
+        }
+        write(staged);
+    } catch (...) {
+        DiscardStaged(&staged);
+        throw;
+    }
+    if (!PublishStagedFile(&staged, destination, error)) {
+        DiscardStaged(&staged);
+        return false;
+    }
+    return true;
 }
 
 }  // namespace jpdfium_staging

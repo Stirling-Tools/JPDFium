@@ -9,6 +9,7 @@ import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
+import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -58,7 +59,10 @@ public final class PdfFontEmbedder {
      */
     public record Result(byte[] pdf, List<String> embedded, List<String> unresolved) {}
 
-    /** Outcome of the file-backed embedding pass; the PDF is rewritten in place or to a target. */
+    /**
+     * Outcome of the file-backed embedding pass. The target always holds the document afterwards:
+     * rewritten when a font was embedded, otherwise a copy of the input.
+     */
     public record FileResult(List<String> embedded, List<String> unresolved) {}
 
     private record Face(Path path, int offset) {}
@@ -175,6 +179,7 @@ public final class PdfFontEmbedder {
         List<String> missing = nonEmbedded(input);
         Map<String, byte[]> found = programsFor(missing, fontDirs);
         if (found.isEmpty() || !QpdfLib.embedFontsToFile(input, output, found, true)) {
+            Files.copy(input, output, StandardCopyOption.REPLACE_EXISTING);
             return new FileResult(List.of(), missing);
         }
         List<String> unresolved = nonEmbedded(output);

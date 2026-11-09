@@ -512,9 +512,8 @@ std::string NormaliseString(const char* value, const char* fallback) {
     return std::string(fallback);
 }
 
-using jpdfium_staging::ApplyPublishMode;
-using jpdfium_staging::CreateUniqueSibling;
-using jpdfium_staging::PublishStaged;
+using jpdfium_staging::StagedFile;
+using jpdfium_staging::WriteAndPublish;
 
 // Preserve the input stream representation. Letting QPDFWriter recompress
 // unfiltered metadata streams produced zlib data without a /Filter entry on
@@ -646,11 +645,14 @@ struct XmpField {
     bool keep_existing = false;
 };
 
+uint64_t RandomWord(std::random_device& device) {
+    return (static_cast<uint64_t>(device()) << 32) | device();
+}
+
 std::string NewUuid() {
     std::random_device device;
-    std::mt19937_64 rng(device());
-    const uint64_t hi = rng();
-    const uint64_t lo = rng();
+    const uint64_t hi = RandomWord(device);
+    const uint64_t lo = RandomWord(device);
     char buf[48];
     std::snprintf(buf, sizeof(buf), "uuid:%08x-%04x-4%03x-%04x-%012llx",
                   static_cast<unsigned>(hi >> 32), static_cast<unsigned>((hi >> 16) & 0xffff),
@@ -1433,30 +1435,26 @@ JPDFIUM_EXPORT int32_t jpdfium_color_output_intent_file(const char* in_path, con
 
         // Write a unique sibling then replace the destination, so an aliased or
         // in-place target can never be truncated while qpdf still streams it.
-        const std::string target = CreateUniqueSibling(out_path);
-        try {
-            auto qpdf = QPDF::create();
-            qpdf->processFile(in_path);
-            qpdf->getRoot().replaceKey(
-                "/OutputIntents", MergeOutputIntents(qpdf.get(), icc, static_cast<size_t>(icc_len),
-                                                     subtype, condition_identifier, info));
-            QPDFWriter writer{*qpdf};
-            ConfigureWriter(writer);
-            writer.setOutputFilename(target.c_str());
-            jpdfium_qpdf_internal::WriterLock lock{-1};
-            writer.write();
-        } catch (...) {
-            std::remove(target.c_str());
-            throw;
-        }
-
-        std::error_code ec;
-        if (std::filesystem::file_size(target, ec) == 0 || ec) {
-            std::remove(target.c_str());
+        auto qpdf = QPDF::create();
+        qpdf->processFile(in_path);
+        qpdf->getRoot().replaceKey(
+            "/OutputIntents", MergeOutputIntents(qpdf.get(), icc, static_cast<size_t>(icc_len),
+                                                 subtype, condition_identifier, info));
+        std::string error;
+        const bool published = WriteAndPublish(
+            out_path,
+            [&](StagedFile& staged) {
+                QPDFWriter writer{*qpdf};
+                ConfigureWriter(writer);
+                writer.setOutputFile(staged.path.c_str(), staged.file, false);
+                jpdfium_qpdf_internal::WriterLock lock{-1};
+                writer.write();
+            },
+            &error);
+        if (!published) {
+            std::fprintf(stderr, "jpdfium color output intent file: %s\n", error.c_str());
             return JPDFIUM_ERR_IO;
         }
-        ApplyPublishMode(target, out_path);
-        if (!PublishStaged(target, out_path)) return JPDFIUM_ERR_IO;
         return JPDFIUM_OK;
 #endif
     } catch (const std::exception& e) {
@@ -1533,31 +1531,27 @@ JPDFIUM_EXPORT int32_t jpdfium_color_pdfx_file(const char* in_path, const char* 
         if (!in_path || !out_path || !icc || icc_len <= 0 || !version || !*version) {
             return JPDFIUM_ERR_INVALID;
         }
-        const std::string target = CreateUniqueSibling(out_path);
-        try {
-            auto qpdf = QPDF::create();
-            qpdf->processFile(in_path);
-            qpdf->getRoot().replaceKey(
-                "/OutputIntents", MergeOutputIntents(qpdf.get(), icc, static_cast<size_t>(icc_len),
-                                                     "GTS_PDFX", condition_identifier, info));
-            UpdateOrCreatePdfxMetadata(qpdf.get(), version, conformance);
-            QPDFWriter writer{*qpdf};
-            ConfigurePdfxWriter(writer, version);
-            writer.setOutputFilename(target.c_str());
-            jpdfium_qpdf_internal::WriterLock lock{-1};
-            writer.write();
-        } catch (...) {
-            std::remove(target.c_str());
-            throw;
-        }
-
-        std::error_code ec;
-        if (std::filesystem::file_size(target, ec) == 0 || ec) {
-            std::remove(target.c_str());
+        auto qpdf = QPDF::create();
+        qpdf->processFile(in_path);
+        qpdf->getRoot().replaceKey(
+            "/OutputIntents", MergeOutputIntents(qpdf.get(), icc, static_cast<size_t>(icc_len),
+                                                 "GTS_PDFX", condition_identifier, info));
+        UpdateOrCreatePdfxMetadata(qpdf.get(), version, conformance);
+        std::string error;
+        const bool published = WriteAndPublish(
+            out_path,
+            [&](StagedFile& staged) {
+                QPDFWriter writer{*qpdf};
+                ConfigurePdfxWriter(writer, version);
+                writer.setOutputFile(staged.path.c_str(), staged.file, false);
+                jpdfium_qpdf_internal::WriterLock lock{-1};
+                writer.write();
+            },
+            &error);
+        if (!published) {
+            std::fprintf(stderr, "jpdfium pdfx file: %s\n", error.c_str());
             return JPDFIUM_ERR_IO;
         }
-        ApplyPublishMode(target, out_path);
-        if (!PublishStaged(target, out_path)) return JPDFIUM_ERR_IO;
         return JPDFIUM_OK;
 #endif
     } catch (const std::exception& e) {

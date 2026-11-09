@@ -4,34 +4,54 @@ import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.contentstream.operator.Operator;
 import org.apache.pdfbox.cos.COSArray;
 import org.apache.pdfbox.cos.COSDictionary;
+import org.apache.pdfbox.cos.COSFloat;
+import org.apache.pdfbox.cos.COSInteger;
 import org.apache.pdfbox.cos.COSName;
+import org.apache.pdfbox.cos.COSNumber;
 import org.apache.pdfbox.cos.COSStream;
+import org.apache.pdfbox.cos.COSString;
 import org.apache.pdfbox.pdfparser.PDFStreamParser;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDDocumentNameDictionary;
 import org.apache.pdfbox.pdmodel.PDJavascriptNameTreeNode;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
+import org.apache.pdfbox.pdmodel.PDResources;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
+import org.apache.pdfbox.pdmodel.common.PDStream;
 import org.apache.pdfbox.pdmodel.font.PDType1Font;
 import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
 import org.apache.pdfbox.pdmodel.graphics.form.PDFormXObject;
 import org.apache.pdfbox.pdmodel.graphics.image.LosslessFactory;
 import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 import org.apache.pdfbox.pdmodel.interactive.action.PDActionJavaScript;
+import org.apache.pdfbox.pdmodel.interactive.digitalsignature.PDSignature;
+import org.apache.pdfbox.pdmodel.interactive.form.PDAcroForm;
+import org.apache.pdfbox.pdmodel.interactive.form.PDSignatureField;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
+import org.junit.jupiter.api.io.TempDir;
+
+import javax.imageio.ImageIO;
 
 import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileSystems;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.exception.JPDFiumException;
+import stirling.software.jpdfium.panama.ColorBindings;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -115,7 +135,7 @@ class PdfXColourConversionTest {
             COSArray cs = (COSArray) firstImage(doc).getDictionaryObject(COSName.COLORSPACE);
             assertEquals(COSName.INDEXED, cs.getObject(0));
             assertEquals(COSName.DEVICECMYK, cs.getObject(1));
-            assertEquals(2 * 4, ((org.apache.pdfbox.cos.COSString) cs.getObject(3)).getBytes().length);
+            assertEquals(2 * 4, ((COSString) cs.getObject(3)).getBytes().length);
         }
     }
 
@@ -209,8 +229,8 @@ class PdfXColourConversionTest {
             in = save(doc);
         }
         assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
-        java.util.Optional<java.nio.file.Path> substitute = HELVETICA_SUBSTITUTES.stream()
-                .map(java.nio.file.Path::of).filter(java.nio.file.Files::isRegularFile).findFirst();
+        Optional<Path> substitute = HELVETICA_SUBSTITUTES.stream()
+                .map(Path::of).filter(Files::isRegularFile).findFirst();
         assumeTrue(substitute.isPresent(), "no known Helvetica substitute installed");
         byte[] out = PdfXConverter.applyMetadata(in, options(PdfXStandard.PDF_X_4)
                 .requireEmbeddedFonts(true).fontDirectories(substitute.get().getParent()).build());
@@ -228,10 +248,10 @@ class PdfXColourConversionTest {
         }
         byte[] in;
         try (PDDocument doc = Loader.loadPDF(blank)) {
-            org.apache.pdfbox.pdmodel.interactive.digitalsignature.PDSignature signature =
-                    new org.apache.pdfbox.pdmodel.interactive.digitalsignature.PDSignature();
-            signature.setFilter(org.apache.pdfbox.pdmodel.interactive.digitalsignature.PDSignature.FILTER_ADOBE_PPKLITE);
-            signature.setSubFilter(org.apache.pdfbox.pdmodel.interactive.digitalsignature.PDSignature.SUBFILTER_ADBE_PKCS7_DETACHED);
+            PDSignature signature =
+                    new PDSignature();
+            signature.setFilter(PDSignature.FILTER_ADOBE_PPKLITE);
+            signature.setSubFilter(PDSignature.SUBFILTER_ADBE_PKCS7_DETACHED);
             doc.addSignature(signature, content -> new byte[] {1, 2, 3, 4});
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             doc.saveIncremental(out);
@@ -251,7 +271,7 @@ class PdfXColourConversionTest {
             spaces.setDirect(false);
             for (int i = 0; i < 2; i++) {
                 PDPage page = new PDPage();
-                org.apache.pdfbox.pdmodel.PDResources resources = new org.apache.pdfbox.pdmodel.PDResources();
+                PDResources resources = new PDResources();
                 resources.getCOSObject().setItem(COSName.COLORSPACE, spaces);
                 page.setResources(resources);
                 doc.addPage(page);
@@ -278,11 +298,11 @@ class PdfXColourConversionTest {
         try (PDDocument doc = new PDDocument()) {
             PDPage page = new PDPage();
             doc.addPage(page);
-            org.apache.pdfbox.pdmodel.interactive.form.PDAcroForm form =
-                    new org.apache.pdfbox.pdmodel.interactive.form.PDAcroForm(doc);
+            PDAcroForm form =
+                    new PDAcroForm(doc);
             doc.getDocumentCatalog().setAcroForm(form);
-            org.apache.pdfbox.pdmodel.interactive.form.PDSignatureField field =
-                    new org.apache.pdfbox.pdmodel.interactive.form.PDSignatureField(form);
+            PDSignatureField field =
+                    new PDSignatureField(form);
             field.getWidgets().getFirst().setRectangle(new PDRectangle(10, 10, 100, 40));
             field.getWidgets().getFirst().setPage(page);
             page.getAnnotations().add(field.getWidgets().getFirst());
@@ -301,17 +321,17 @@ class PdfXColourConversionTest {
         try (PdfDocument source = PdfDocument.open(textAndRectangle());
                 PdfDocument out = PdfXConverter.applyMetadata(source,
                         options(PdfXStandard.PDF_X_4).title("Changed").build())) {
-            assertNotEquals(java.util.Optional.of("Changed"), PdfMetadata.of(source.rawHandleForRead()).title());
+            assertNotEquals(Optional.of("Changed"), PdfMetadata.of(source.rawHandleForRead()).title());
             assertEquals(1, out.pageCount());
         }
     }
 
     @Test
     void mismatchedLutIsRejectedBeforeTheNativeCall() {
-        assumeTrue(stirling.software.jpdfium.panama.ColorBindings.pdfxPrepareAvailable(),
+        assumeTrue(ColorBindings.pdfxPrepareAvailable(),
                 "PDF/X native pipeline unavailable");
         assertThrows(IllegalArgumentException.class,
-                () -> stirling.software.jpdfium.panama.ColorBindings.pdfxPrepareBytes(
+                () -> ColorBindings.pdfxPrepareBytes(
                         new byte[] {1}, 4, new byte[10], 17, 0, 90));
     }
 
@@ -356,7 +376,7 @@ class PdfXColourConversionTest {
             deviceN.add(inks);
             deviceN.add(COSName.DEVICERGB);
             deviceN.add(program);
-            org.apache.pdfbox.pdmodel.PDResources resources = new org.apache.pdfbox.pdmodel.PDResources();
+            PDResources resources = new PDResources();
             COSDictionary spaces = new COSDictionary();
             spaces.setItem(COSName.getPDFName("Sep"), separation);
             spaces.setItem(COSName.getPDFName("DN"), deviceN);
@@ -389,31 +409,46 @@ class PdfXColourConversionTest {
     }
 
     @Test
-    void fileVariantKeepsTheDestinationPermissions() throws Exception {
-        assumeTrue(stirling.software.jpdfium.panama.ColorBindings.pdfxPrepareAvailable(),
+    void fileVariantKeepsTheDestinationPermissions(@TempDir Path dir) throws Exception {
+        assumeTrue(ColorBindings.pdfxPrepareAvailable(),
                 "PDF/X native pipeline unavailable");
-        assumeTrue(java.nio.file.FileSystems.getDefault().supportedFileAttributeViews().contains("posix"),
+        assumeTrue(FileSystems.getDefault().supportedFileAttributeViews().contains("posix"),
                 "POSIX permissions unavailable");
-        java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("pdfx-mode");
-        java.nio.file.Path in = dir.resolve("in.pdf");
-        java.nio.file.Path out = dir.resolve("out.pdf");
-        java.nio.file.Files.write(in, textAndRectangle());
-        java.nio.file.Files.write(out, new byte[] {0});
-        var mode = java.nio.file.attribute.PosixFilePermissions.fromString("rw-r-----");
-        java.nio.file.Files.setPosixFilePermissions(out, mode);
-        stirling.software.jpdfium.panama.ColorBindings.pdfxPrepareFile(
+        Path in = dir.resolve("in.pdf");
+        Path out = dir.resolve("out.pdf");
+        Files.write(in, textAndRectangle());
+        Files.write(out, new byte[] {0});
+        var mode = PosixFilePermissions.fromString("rw-r-----");
+        Files.setPosixFilePermissions(out, mode);
+        ColorBindings.pdfxPrepareFile(
                 in.toString(), out.toString(), 4, null, 0, 0x0f, 90);
-        assertEquals(mode, java.nio.file.Files.getPosixFilePermissions(out));
-        assertTrue(java.nio.file.Files.size(out) > 1);
-        try (var leftovers = java.nio.file.Files.list(dir)) {
+        assertEquals(mode, Files.getPosixFilePermissions(out));
+        assertTrue(Files.size(out) > 1);
+        try (var leftovers = Files.list(dir)) {
             assertEquals(2, leftovers.count(), "staging file left behind");
         }
     }
 
     private static COSArray floats(float... values) {
         COSArray array = new COSArray();
-        for (float v : values) array.add(new org.apache.pdfbox.cos.COSFloat(v));
+        for (float v : values) array.add(new COSFloat(v));
         return array;
+    }
+
+    @Test
+    void truncatedJpegIsRecoveredOnlyWhenItsFrameMatchesTheImageSize() throws Exception {
+        byte[] out = convert(truncatedJpegPage(), PdfXStandard.PDF_X_4);
+        try (PDDocument doc = Loader.loadPDF(out)) {
+            PDResources resources = doc.getPage(0).getResources();
+            COSStream matching = ((PDImageXObject) resources.getXObject(COSName.getPDFName("Im1")))
+                    .getCOSObject();
+            COSStream mismatched = ((PDImageXObject) resources.getXObject(COSName.getPDFName("Im2")))
+                    .getCOSObject();
+            assertEquals(COSName.DEVICECMYK, matching.getDictionaryObject(COSName.COLORSPACE),
+                    "truncated JPEG of the declared size was not recovered");
+            assertEquals(COSName.DEVICERGB, mismatched.getDictionaryObject(COSName.COLORSPACE),
+                    "JPEG whose frame differs from /Width and /Height was converted");
+        }
     }
 
     @Test
@@ -488,6 +523,42 @@ class PdfXColourConversionTest {
         }
     }
 
+    private static byte[] truncatedJpegPage() throws IOException {
+        BufferedImage img = new BufferedImage(64, 64, BufferedImage.TYPE_INT_RGB);
+        for (int y = 0; y < 64; y++) {
+            for (int x = 0; x < 64; x++) img.setRGB(x, y, (x * 4) << 16 | (y * 4) << 8 | 0x80);
+        }
+        ByteArrayOutputStream encoded = new ByteArrayOutputStream();
+        ImageIO.write(img, "jpg", encoded);
+        byte[] jpeg = encoded.toByteArray();
+        byte[] truncated = Arrays.copyOf(jpeg, jpeg.length * 3 / 4);
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage();
+            doc.addPage(page);
+            page.setResources(new PDResources());
+            StringBuilder content = new StringBuilder();
+            int[] declared = {64, 128};
+            for (int i = 0; i < declared.length; i++) {
+                PDStream stream = new PDStream(doc, new ByteArrayInputStream(truncated));
+                COSStream cos = stream.getCOSObject();
+                cos.setItem(COSName.TYPE, COSName.XOBJECT);
+                cos.setItem(COSName.SUBTYPE, COSName.IMAGE);
+                cos.setItem(COSName.FILTER, COSName.DCT_DECODE);
+                cos.setInt(COSName.WIDTH, declared[i]);
+                cos.setInt(COSName.HEIGHT, declared[i]);
+                cos.setInt(COSName.BITS_PER_COMPONENT, 8);
+                cos.setItem(COSName.COLORSPACE, COSName.DEVICERGB);
+                page.getResources().put(COSName.getPDFName("Im" + (i + 1)),
+                        new PDImageXObject(stream, null));
+                content.append("q 100 0 0 100 ").append(50 + i * 150).append(" 50 cm /Im")
+                        .append(i + 1).append(" Do Q\n");
+            }
+            page.setContents(new PDStream(doc,
+                    new ByteArrayInputStream(content.toString().getBytes(StandardCharsets.US_ASCII))));
+            return save(doc);
+        }
+    }
+
     private static byte[] indexedPage() throws IOException {
         try (PDDocument doc = new PDDocument()) {
             PDPage page = new PDPage();
@@ -500,8 +571,8 @@ class PdfXColourConversionTest {
             COSArray indexed = new COSArray();
             indexed.add(COSName.INDEXED);
             indexed.add(COSName.DEVICERGB);
-            indexed.add(org.apache.pdfbox.cos.COSInteger.get(1));
-            indexed.add(new org.apache.pdfbox.cos.COSString(new byte[] {(byte) 255, 0, 0, 0, 0, (byte) 255}));
+            indexed.add(COSInteger.get(1));
+            indexed.add(new COSString(new byte[] {(byte) 255, 0, 0, 0, 0, (byte) 255}));
             COSStream stream = image.getCOSObject();
             try (var os = stream.createOutputStream(COSName.FLATE_DECODE)) {
                 os.write(new byte[] {0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 0});
@@ -525,7 +596,7 @@ class PdfXColourConversionTest {
             try (var os = form.getContentStream().createOutputStream(COSName.FLATE_DECODE)) {
                 os.write("0.1 0.5 0.9 rg 0 0 50 50 re f".getBytes(StandardCharsets.US_ASCII));
             }
-            page.setResources(new org.apache.pdfbox.pdmodel.PDResources());
+            page.setResources(new PDResources());
             page.getResources().put(COSName.getPDFName("Fm1"), form);
             try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
                 cs.drawForm(form);
@@ -572,7 +643,7 @@ class PdfXColourConversionTest {
         List<List<Float>> out = new ArrayList<>();
         List<Float> pending = new ArrayList<>();
         for (Object t : tokens) {
-            if (t instanceof org.apache.pdfbox.cos.COSNumber n) {
+            if (t instanceof COSNumber n) {
                 pending.add(n.floatValue());
             } else if (t instanceof Operator op) {
                 if (op.getName().equals(name)) out.add(List.copyOf(pending));

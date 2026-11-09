@@ -973,6 +973,16 @@ std::shared_ptr<Buffer> DecodeJpegLeniently(const Buffer& jpeg, int64_t width, i
 #ifdef JPDFIUM_HAS_TURBOJPEG
     tjhandle handle = tjInitDecompress();
     if (!handle) return nullptr;
+    int frame_width = 0;
+    int frame_height = 0;
+    int subsampling = 0;
+    int colourspace = 0;
+    if (tjDecompressHeader3(handle, jpeg.getBuffer(), static_cast<unsigned long>(jpeg.getSize()),
+                            &frame_width, &frame_height, &subsampling, &colourspace) != 0 ||
+        frame_width != width || frame_height != height) {
+        tjDestroy(handle);
+        return nullptr;
+    }
     auto data = std::make_shared<Buffer>(static_cast<size_t>(width * height * 3));
     const int rc = tjDecompress2(handle, jpeg.getBuffer(),
                                  static_cast<unsigned long>(jpeg.getSize()), data->getBuffer(),
@@ -1690,17 +1700,6 @@ void CopyMessage(const std::string& text, char* message, int32_t cap) {
     message[n] = '\0';
 }
 
-void DiscardStaged(jpdfium_staging::StagedFile* staged) {
-    if (staged->file) {
-        std::fclose(staged->file);
-        staged->file = nullptr;
-    }
-    if (!staged->path.empty()) {
-        std::error_code ec;
-        std::filesystem::remove(staged->path, ec);
-    }
-}
-
 Options MakeOptions(int32_t level, const uint8_t* lut, int32_t grid, int32_t flags,
                     int32_t quality) {
     Options o;
@@ -1797,45 +1796,37 @@ JPDFIUM_EXPORT int32_t jpdfium_pdfx_prepare_file(const char* in_path, const char
 #else
     if (!in_path || !out_path) return JPDFIUM_ERR_INVALID;
     if (lut && (lut_grid < 2 || lut_grid > 256)) return JPDFIUM_ERR_INVALID;
-    jpdfium_staging::StagedFile staged;
     try {
         Options options = MakeOptions(level, lut, lut_grid, flags, quality);
-        {
-            auto pdf = QPDF::create();
-            pdf->processFile(in_path);
-            Normalise(*pdf, options);
-            jpdfium_staging::OpenUniqueSibling(out_path, &staged);
-            if (!jpdfium_staging::ApplyPublishModeTo(staged.file, out_path)) {
-                throw std::runtime_error("cannot set the permissions of the staging file");
-            }
-            QPDFWriter writer{*pdf};
-            ConfigureWriter(writer);
-            writer.setOutputFile(staged.path.c_str(), staged.file, false);
-            jpdfium_qpdf_internal::WriterLock lock{-1};
-            writer.write();
-        }
+        auto pdf = QPDF::create();
+        pdf->processFile(in_path);
+        Normalise(*pdf, options);
         std::string error;
-        if (!jpdfium_staging::PublishStagedFile(&staged, out_path, &error)) {
-            std::error_code ec;
-            std::filesystem::remove(staged.path, ec);
+        const bool published = jpdfium_staging::WriteAndPublish(
+            out_path,
+            [&](jpdfium_staging::StagedFile& staged) {
+                QPDFWriter writer{*pdf};
+                ConfigureWriter(writer);
+                writer.setOutputFile(staged.path.c_str(), staged.file, false);
+                jpdfium_qpdf_internal::WriterLock lock{-1};
+                writer.write();
+            },
+            &error);
+        if (!published) {
             CopyMessage(error, message, message_cap);
             return JPDFIUM_ERR_IO;
         }
         return JPDFIUM_OK;
     } catch (const PdfxNonconformance& e) {
-        DiscardStaged(&staged);
         CopyMessage(e.what(), message, message_cap);
         return JPDFIUM_ERR_PDFX_NONCONFORMANT;
     } catch (const std::invalid_argument& e) {
-        DiscardStaged(&staged);
         CopyMessage(e.what(), message, message_cap);
         return JPDFIUM_ERR_INVALID;
     } catch (const std::exception& e) {
-        DiscardStaged(&staged);
         CopyMessage(e.what(), message, message_cap);
         return JPDFIUM_ERR_NATIVE;
     } catch (...) {
-        DiscardStaged(&staged);
         return JPDFIUM_ERR_NATIVE;
     }
 #endif

@@ -151,13 +151,15 @@ public final class PdfXConverter {
         }
     }
 
-    private static void embedMissingFonts(Path pdf, PdfXOptions options) throws IOException {
+    private static void embedMissingFonts(Path pdf, PdfXOptions options) {
         if (!options.embedMissingFonts() || !PdfFontEmbedder.isAvailable()) return;
         try {
             PdfFontEmbedder.embedMissingTo(
                     pdf, pdf, options.fontDirectories().toArray(Path[]::new));
-        } catch (JPDFiumException e) {
-            if (options.requireEmbeddedFonts()) throw e;
+        } catch (IOException | JPDFiumException e) {
+            if (options.requireEmbeddedFonts()) {
+                throw new JPDFiumException("PDF/X font embedding failed: " + e.getMessage(), e);
+            }
         }
     }
 

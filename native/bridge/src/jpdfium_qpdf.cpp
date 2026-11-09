@@ -10,7 +10,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
-#include <fstream>
 #include <functional>
 #include <limits>
 #include <map>
@@ -1445,8 +1444,9 @@ QPDFObjectHandle newDescriptor(QPDF& qpdf, QPDFObjectHandle font, FT_Face face, 
     return qpdf.makeIndirectObject(d);
 }
 
-EmbedFontsResult embedFonts(std::span<const uint8_t> input, std::vector<FontSource> const& sources,
-                            bool onlyMissing) {
+EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
+                            std::vector<FontSource> const& sources, bool onlyMissing,
+                            FILE* out = nullptr) {
     struct Programs : std::vector<FontProgram> {
         FT_Library lib = nullptr;
         ~Programs() {
@@ -1460,8 +1460,7 @@ EmbedFontsResult embedFonts(std::span<const uint8_t> input, std::vector<FontSour
     try {
         if (FT_Init_FreeType(&lib)) return {nullptr, "FreeType init failed", -1};
         auto qpdf = QPDF::create();
-        qpdf->processMemoryFile("font-in", reinterpret_cast<const char*>(input.data()),
-                                input.size());
+        load(*qpdf);
 
         auto hasSignatureValue = [](QPDFObjectHandle const& field) {
             if (!field.isDictionary()) return false;
@@ -1666,10 +1665,14 @@ EmbedFontsResult embedFonts(std::span<const uint8_t> input, std::vector<FontSour
         writer.setCompressStreams(true);
         writer.setDecodeLevel(qpdf_dl_none);
         if (openType) writer.setMinimumPDFVersion("1.6");
-        writer.setOutputMemory();
+        if (out) {
+            writer.setOutputFile("font-out", out, false);
+        } else {
+            writer.setOutputMemory();
+        }
         WriterLock lock{-1};
         writer.write();
-        return {writer.getBufferSharedPointer(), "", 0};
+        return {out ? nullptr : writer.getBufferSharedPointer(), "", 0};
     } catch (QPDFExc const& e) {
         if (e.getErrorCode() == qpdf_e_password) return {nullptr, "password protected", -2};
         return {nullptr, e.what(), -1};
@@ -1738,7 +1741,12 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_embed_fonts(const uint8_t* input, int64_t in
             if (!names[i] || !*names[i] || !fonts[i] || fontLens[i] <= 0) return -1;
             sources.push_back({names[i], {fonts[i], static_cast<size_t>(fontLens[i])}});
         }
-        auto result = embedFonts({input, static_cast<size_t>(inputLen)}, sources, onlyMissing != 0);
+        auto result = embedFonts(
+            [&](QPDF& qpdf) {
+                qpdf.processMemoryFile("font-in", reinterpret_cast<const char*>(input),
+                                       static_cast<size_t>(inputLen));
+            },
+            sources, onlyMissing != 0);
         if (result.rc != 0) {
             std::fprintf(stderr, "jpdfium qpdf embed fonts: %s\n", result.error.c_str());
             return result.rc;
@@ -1762,30 +1770,21 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_embed_fonts_file(const char* in_path, const 
                                                      const int64_t* fontLens, int32_t onlyMissing) {
     try {
         if (!in_path || !out_path || count <= 0 || !names || !fonts || !fontLens) return -1;
-        std::ifstream in(in_path, std::ios::binary | std::ios::ate);
-        if (!in) return -1;
-        std::streamoff size = in.tellg();
-        if (size <= 0) return -1;
-        in.seekg(0);
-        std::vector<uint8_t> input(static_cast<size_t>(size));
-        if (!in.read(reinterpret_cast<char*>(input.data()), size)) return -1;
-
         std::vector<FontSource> sources;
         for (int32_t i = 0; i < count; ++i) {
             if (!names[i] || !*names[i] || !fonts[i] || fontLens[i] <= 0) return -1;
             sources.push_back({names[i], {fonts[i], static_cast<size_t>(fontLens[i])}});
         }
-        auto result = embedFonts({input.data(), input.size()}, sources, onlyMissing != 0);
+        FILE* out = createOutputFile(out_path);
+        if (!out) return -1;
+        auto result = embedFonts([&](QPDF& qpdf) { qpdf.processFile(in_path); }, sources,
+                                 onlyMissing != 0, out);
+        const bool closed = std::fclose(out) == 0;
         if (result.rc != 0) {
             std::fprintf(stderr, "jpdfium qpdf embed fonts file: %s\n", result.error.c_str());
             return result.rc;
         }
-        FILE* out = createOutputFile(out_path);
-        if (!out) return -1;
-        const size_t length = result.buffer->getSize();
-        bool written = std::fwrite(result.buffer->getBuffer(), 1, length, out) == length;
-        if (std::fclose(out) != 0) written = false;
-        return written ? 0 : -1;
+        return closed ? 0 : -1;
     } catch (...) {
         return JPDFIUM_ERR_NATIVE;
     }

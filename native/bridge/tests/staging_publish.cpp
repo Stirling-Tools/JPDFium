@@ -4,6 +4,7 @@
 #include <functional>
 #include <iterator>
 #include <memory>
+#include <random>
 #include <string>
 
 #include "jpdfium_staging.h"
@@ -30,8 +31,9 @@ void Write(const std::filesystem::path& path, const std::string& text) {
 }
 
 bool PublishText(const std::filesystem::path& dest, const std::string& text,
-                 const std::function<void(const std::string&)>& before_publish, bool apply_mode) {
-    const std::string destination = dest.string();
+                 const std::function<void(const std::filesystem::path&)>& before_publish,
+                 bool apply_mode) {
+    const std::string destination = jpdfium_staging::Utf8(dest);
     jpdfium_staging::StagedFile staged;
     jpdfium_staging::OpenUniqueSibling(destination, &staged);
     const std::unique_ptr<jpdfium_staging::StagedFile, void (*)(jpdfium_staging::StagedFile*)>
@@ -42,28 +44,51 @@ bool PublishText(const std::filesystem::path& dest, const std::string& text,
     if (apply_mode && !jpdfium_staging::ApplyPublishModeTo(staged.file, destination.c_str())) {
         return false;
     }
-    before_publish(staged.path);
+    before_publish(jpdfium_staging::NativePath(staged.path));
     std::string error;
     const bool ok = jpdfium_staging::PublishStagedFile(&staged, destination.c_str(), &error);
-    if (!ok) std::filesystem::remove(staged.path);
+    if (!ok) std::filesystem::remove(jpdfium_staging::NativePath(staged.path));
     return ok;
 }
 
-#if !defined(_WIN32)
-int Run() {
-    const std::filesystem::path dir =
-        std::filesystem::temp_directory_path() / ("jpdfium-staging-" + std::to_string(::getpid()));
-    std::filesystem::create_directories(dir);
+bool OnlyEntry(const std::filesystem::path& dir, const std::filesystem::path& expected) {
+    int count = 0;
+    for (const auto& entry : std::filesystem::directory_iterator(dir)) {
+        if (entry.path() != expected) return false;
+        ++count;
+    }
+    return count == 1;
+}
+
+void PortableChecks(const std::filesystem::path& dir) {
+    const auto nothing = [](const std::filesystem::path&) {};
     const std::filesystem::path dest = dir / "out.pdf";
-    const auto nothing = [](const std::string&) {};
 
     Expect(PublishText(dest, "generated", nothing, false), "normal publish");
     Expect(Read(dest) == "generated", "published content");
 
+    Expect(PublishText(dest, "replaced", nothing, true), "publish over an existing file");
+    Expect(Read(dest) == "replaced", "existing destination replaced");
+    Expect(OnlyEntry(dir, dest), "no staging file left behind");
+
+    const std::filesystem::path unicode = dir / std::filesystem::path(u8"résumé 文.pdf");
+    std::string error;
+    const bool published = jpdfium_staging::WriteAndPublish(
+        jpdfium_staging::Utf8(unicode).c_str(),
+        [](jpdfium_staging::StagedFile& staged) { std::fputs("unicode", staged.file); }, &error);
+    Expect(published, "publish to a non-ASCII path");
+    Expect(Read(unicode) == "unicode", "non-ASCII destination content");
+    std::filesystem::remove(unicode);
+}
+
+#if !defined(_WIN32)
+void PosixChecks(const std::filesystem::path& dir) {
+    const auto nothing = [](const std::filesystem::path&) {};
+    const std::filesystem::path dest = dir / "out.pdf";
     const std::filesystem::path victim = dir / "victim.txt";
     Write(victim, "keep me");
     Write(dest, "previous");
-    const auto swap = [&victim](const std::string& staging) {
+    const auto swap = [&victim](const std::filesystem::path& staging) {
         std::filesystem::remove(staging);
         std::filesystem::create_symlink(victim, staging);
     };
@@ -78,19 +103,26 @@ int Run() {
     Expect(PublishText(dest, "generated", nothing, true), "publish with mode");
     Expect((std::filesystem::status(dest).permissions() & std::filesystem::perms::all) == mode,
            "destination mode preserved");
+}
+#endif
 
+int Run() {
+    std::random_device rd;
+    const std::filesystem::path dir =
+        std::filesystem::temp_directory_path() / ("jpdfium-staging-" + std::to_string(rd()));
+    std::filesystem::create_directories(dir);
+    PortableChecks(dir);
+#if !defined(_WIN32)
+    PosixChecks(dir);
+#endif
     std::filesystem::remove_all(dir);
     if (failures == 0) std::printf("staging_publish: ok\n");
     return failures == 0 ? 0 : 1;
 }
-#endif
 
 }  // namespace
 
 int main() {
-#if defined(_WIN32)
-    return 0;
-#else
     try {
         return Run();
     } catch (const std::exception& e) {
@@ -100,5 +132,4 @@ int main() {
         std::fprintf(stderr, "FAIL: unknown exception\n");
         return 1;
     }
-#endif
 }
