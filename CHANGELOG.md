@@ -48,6 +48,10 @@ publishing workflows, not library releases, so they are not listed here.
   `PdfFontEmbedder.embedMissing(...)` now embeds those resource-only fonts and
   resolves unresolved names from the same inventory, so a font that no page
   draws with can no longer fail a PDF/A font check.
+- CID TrueType substitution subsets the replacement program to the glyphs used by
+  the remapped CIDs, keeping glyph IDs stable so `/CIDToGIDMap` stays valid. The
+  two-glyph Identity-H CJK fixture drops from 6.3 MiB to 3.2 KiB. CFF CID
+  programs remain whole.
 - Deterministic fallback fonts. The jpdfium jar now ships Liberation, Carlito,
   Caladea, DejaVu, Noto Sans Arabic and Noto Sans SC under `fonts/` and uses
   them before host fonts for metric-compatible substitution. Family/style
