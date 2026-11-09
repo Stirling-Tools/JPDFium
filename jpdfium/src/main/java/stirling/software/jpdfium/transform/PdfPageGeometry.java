@@ -489,6 +489,11 @@ public final class PdfPageGeometry {
         clearUnplacedFormFields(doc.rawHandle(), removedWidgets);
     }
 
+    /** Remove fields whose widgets were detached by a page operation such as flattening. */
+    public static void clearUnplacedFormFields(PdfDocument doc, Set<Integer> removedWidgets) {
+        clearUnplacedFormFields(doc.rawHandle(), removedWidgets);
+    }
+
     /**
      * A form field whose widgets were all removed by the crop has no visible
      * representation, but its value still lives in /AcroForm. Clear those

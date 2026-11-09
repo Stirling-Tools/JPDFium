@@ -120,22 +120,7 @@ public final class PdfXOptions {
         return title;
     }
 
-    /** Colour options that also convert the lossless raster produced by flattening. */
-    PdfColorConverter.ColorConvertOptions colorOptionsWithLosslessImages() {
-        return PdfColorConverter.ColorConvertOptions.builder()
-                .targetColorSpace(PdfColorConverter.ColorSpace.CMYK)
-                .convertImages(convertImages)
-                .convertForms(convertForms)
-                .convertSpecialColors(convertSpecialColors)
-                .convertSpotColors(convertSpotColors)
-                .extractBlack(extractBlack)
-                .jpegQuality(jpegQuality)
-                .strictImages(strictImages)
-                .convertLosslessImages(true)
-                .preserveBlack(false)
-                .iccProfile(outputIntentProfile)
-                .build();
-    }
+
 
     public PdfColorConverter.ColorConvertOptions colorOptions() {
         byte[] profile = outputIntentProfile();

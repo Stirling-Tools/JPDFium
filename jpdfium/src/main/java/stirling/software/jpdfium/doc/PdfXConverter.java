@@ -2,17 +2,23 @@ package stirling.software.jpdfium.doc;
 
 import java.awt.color.ColorSpace;
 import java.awt.color.ICC_Profile;
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+
+import static java.lang.foreign.ValueLayout.JAVA_INT;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
@@ -22,6 +28,8 @@ import stirling.software.jpdfium.model.PdfVersion;
 import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.transform.PdfPageGeometry;
 import stirling.software.jpdfium.panama.DocBindings;
+import stirling.software.jpdfium.panama.NativeRuntime;
+import stirling.software.jpdfium.panama.RenderBindings;
 import stirling.software.jpdfium.panama.QpdfLib;
 
 /**
@@ -312,13 +320,13 @@ public final class PdfXConverter {
         }
         validateCmykProfile(profile);
         validateBeforeFlatten(doc, options);
-        int flattenedPages = flattenTransparency(doc, standard);
+        Set<Integer> flattenedPages = flattenTransparency(doc, standard);
         if (options.convertColors()) {
-            PdfColorConverter.convert(
-                    doc,
-                    flattenedPages > 0
-                            ? options.colorOptionsWithLosslessImages()
-                            : options.colorOptions());
+            PdfColorConverter.convert(doc, options.colorOptions());
+            if (!flattenedPages.isEmpty()) {
+                PdfColorConverter.convertImagesToCmyk(
+                        doc, flattenedPages, options.jpegQuality(), true);
+            }
         }
     }
 
@@ -348,59 +356,135 @@ public final class PdfXConverter {
      * primitive JPDFium exposes; PDF/X-1a and X-3 outputs therefore trade
      * selectable text for a valid, non-transparent page.
      */
-    private static int flattenTransparency(PdfDocument doc, PdfXStandard standard) {
-        if (standard.allowsTransparency()) return 0;
-        List<Integer> transparentPages = new ArrayList<>();
-        List<Float> widths = new ArrayList<>();
-        List<Float> heights = new ArrayList<>();
+    private record TransparentPage(int index, float width, float height) {}
+
+    private static Set<Integer> flattenTransparency(PdfDocument doc, PdfXStandard standard) {
+        if (standard.allowsTransparency()) return Set.of();
+        List<TransparentPage> transparentPages = new ArrayList<>();
         for (int i = 0; i < doc.pageCount(); i++) {
             try (PdfPage page = doc.page(i)) {
                 if (!PdfPageObjects.hasTransparencyStrict(page.rawHandleForRead())) continue;
-                transparentPages.add(i);
                 var size = page.size();
-                widths.add(size.width());
-                heights.add(size.height());
+                transparentPages.add(new TransparentPage(i, size.width(), size.height()));
             }
         }
-        for (int p = 0; p < transparentPages.size(); p++) {
-            long width = Math.round(widths.get(p) * TRANSPARENCY_FLATTEN_DPI / 72.0);
-            long height = Math.round(heights.get(p) * TRANSPARENCY_FLATTEN_DPI / 72.0);
+        for (TransparentPage page : transparentPages) {
+            long width = Math.round(page.width() * TRANSPARENCY_FLATTEN_DPI / 72.0);
+            long height = Math.round(page.height() * TRANSPARENCY_FLATTEN_DPI / 72.0);
             if (width * height > MAX_FLATTEN_PIXELS) {
-                throw new JPDFiumException(standard + " page " + transparentPages.get(p)
+                throw new JPDFiumException(standard + " page " + page.index()
                         + " is too large to flatten at " + TRANSPARENCY_FLATTEN_DPI
                         + " dpi (" + width + "x" + height + " pixels)");
             }
         }
-        for (int i : transparentPages) {
+        Set<Integer> removedWidgets = new LinkedHashSet<>();
+        for (TransparentPage page : transparentPages) {
+            int i = page.index();
+            int rotation;
             Optional<Rect> cropBox;
             Optional<Rect> trimBox;
             Optional<Rect> bleedBox;
             Optional<Rect> artBox;
-            try (PdfPage page = doc.page(i)) {
-                cropBox = page.getCropBox();
-                trimBox = page.getTrimBox();
-                bleedBox = page.getBleedBox();
-                artBox = page.getArtBox();
+            try (PdfPage source = doc.page(i)) {
+                var size = source.size();
+                removedWidgets.addAll(PdfAnnotations.widgetObjectNumbers(source.rawHandleForRead()));
+                rotation = PdfPageGeometry.getRotation(doc, i);
+                cropBox = source.getCropBox()
+                        .map(box -> mapToRaster(
+                                source.rawHandleForRead(), rotation, size.width(), size.height(),
+                                box));
+                trimBox = source.getTrimBox()
+                        .map(box -> mapToRaster(
+                                source.rawHandleForRead(), rotation, size.width(), size.height(),
+                                box));
+                bleedBox = source.getBleedBox()
+                        .map(box -> mapToRaster(
+                                source.rawHandleForRead(), rotation, size.width(), size.height(),
+                                box));
+                artBox = source.getArtBox()
+                        .map(box -> mapToRaster(
+                                source.rawHandleForRead(), rotation, size.width(), size.height(),
+                                box));
             }
             doc.flattenPage(i, FlattenMode.FULL, TRANSPARENCY_FLATTEN_DPI);
-            boolean unrotated = PdfPageGeometry.getRotation(doc, i) % 180 == 0;
-            float dx = unrotated ? cropBox.map(Rect::x).orElse(0f) : 0f;
-            float dy = unrotated ? cropBox.map(Rect::y).orElse(0f) : 0f;
             try (PdfPage flattened = doc.page(i)) {
-                if (unrotated) {
-                    cropBox.map(box -> shift(box, dx, dy)).ifPresent(flattened::setCropBox);
-                    trimBox.map(box -> shift(box, dx, dy)).ifPresent(flattened::setTrimBox);
-                    bleedBox.map(box -> shift(box, dx, dy)).ifPresent(flattened::setBleedBox);
-                    artBox.map(box -> shift(box, dx, dy)).ifPresent(flattened::setArtBox);
-                }
+                cropBox.ifPresent(flattened::setCropBox);
+                trimBox.ifPresent(flattened::setTrimBox);
+                bleedBox.ifPresent(flattened::setBleedBox);
+                artBox.ifPresent(flattened::setArtBox);
             }
         }
+        PdfPageGeometry.clearUnplacedFormFields(doc, removedWidgets);
         requireNoTransparency(doc, standard);
-        return transparentPages.size();
+        Set<Integer> indices = new LinkedHashSet<>();
+        for (TransparentPage page : transparentPages) indices.add(page.index());
+        return indices;
     }
 
-    private static Rect shift(Rect box, float dx, float dy) {
-        return new Rect(box.x() - dx, box.y() - dy, box.width(), box.height());
+    /**
+     * Map a page box into the coordinates of the full-page raster that
+     * {@code flattenPage} installs. PDFium's own page-to-device transform
+     * handles rotation, the crop-box origin and a CropBox that extends beyond
+     * the MediaBox; mapping both corners normalizes swapped axes.
+     */
+    private static Rect mapToRaster(
+            MemorySegment page, int rotation, float width, float height, Rect box) {
+        final float scale = 1000f;
+        int deviceWidth = Math.max(1, Math.round(width * scale));
+        int deviceHeight = Math.max(1, Math.round(height * scale));
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment x1 = arena.allocate(JAVA_INT);
+            MemorySegment y1 = arena.allocate(JAVA_INT);
+            MemorySegment x2 = arena.allocate(JAVA_INT);
+            MemorySegment y2 = arena.allocate(JAVA_INT);
+            if (!mapPoint(page, rotation, deviceWidth, deviceHeight, box.x(), box.y(), x1, y1)
+                    || !mapPoint(
+                            page,
+                            rotation,
+                            deviceWidth,
+                            deviceHeight,
+                            box.x() + box.width(),
+                            box.y() + box.height(),
+                            x2,
+                            y2)) {
+                return box;
+            }
+            int minX = Math.min(x1.get(JAVA_INT, 0), x2.get(JAVA_INT, 0));
+            int maxX = Math.max(x1.get(JAVA_INT, 0), x2.get(JAVA_INT, 0));
+            int minY = Math.min(y1.get(JAVA_INT, 0), y2.get(JAVA_INT, 0));
+            int maxY = Math.max(y1.get(JAVA_INT, 0), y2.get(JAVA_INT, 0));
+            float left = minX / scale;
+            float bottom = height - maxY / scale;
+            return new Rect(left, bottom, (maxX - minX) / scale, (maxY - minY) / scale);
+        }
+    }
+
+    private static boolean mapPoint(
+            MemorySegment page,
+            int rotation,
+            int deviceWidth,
+            int deviceHeight,
+            float pageX,
+            float pageY,
+            MemorySegment deviceX,
+            MemorySegment deviceY) {
+        try {
+            return (int) RenderBindings.FPDF_PageToDevice.invokeExact(
+                    page,
+                    0,
+                    0,
+                    deviceWidth,
+                    deviceHeight,
+                    rotation,
+                    (double) pageX,
+                    (double) pageY,
+                    deviceX,
+                    deviceY)
+                    == 1;
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            return false;
+        }
     }
 
     private static final int TRANSPARENCY_FLATTEN_DPI = 300;

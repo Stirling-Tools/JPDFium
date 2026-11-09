@@ -10,6 +10,8 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.List;
 import java.util.Optional;
 import stirling.software.jpdfium.exception.JPDFiumException;
@@ -73,6 +75,48 @@ public final class PdfAnnotations {
             }
         }
         return Collections.unmodifiableList(result);
+    }
+
+    /**
+     * Object numbers of the form widgets on a page. Used before flattening to
+     * identify fields whose only widgets disappear with the page content, so
+     * their values can be removed from the AcroForm tree afterwards.
+     */
+    public static Set<Integer> widgetObjectNumbers(MemorySegment page) {
+        int n = count(page);
+        if (n <= 0) return Collections.emptySet();
+        Set<Integer> result = new HashSet<>();
+        for (int i = 0; i < n; i++) {
+            MemorySegment annot;
+            try {
+                annot = (MemorySegment) AnnotationBindings.FPDFPage_GetAnnot.invokeExact(page, i);
+            } catch (Throwable t) {
+                throw new JPDFiumException(t);
+            }
+            if (annot.equals(MemorySegment.NULL)) continue;
+            try {
+                int subtype;
+                try {
+                    subtype = (int) AnnotationBindings.FPDFAnnot_GetSubtype.invokeExact(annot);
+                } catch (Throwable t) {
+                    throw new JPDFiumException(t);
+                }
+                if (subtype != 20 || EmbedPdfAnnotationBindings.EPDFAnnot_GetObjectNumber == null) {
+                    continue;
+                }
+                int objectNumber;
+                try {
+                    objectNumber = (int) EmbedPdfAnnotationBindings.EPDFAnnot_GetObjectNumber
+                            .invokeExact(annot);
+                } catch (Throwable t) {
+                    throw new JPDFiumException(t);
+                }
+                if (objectNumber > 0) result.add(objectNumber);
+            } finally {
+                closeAnnot(annot);
+            }
+        }
+        return result;
     }
 
     /**

@@ -8,6 +8,9 @@ import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
+import org.apache.pdfbox.pdmodel.interactive.form.PDAcroForm;
+import org.apache.pdfbox.pdmodel.interactive.form.PDTextField;
+import org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationWidget;
 import org.apache.pdfbox.pdmodel.font.PDType1Font;
 import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
 import org.apache.pdfbox.pdmodel.PDResources;
@@ -603,6 +606,49 @@ class PdfXConverterTest {
             assertTrue(error.getMessage().contains("too large to flatten"), error.getMessage());
             assertFalse(doc.isContentModified(),
                     "the raster budget must be checked before flattening");
+        }
+    }
+
+    @Test
+    void flatteningRemovesFieldsWhoseWidgetsWereRasterized() throws Exception {
+        assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
+        byte[] input;
+        try (PDDocument pdfbox = new PDDocument();
+                ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            PDPage page = new PDPage(new PDRectangle(300, 300));
+            pdfbox.addPage(page);
+            PDExtendedGraphicsState alpha = new PDExtendedGraphicsState();
+            alpha.setNonStrokingAlphaConstant(0.5f);
+            try (PDPageContentStream content = new PDPageContentStream(pdfbox, page)) {
+                content.setGraphicsStateParameters(alpha);
+                content.setNonStrokingColor(Color.RED);
+                content.addRect(50, 50, 150, 150);
+                content.fill();
+            }
+            PDAcroForm form = new PDAcroForm(pdfbox);
+            pdfbox.getDocumentCatalog().setAcroForm(form);
+            PDTextField field = new PDTextField(form);
+            field.setPartialName("flattenedField");
+            field.setDefaultAppearance("/Helv 10 Tf 0 g");
+            PDAnnotationWidget widget = new PDAnnotationWidget();
+            widget.setRectangle(new PDRectangle(60, 60, 100, 20));
+            widget.setPage(page);
+            field.setWidgets(List.of(widget));
+            form.getFields().add(field);
+            page.getAnnotations().add(widget);
+            pdfbox.save(out);
+            input = out.toByteArray();
+        }
+        PdfXOptions options = PdfXOptions.builder()
+                .standard(PdfXStandard.PDF_X_3)
+                .useCompactCmyk()
+                .title("Form flattening")
+                .build();
+        byte[] output = PdfXConverter.applyMetadata(input, options);
+        try (PDDocument pdfbox = Loader.loadPDF(output)) {
+            assertTrue(pdfbox.getDocumentCatalog().getAcroForm() == null
+                    || pdfbox.getDocumentCatalog().getAcroForm().getFields().isEmpty(),
+                    "fields whose widgets were rasterized must not survive as orphan values");
         }
     }
 
