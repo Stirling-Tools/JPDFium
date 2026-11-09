@@ -120,6 +120,10 @@ public final class QpdfLib {
                             JAVA_INT, ADDRESS, ADDRESS, JAVA_INT, ADDRESS, ADDRESS, ADDRESS,
                             JAVA_INT));
 
+    private static final MethodHandle INSPECT_FONTS_HANDLE = Symbols.downcallOptionalUnguarded(
+            "jpdfium_qpdf_inspect_fonts",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS));
+
     /** True when this native build can embed font programs. */
     public static boolean isFontReplacementSupported() {
         return EMBED_FONTS_HANDLE != null;
