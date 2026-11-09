@@ -625,6 +625,7 @@ class PdfXConverterTest {
                 .conditionIdentifier("FOGRA39")
                 .info("Coated FOGRA39")
                 .requireEmbeddedFonts(true)
+                .embedMissingFonts(false)
                 .build();
         JPDFiumException rej1 = assertThrows(JPDFiumException.class,
                 () -> PdfXConverter.applyMetadata(input, options));
