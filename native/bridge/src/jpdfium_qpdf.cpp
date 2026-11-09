@@ -1588,13 +1588,396 @@ std::set<uint32_t> widthCids(QPDFObjectHandle const& font) {
     return cids;
 }
 
-std::set<uint32_t> usedCidsForFont(QPDF&, QPDFObjectHandle const& font) {
-    return widthCids(font);
+struct ContentOperand {
+    enum class Kind { Name, String, Array, Other };
+    Kind kind = Kind::Other;
+    std::string text;
+    std::vector<std::string> strings;
+};
+
+struct ContentToken {
+    bool word = false;
+    std::string text;
+    ContentOperand operand;
+};
+
+struct ContentLexer {
+    std::string const& data;
+    size_t pos = 0;
+
+    void skipSpace() {
+        while (pos < data.size()) {
+            unsigned char c = static_cast<unsigned char>(data[pos]);
+            if (std::isspace(c)) {
+                ++pos;
+            } else if (c == '%') {
+                while (pos < data.size() && data[pos] != '\n' && data[pos] != '\r') ++pos;
+            } else {
+                break;
+            }
+        }
+    }
+
+    bool literal(std::string& out) {
+        if (pos >= data.size() || data[pos] != '(') return false;
+        ++pos;
+        int depth = 1;
+        while (pos < data.size() && depth > 0) {
+            char c = data[pos++];
+            if (c == '\\') {
+                if (pos >= data.size()) break;
+                char e = data[pos++];
+                switch (e) {
+                    case 'n':
+                        out += '\n';
+                        break;
+                    case 'r':
+                        out += '\r';
+                        break;
+                    case 't':
+                        out += '\t';
+                        break;
+                    case 'b':
+                        out += '\b';
+                        break;
+                    case 'f':
+                        out += '\f';
+                        break;
+                    case '\n':
+                        break;
+                    case '\r':
+                        if (pos < data.size() && data[pos] == '\n') ++pos;
+                        break;
+                    default:
+                        if (e >= '0' && e <= '7') {
+                            int value = e - '0';
+                            for (int i = 0;
+                                 i < 2 && pos < data.size() && data[pos] >= '0' && data[pos] <= '7';
+                                 ++i) {
+                                value = value * 8 + (data[pos++] - '0');
+                            }
+                            out += static_cast<char>(value & 0xFF);
+                        } else {
+                            out += e;
+                        }
+                }
+            } else if (c == '(') {
+                ++depth;
+                out += c;
+            } else if (c == ')') {
+                --depth;
+                if (depth > 0) out += c;
+            } else {
+                out += c;
+            }
+        }
+        return depth == 0;
+    }
+
+    bool hex(std::string& out) {
+        if (pos >= data.size() || data[pos] != '<') return false;
+        ++pos;
+        std::string digits;
+        while (pos < data.size() && data[pos] != '>') {
+            unsigned char c = static_cast<unsigned char>(data[pos++]);
+            if (std::isspace(c)) continue;
+            if (!std::isxdigit(c)) return false;
+            digits += static_cast<char>(c);
+        }
+        if (pos >= data.size()) return false;
+        ++pos;
+        if (digits.size() % 2) digits += '0';
+        for (size_t i = 0; i < digits.size(); i += 2) {
+            out += static_cast<char>(std::strtoul(digits.substr(i, 2).c_str(), nullptr, 16));
+        }
+        return true;
+    }
+
+    bool name(std::string& out) {
+        if (pos >= data.size() || data[pos] != '/') return false;
+        ++pos;
+        while (pos < data.size()) {
+            unsigned char c = static_cast<unsigned char>(data[pos]);
+            if (std::isspace(c) || c == '/' || c == '(' || c == ')' || c == '<' || c == '>' ||
+                c == '[' || c == ']' || c == '{' || c == '}' || c == '%') {
+                break;
+            }
+            if (c == '#' && pos + 2 < data.size() && std::isxdigit(data[pos + 1]) &&
+                std::isxdigit(data[pos + 2])) {
+                out +=
+                    static_cast<char>(std::strtoul(data.substr(pos + 1, 2).c_str(), nullptr, 16));
+                pos += 3;
+            } else {
+                out += static_cast<char>(c);
+                ++pos;
+            }
+        }
+        return true;
+    }
+
+    bool dictionary() {
+        if (pos + 1 >= data.size() || data[pos] != '<' || data[pos + 1] != '<') return false;
+        pos += 2;
+        int depth = 1;
+        while (pos < data.size() && depth > 0) {
+            if (data[pos] == '(') {
+                std::string ignored;
+                if (!literal(ignored)) return false;
+            } else if (data[pos] == '<' && pos + 1 < data.size() && data[pos + 1] == '<') {
+                pos += 2;
+                ++depth;
+            } else if (data[pos] == '>' && pos + 1 < data.size() && data[pos + 1] == '>') {
+                pos += 2;
+                --depth;
+            } else if (data[pos] == '<') {
+                std::string ignored;
+                if (!hex(ignored)) return false;
+            } else {
+                ++pos;
+            }
+        }
+        return depth == 0;
+    }
+
+    bool array(ContentOperand& out) {
+        if (pos >= data.size() || data[pos] != '[') return false;
+        ++pos;
+        out.kind = ContentOperand::Kind::Array;
+        while (pos < data.size()) {
+            skipSpace();
+            if (pos >= data.size()) return false;
+            if (data[pos] == ']') {
+                ++pos;
+                return true;
+            }
+            ContentToken token;
+            if (!next(token)) return false;
+            if (!token.word) {
+                if (token.operand.kind == ContentOperand::Kind::String) {
+                    out.strings.push_back(token.operand.text);
+                } else if (token.operand.kind == ContentOperand::Kind::Array) {
+                    out.strings.insert(out.strings.end(), token.operand.strings.begin(),
+                                       token.operand.strings.end());
+                }
+            }
+        }
+        return false;
+    }
+
+    bool next(ContentToken& out) {
+        skipSpace();
+        if (pos >= data.size()) return false;
+        out = ContentToken{};
+        char c = data[pos];
+        if (c == '(') {
+            out.operand.kind = ContentOperand::Kind::String;
+            return literal(out.operand.text);
+        }
+        if (c == '<') {
+            if (pos + 1 < data.size() && data[pos + 1] == '<') {
+                out.operand.kind = ContentOperand::Kind::Other;
+                return dictionary();
+            }
+            out.operand.kind = ContentOperand::Kind::String;
+            return hex(out.operand.text);
+        }
+        if (c == '[') return array(out.operand);
+        if (c == ']' || c == '>' || c == ')' || c == '}' || c == '{') {
+            ++pos;
+            out.operand.kind = ContentOperand::Kind::Other;
+            return true;
+        }
+        if (c == '/') {
+            out.operand.kind = ContentOperand::Kind::Name;
+            return name(out.operand.text);
+        }
+        size_t start = pos;
+        while (pos < data.size()) {
+            unsigned char ch = static_cast<unsigned char>(data[pos]);
+            if (std::isspace(ch) || ch == '/' || ch == '(' || ch == ')' || ch == '<' || ch == '>' ||
+                ch == '[' || ch == ']' || ch == '{' || ch == '}' || ch == '%') {
+                break;
+            }
+            ++pos;
+        }
+        if (pos == start) return false;
+        std::string value = data.substr(start, pos - start);
+        bool numeric = value.find_first_not_of("0123456789+-.") == std::string::npos;
+        if (numeric) {
+            out.word = false;
+            out.operand.kind = ContentOperand::Kind::Other;
+            out.operand.text = std::move(value);
+        } else {
+            out.word = true;
+            out.text = std::move(value);
+        }
+        return true;
+    }
+
+    void skipInlineImage() {
+        // BI ... ID <binary> EI
+        ContentToken token;
+        while (next(token)) {
+            if (token.word && token.text == "ID") {
+                if (pos < data.size() && std::isspace(static_cast<unsigned char>(data[pos]))) ++pos;
+                while (pos + 1 < data.size()) {
+                    if (std::isspace(static_cast<unsigned char>(data[pos])) &&
+                        data[pos + 1] == 'E' && pos + 2 < data.size() && data[pos + 2] == 'I') {
+                        pos += 3;
+                        return;
+                    }
+                    ++pos;
+                }
+                return;
+            }
+        }
+    }
+};
+
+bool sameFont(QPDFObjectHandle const& a, QPDFObjectHandle const& b) {
+    if (!a.isDictionary() || !b.isDictionary()) return false;
+    if (a.isIndirect() && b.isIndirect()) return a.getObjGen() == b.getObjGen();
+    try {
+        return a.unparse() == b.unparse();
+    } catch (...) {
+        return false;
+    }
 }
 
-bool coversWidthCids(QPDFObjectHandle const&, std::map<uint32_t, uint32_t> const& unicodeByCid,
-                     std::set<uint32_t> const& used) {
-    for (uint32_t cid : used)
+void collectStringCids(std::string const& bytes, std::set<uint32_t>& cids) {
+    for (size_t i = 0; i + 1 < bytes.size(); i += 2) {
+        uint32_t cid = (static_cast<uint32_t>(static_cast<unsigned char>(bytes[i])) << 8) |
+                       static_cast<unsigned char>(bytes[i + 1]);
+        if (cid) cids.insert(cid);
+    }
+}
+
+void scanContentStream(std::string const& data, QPDFObjectHandle const& resources,
+                       QPDFObjectHandle const& target, std::set<uint32_t>& cids, int depth,
+                       std::set<QPDFObjGen>& seenForms) {
+    if (depth > 16) return;
+    ContentLexer lexer{data};
+    std::vector<ContentOperand> operands;
+    std::vector<bool> fontStack;
+    bool selected = false;
+    ContentToken token;
+    while (lexer.next(token)) {
+        if (!token.word) {
+            operands.push_back(std::move(token.operand));
+            if (operands.size() > 64) operands.erase(operands.begin());
+            continue;
+        }
+        std::string const& op = token.text;
+        if (op == "q") {
+            fontStack.push_back(selected);
+        } else if (op == "Q") {
+            if (!fontStack.empty()) {
+                selected = fontStack.back();
+                fontStack.pop_back();
+            }
+        } else if (op == "Tf" && operands.size() >= 2) {
+            auto const& fontName = operands[operands.size() - 2];
+            selected = false;
+            if (fontName.kind == ContentOperand::Kind::Name) {
+                auto fonts =
+                    resources.isDictionary() ? resources.getKey("/Font") : QPDFObjectHandle();
+                if (fonts.isDictionary()) {
+                    auto font = fonts.getKey("/" + fontName.text);
+                    selected = sameFont(font, target);
+                }
+            }
+        } else if (op == "Tj" && !operands.empty() &&
+                   operands.back().kind == ContentOperand::Kind::String) {
+            if (selected) collectStringCids(operands.back().text, cids);
+        } else if (op == "TJ" && !operands.empty() &&
+                   operands.back().kind == ContentOperand::Kind::Array) {
+            if (selected)
+                for (auto const& text : operands.back().strings) collectStringCids(text, cids);
+        } else if ((op == "'" || op == "\"") && !operands.empty() &&
+                   operands.back().kind == ContentOperand::Kind::String) {
+            if (selected) collectStringCids(operands.back().text, cids);
+        } else if (op == "Do" && !operands.empty() &&
+                   operands.back().kind == ContentOperand::Kind::Name) {
+            if (resources.isDictionary()) {
+                auto xobjects = resources.getKey("/XObject");
+                if (xobjects.isDictionary()) {
+                    auto form = xobjects.getKey("/" + operands.back().text);
+                    if (form.isStream() &&
+                        form.getDict().getKey("/Subtype").isNameAndEquals("/Form")) {
+                        bool seen = false;
+                        if (form.isIndirect()) {
+                            seen = !seenForms.insert(form.getObjGen()).second;
+                        }
+                        if (!seen) {
+                            auto formResources = form.getDict().getKey("/Resources");
+                            if (!formResources.isDictionary()) formResources = resources;
+                            try {
+                                auto streamData = form.getStreamData(qpdf_dl_generalized);
+                                if (streamData && streamData->getSize()) {
+                                    std::string content(
+                                        reinterpret_cast<char const*>(streamData->getBuffer()),
+                                        streamData->getSize());
+                                    scanContentStream(content, formResources, target, cids,
+                                                      depth + 1, seenForms);
+                                }
+                            } catch (...) {
+                            }
+                        }
+                    }
+                }
+            }
+        } else if (op == "BI") {
+            lexer.skipInlineImage();
+        }
+        operands.clear();
+    }
+}
+
+std::set<uint32_t> usedCidsForFont(QPDF& qpdf, QPDFObjectHandle const& target) {
+    std::set<uint32_t> cids;
+    std::set<QPDFObjGen> seenForms;
+    try {
+        for (auto& page : QPDFPageDocumentHelper{qpdf}.getAllPages()) {
+            auto pageObj = page.getObjectHandle();
+            auto resources = pageObj.getKey("/Resources");
+            if (!resources.isDictionary()) resources = page.getAttribute("/Resources", false);
+            auto contents = pageObj.getKey("/Contents");
+            std::vector<QPDFObjectHandle> streams;
+            if (contents.isArray()) {
+                for (auto& item : contents.getArrayAsVector()) streams.push_back(item);
+            } else if (contents.isStream()) {
+                streams.push_back(contents);
+            }
+            for (auto& stream : streams) {
+                if (!stream.isStream()) continue;
+                try {
+                    auto data = stream.getStreamData(qpdf_dl_generalized);
+                    if (!data || !data->getSize()) continue;
+                    std::string content(reinterpret_cast<char const*>(data->getBuffer()),
+                                        data->getSize());
+                    scanContentStream(content, resources, target, cids, 0, seenForms);
+                } catch (...) {
+                }
+            }
+        }
+    } catch (...) {
+        return {};
+    }
+    return cids;
+}
+
+bool coversWidthCids(QPDFObjectHandle const& font, std::map<uint32_t, uint32_t> const& unicodeByCid,
+                     std::set<uint32_t> const& usedCids) {
+    // Prefer the CIDs the content actually draws with. /W remains the fallback
+    // when the content scan finds nothing, because a partial map that turns an
+    // unseen CID into .notdef is worse than refusing the font.
+    if (!usedCids.empty()) {
+        for (uint32_t cid : usedCids)
+            if (cid && !unicodeByCid.contains(cid)) return false;
+        return true;
+    }
+    for (uint32_t cid : widthCids(font))
+
         if (cid && !unicodeByCid.contains(cid)) return false;
     return true;
 }
@@ -2446,7 +2829,7 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_embed_fonts_file(const char* in_path, const 
         FILE* out = createOutputFile(out_path);
         if (!out) return -1;
         auto result = embedFonts([&](QPDF& qpdf) { qpdf.processFile(in_path); }, sources,
-                                 onlyMissing != 0, out);
+                                 onlyMissing != 0, out, false);
         const bool closed = std::fclose(out) == 0;
         if (result.rc != 0) {
             std::fprintf(stderr, "jpdfium qpdf embed fonts file: %s\n", result.error.c_str());

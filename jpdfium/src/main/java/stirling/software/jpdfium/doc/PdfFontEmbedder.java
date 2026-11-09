@@ -337,6 +337,8 @@ public final class PdfFontEmbedder {
         Map<String, Face> index = INDEXES.computeIfAbsent(
                 fontDirs.length == 0 ? SYSTEM_FONT_DIRS : List.of(fontDirs), PdfFontEmbedder::index);
         if (fontDirs.length == 0) return index;
+        // Caller-supplied directories are authoritative; the bundled pack is only
+        // a fallback when no directories were given.
         Map<String, Face> isolated = new HashMap<>(index);
         isolated.entrySet().removeIf(entry -> entry.getValue().resource() != null);
         return isolated;
