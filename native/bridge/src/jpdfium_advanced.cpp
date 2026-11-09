@@ -478,7 +478,7 @@ int32_t jpdfium_font_classify(const uint8_t* data, int64_t len, char** json) {
         FT_Face face;
         FT_Error err = FT_New_Memory_Face(ft_lib, data, (FT_Long)len, 0, &face);
         if (err) return JPDFIUM_ERR_INVALID;
-        if (face->num_glyphs <= 0) {
+        if (face->num_glyphs <= 1) {
             FT_Done_Face(face);
             return JPDFIUM_ERR_INVALID;
         }
@@ -579,7 +579,7 @@ int32_t jpdfium_text_shape(const uint8_t* font_data, int64_t font_len, const cha
         hb_blob_destroy(blob);
         // hb_face_create never fails: corrupt bytes yield an empty face whose
         // every codepoint maps to glyph 0. Reject those, as font_covers_text does.
-        if (hb_face_get_glyph_count(face) == 0) {
+        if (hb_face_get_glyph_count(face) <= 1) {
             hb_face_destroy(face);
             return JPDFIUM_ERR_INVALID;
         }
@@ -695,7 +695,7 @@ int32_t jpdfium_font_subset(const uint8_t* font_data, int64_t font_len, const ui
         hb_blob_destroy(blob);
 
         if (!face) return JPDFIUM_ERR_INVALID;
-        if (hb_face_get_glyph_count(face) == 0) {
+        if (hb_face_get_glyph_count(face) <= 1) {
             hb_face_destroy(face);
             return JPDFIUM_ERR_INVALID;
         }
