@@ -5,10 +5,12 @@ import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.font.PDFont;
+import org.apache.pdfbox.rendering.PDFRenderer;
 import org.apache.pdfbox.text.PDFTextStripper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 
+import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.net.URL;
 import java.nio.file.Files;
@@ -35,8 +37,11 @@ class PdfFontSubsetterTest {
 
         String text;
         Map<String, PdfFontSubsetter.Request> requests = new LinkedHashMap<>();
+        Map<String, Integer> originalSizes = new LinkedHashMap<>();
+        BufferedImage beforeImage;
         try (PDDocument doc = Loader.loadPDF(input)) {
             text = new PDFTextStripper().getText(doc);
+            beforeImage = new PDFRenderer(doc).renderImageWithDPI(0, 72);
             Set<Integer> codepoints = text.codePoints().boxed().collect(Collectors.toCollection(TreeSet::new));
             int[] used = codepoints.stream().mapToInt(Integer::intValue).toArray();
             for (PDPage page : doc.getPages()) {
@@ -52,6 +57,7 @@ class PdfFontSubsetterTest {
                     }
                     requests.put(font.getName(),
                             new PdfFontSubsetter.Request(bytes.toByteArray(), used));
+                    originalSizes.put(font.getName(), bytes.size());
                 }
             }
         }
@@ -62,6 +68,43 @@ class PdfFontSubsetterTest {
         try (PDDocument doc = Loader.loadPDF(output)) {
             assertEquals(text, new PDFTextStripper().getText(doc),
                     "subset fonts must preserve text extraction");
+
+            boolean replaced = false;
+            for (PDPage page : doc.getPages()) {
+                for (COSName name : page.getResources().getFontNames()) {
+                    PDFont font = page.getResources().getFont(name);
+                    Integer original = originalSizes.get(font.getName());
+                    if (original == null || font.getFontDescriptor() == null
+                            || font.getFontDescriptor().getFontFile2() == null) {
+                        continue;
+                    }
+                    long installed;
+                    try (var in = font.getFontDescriptor().getFontFile2().createInputStream()) {
+                        installed = in.transferTo(java.io.OutputStream.nullOutputStream());
+                    }
+                    assertTrue(installed < original,
+                            "font stream must shrink after subsetting " + font.getName());
+                    replaced = true;
+                }
+            }
+            assertTrue(replaced, "at least one supplied font stream must be replaced");
+
+            BufferedImage afterImage = new PDFRenderer(doc).renderImageWithDPI(0, 72);
+            assertEquals(beforeImage.getWidth(), afterImage.getWidth());
+            assertEquals(beforeImage.getHeight(), afterImage.getHeight());
+            double delta = 0;
+            for (int y = 0; y < beforeImage.getHeight(); y++) {
+                for (int x = 0; x < beforeImage.getWidth(); x++) {
+                    int a = beforeImage.getRGB(x, y);
+                    int b = afterImage.getRGB(x, y);
+                    delta += (Math.abs(((a >> 16) & 0xFF) - ((b >> 16) & 0xFF))
+                                    + Math.abs(((a >> 8) & 0xFF) - ((b >> 8) & 0xFF))
+                                    + Math.abs((a & 0xFF) - (b & 0xFF)))
+                            / 3.0;
+                }
+            }
+            double mean = delta / (beforeImage.getWidth() * beforeImage.getHeight());
+            assertTrue(mean < 1.0, "subset rendering changed glyphs: mean delta " + mean);
         }
     }
 }
