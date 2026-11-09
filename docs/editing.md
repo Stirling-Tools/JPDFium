@@ -220,7 +220,10 @@ rejected. Rasterizing preserves the visible page area and maps the source
 CropBox, TrimBox, BleedBox and ArtBox into the raster, but makes text on those
 pages non-selectable and removes interactive links, form fields and
 annotations from the rasterized page. Fields whose only widgets disappear are
-removed from the AcroForm tree. Pages over
+removed from the AcroForm tree. Transparency carried only by an annotation's
+appearance stream is outside the page-object probe: flatten annotations first
+when their appearance uses alpha. Close any caller-opened `PdfPage` wrappers
+before calling `applyMetadata`; rasterization can retire open pages. Pages over
 about 64 megapixels at 300 dpi are rejected instead of risking an oversized
 bitmap. Supply a real printing-condition ICC for production output; the bundled
 compact profile is only a fallback. Run veraPDF or Acrobat preflight before
