@@ -28,6 +28,7 @@ import java.lang.foreign.MemorySegment;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
+import java.util.zip.Deflater;
 
 import static java.lang.foreign.ValueLayout.ADDRESS;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
@@ -46,6 +47,8 @@ public final class PdfImageOptimizer {
     private PdfImageOptimizer() {}
 
     private static final int FPDF_PAGEOBJ_IMAGE = 3;
+    private static final int FPDF_PAGEOBJ_FORM = 5;
+    private static final int MAX_FORM_DEPTH = 8;
     private static final int FPDF_BITMAP_GRAY = 1;
     private static final int FPDF_BITMAP_BGR = 2;
     private static final int FPDF_BITMAP_BGRx = 3;
@@ -129,15 +132,31 @@ public final class PdfImageOptimizer {
                         MemorySegment obj =
                                 (MemorySegment) PageEditBindings.FPDFPage_GetObject.invokeExact(rawPage, i);
                         if (obj.equals(MemorySegment.NULL)) continue;
-                        if ((int) PageEditBindings.FPDFPageObj_GetType.invokeExact(obj)
-                                == FPDF_PAGEOBJ_IMAGE) {
-                            return true;
-                        }
+                        if (containsImage(obj, 0)) return true;
                     } catch (Throwable t) {
                         NativeRuntime.rethrowFatal(t);
                     }
                 }
             }
+        }
+        return false;
+    }
+
+    private static boolean containsImage(MemorySegment obj, int depth) throws Throwable {
+        int type = (int) PageEditBindings.FPDFPageObj_GetType.invokeExact(obj);
+        if (type == FPDF_PAGEOBJ_IMAGE) return true;
+        if (type != FPDF_PAGEOBJ_FORM || depth >= MAX_FORM_DEPTH
+                || !PageEditBindings.formTraversalAvailable()) {
+            return false;
+        }
+        int children = (int) PageEditBindings.FPDFFormObj_CountObjects.invokeExact(obj);
+        if (children < 0) {
+            throw new JPDFiumException("FPDFFormObj_CountObjects returned " + children);
+        }
+        for (int i = 0; i < children; i++) {
+            MemorySegment child = PageEditBindings.formObject(obj, i);
+            if (child == null || child.equals(MemorySegment.NULL)) continue;
+            if (containsImage(child, depth + 1)) return true;
         }
         return false;
     }
@@ -219,18 +238,8 @@ public final class PdfImageOptimizer {
                         continue;
                     }
                     if (obj.equals(MemorySegment.NULL)) continue;
-
-                    int type;
-                    try {
-                        type = (int) PageEditBindings.FPDFPageObj_GetType.invokeExact(obj);
-                    } catch (Throwable t) {
-                        NativeRuntime.rethrowFatal(t);
-                        continue;
-                    }
-                    if (type != FPDF_PAGEOBJ_IMAGE) continue;
-
-                    if (optimizeImage(rawDoc, rawPage, obj, maxImageDpi, jpegQuality,
-                            maxImageEdgePx, convertPngToJpeg, jpegProgressive, allowQualityOnly)) {
+                    if (optimizeTree(rawDoc, rawPage, obj, maxImageDpi, jpegQuality,
+                            maxImageEdgePx, convertPngToJpeg, jpegProgressive, allowQualityOnly, 0)) {
                         pageChanged = true;
                         rewritten++;
                     }
@@ -248,6 +257,47 @@ public final class PdfImageOptimizer {
             }
         }
         return rewritten;
+    }
+
+    private static boolean optimizeTree(MemorySegment rawDoc, MemorySegment rawPage,
+            MemorySegment obj, int maxImageDpi, int jpegQuality, int maxImageEdgePx,
+            boolean convertPngToJpeg, boolean jpegProgressive, boolean allowQualityOnly,
+            int depth) {
+        try {
+            int type = (int) PageEditBindings.FPDFPageObj_GetType.invokeExact(obj);
+            if (type == FPDF_PAGEOBJ_IMAGE) {
+                return optimizeImage(rawDoc, rawPage, obj, maxImageDpi, jpegQuality,
+                        maxImageEdgePx, convertPngToJpeg, jpegProgressive, allowQualityOnly);
+            }
+            if (type != FPDF_PAGEOBJ_FORM || depth >= MAX_FORM_DEPTH
+                    || !PageEditBindings.formConversionAvailable()) {
+                return false;
+            }
+            int children = (int) PageEditBindings.FPDFFormObj_CountObjects.invokeExact(obj);
+            if (children < 0) {
+                throw new JPDFiumException("FPDFFormObj_CountObjects returned " + children);
+            }
+            boolean changed = false;
+            for (int i = 0; i < children; i++) {
+                MemorySegment child = PageEditBindings.formObject(obj, i);
+                if (child == null || child.equals(MemorySegment.NULL)) continue;
+                if (optimizeTree(rawDoc, rawPage, child, maxImageDpi, jpegQuality,
+                        maxImageEdgePx, convertPngToJpeg, jpegProgressive, allowQualityOnly,
+                        depth + 1)) {
+                    changed = true;
+                }
+            }
+            if (changed) {
+                int ok = (int) PageEditBindings.FPDFFormObj_MarkDirty.invokeExact(obj);
+                if (ok == 0) throw new JPDFiumException("FPDFFormObj_MarkDirty failed");
+            }
+            return changed;
+        } catch (JPDFiumException e) {
+            throw e;
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            return false;
+        }
     }
 
     /** Image-object metadata read before any pixels are decoded. */
@@ -317,7 +367,7 @@ public final class PdfImageOptimizer {
         byte[] pixels = image.getType() == BufferedImage.TYPE_BYTE_GRAY
                 ? grayBytes(image) : rgbBytes(image);
         if (pixels == null || pixels.length == 0) return false;
-        java.util.zip.Deflater deflater = new java.util.zip.Deflater(6);
+        Deflater deflater = new Deflater(6);
         try {
             deflater.setInput(pixels);
             deflater.finish();
@@ -345,13 +395,7 @@ public final class PdfImageOptimizer {
 
     // Encoded length of the image's current stream, or -1 when PDFium cannot report it.
     private static long rawLength(MemorySegment imgObj) {
-        try {
-            return (long) ImageObjBindings.FPDFImageObj_GetImageDataRaw.invokeExact(
-                    imgObj, MemorySegment.NULL, 0L);
-        } catch (Throwable t) {
-            NativeRuntime.rethrowFatal(t);
-            return -1;
-        }
+        return ImageObjBindings.imageDataRawLength(imgObj);
     }
 
     // Reads width/height/bpp/colorspace/dpi without decoding pixels, so an

@@ -4,10 +4,12 @@ import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
+import org.apache.pdfbox.pdmodel.PDResources;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.pdmodel.graphics.image.JPEGFactory;
 import org.apache.pdfbox.pdmodel.graphics.image.LosslessFactory;
 import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
+import org.apache.pdfbox.pdmodel.graphics.form.PDFormXObject;
 import org.apache.pdfbox.cos.COSName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
@@ -16,6 +18,7 @@ import java.awt.Color;
 import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Random;
 
@@ -93,6 +96,26 @@ class PdfImageEdgeAndReencodeTest {
         }
     }
 
+    private static byte[] formImagePdf(int width, int height) throws Exception {
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(new PDRectangle(200, 200));
+            doc.addPage(page);
+            PDImageXObject image = LosslessFactory.createFromImage(doc, noisyImage(width, height));
+            PDFormXObject form = new PDFormXObject(doc);
+            form.setBBox(new PDRectangle(width, height));
+            form.setResources(new PDResources());
+            form.getResources().put(COSName.getPDFName("Im0"), image);
+            try (OutputStream content = form.getContentStream().createOutputStream(COSName.FLATE_DECODE)) {
+                content.write(("q " + width + " 0 0 " + height + " 0 0 cm /Im0 Do Q")
+                        .getBytes(StandardCharsets.ISO_8859_1));
+            }
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.drawForm(form);
+            }
+            return save(doc);
+        }
+    }
+
     private static BufferedImage noisyImage(int width, int height) {
         BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
         Random rnd = new Random(0xC0FFEE);
@@ -158,6 +181,30 @@ class PdfImageEdgeAndReencodeTest {
                 PDImageXObject rewritten = firstImage(check);
                 assertTrue(Math.max(rewritten.getWidth(), rewritten.getHeight()) <= 800,
                         "longest edge must respect the cap: "
+                                + rewritten.getWidth() + "x" + rewritten.getHeight());
+            }
+        }
+    }
+
+    @Test
+    void edgeCapReachesImagesInsideFormXObjects() throws Exception {
+        byte[] input = formImagePdf(1600, 1200);
+        try (PdfDocument doc = PdfDocument.open(input)) {
+            assertTrue(PdfImageOptimizer.hasImages(doc),
+                    "hasImages must see images nested in form XObjects");
+            PdfCompressor.CompressResultWithBytes out = PdfCompressor.compress(doc,
+                    CompressOptions.builder()
+                            .maxImageDpi(-1)
+                            .maxImageEdgePx(800)
+                            .imageQuality(60)
+                            .preservationMode(PreservationMode.DESTRUCTIVE)
+                            .build());
+            assertTrue(out.result().imagesOptimized() >= 1,
+                    "an image inside a form must be counted and rewritten");
+            try (PDDocument check = Loader.loadPDF(out.bytes())) {
+                PDImageXObject rewritten = formImage(check);
+                assertTrue(Math.max(rewritten.getWidth(), rewritten.getHeight()) <= 800,
+                        "form image must respect the edge cap: "
                                 + rewritten.getWidth() + "x" + rewritten.getHeight());
             }
         }
@@ -286,6 +333,7 @@ class PdfImageEdgeAndReencodeTest {
                     CompressOptions.builder()
                             .maxImageDpi(-1)
                             .imageQuality(0)
+                            .ccittG4(true)
                             .jbig2(false)
                             .preservationMode(PreservationMode.DESTRUCTIVE)
                             .build());
@@ -310,6 +358,7 @@ class PdfImageEdgeAndReencodeTest {
                     CompressOptions.builder()
                             .maxImageDpi(-1)
                             .imageQuality(0)
+                            .jbig2(true)
                             .preservationMode(PreservationMode.DESTRUCTIVE)
                             .build());
             assertTrue(out.bytes().length < input.length,
@@ -356,6 +405,19 @@ class PdfImageEdgeAndReencodeTest {
                         "duplicate pages must reference the same image object");
             }
         }
+    }
+
+    private static PDImageXObject formImage(PDDocument doc) throws Exception {
+        for (COSName name : doc.getPage(0).getResources().getXObjectNames()) {
+            if (doc.getPage(0).getResources().getXObject(name) instanceof PDFormXObject form) {
+                for (COSName imageName : form.getResources().getXObjectNames()) {
+                    if (form.getResources().getXObject(imageName) instanceof PDImageXObject image) {
+                        return image;
+                    }
+                }
+            }
+        }
+        throw new AssertionError("no image found inside a form XObject");
     }
 
     private static PDImageXObject firstImage(PDDocument doc, int page) throws Exception {

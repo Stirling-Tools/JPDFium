@@ -2,6 +2,7 @@ package stirling.software.jpdfium.panama;
 
 import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.MemoryLayout;
+import java.lang.foreign.MemorySegment;
 import java.lang.foreign.StructLayout;
 import java.lang.invoke.MethodHandle;
 
@@ -57,6 +58,41 @@ public final class ImageObjBindings {
     /** Get decoded image data size. */
     public static final MethodHandle FPDFImageObj_GetImageDataDecoded = downcall("FPDFImageObj_GetImageDataDecoded",
             FunctionDescriptor.of(JAVA_LONG, ADDRESS, ADDRESS, JAVA_LONG));
+
+    private static final MethodHandle FPDFImageObj_GetImageDataRawNative = downcallOptional(
+            "FPDFImageObj_GetImageDataRaw",
+            FunctionDescriptor.of(NativeLayouts.C_ULONG, ADDRESS, ADDRESS, NativeLayouts.C_ULONG));
+
+    private static final MethodHandle FPDFImageObj_GetImageDataDecodedNative = downcallOptional(
+            "FPDFImageObj_GetImageDataDecoded",
+            FunctionDescriptor.of(NativeLayouts.C_ULONG, ADDRESS, ADDRESS, NativeLayouts.C_ULONG));
+
+    /** Raw (encoded) data length using the native {@code unsigned long} width. */
+    public static long imageDataRawLength(MemorySegment image) {
+        return querySize(FPDFImageObj_GetImageDataRawNative, image);
+    }
+
+    /** Decoded data length using the native {@code unsigned long} width. */
+    public static long imageDataDecodedLength(MemorySegment image) {
+        return querySize(FPDFImageObj_GetImageDataDecodedNative, image);
+    }
+
+    private static long querySize(MethodHandle handle, MemorySegment image) {
+        if (handle == null || image == null || image.equals(MemorySegment.NULL)) return -1;
+        try {
+            return NativeLayouts.C_ULONG_IS_64_BIT
+                    ? (long) handle.invokeExact(image, MemorySegment.NULL, 0L)
+                    : Integer.toUnsignedLong(
+                            (int) handle.invokeExact(image, MemorySegment.NULL, 0));
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            return -1;
+        }
+    }
+
+    private static MethodHandle downcallOptional(String name, FunctionDescriptor desc) {
+        return Symbols.downcallOptional(name, desc);
+    }
 
     /** Get image pixel dimensions. */
     public static final MethodHandle FPDFImageObj_GetImagePixelSize = downcall("FPDFImageObj_GetImagePixelSize",

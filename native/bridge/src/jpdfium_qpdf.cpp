@@ -38,6 +38,7 @@
 #include <qpdf/DLL.h>
 
 #include <qpdf/Buffer.hh>
+#include <qpdf/Pl_Buffer.hh>
 #include <qpdf/Pl_Count.hh>
 #include <qpdf/Pl_DCT.hh>
 #include <qpdf/Pl_Discard.hh>
@@ -253,6 +254,19 @@ bool hasFilter(QPDFObjectHandle& dict, std::string const& filter) {
     return false;
 }
 
+// qpdf recompresses an unreferenced Flate stream on write, so a bilevel
+// re-encode must beat the smaller of the current stream and a fresh Flate
+// encode of the same decoded pixels.
+size_t recompressedFlateSize(Buffer const* decoded) {
+    if (decoded == nullptr || decoded->getSize() == 0) return 0;
+    Pl_Buffer buffer("bilevel-flate");
+    Pl_Flate flate("bilevel-flate", &buffer, Pl_Flate::a_deflate);
+    flate.write(decoded->getBuffer(), decoded->getSize());
+    flate.finish();
+    std::unique_ptr<Buffer> compressed(buffer.getBuffer());
+    return compressed ? compressed->getSize() : 0;
+}
+
 bool bilevelSmallEnough(int64_t encoded, size_t raw) {
     // Leave a 5% margin: qpdf may recompress an existing Flate stream below
     // the same size, so a codec that barely wins would not justify replacing it.
@@ -265,27 +279,46 @@ bool bilevelSmallEnough(int64_t encoded, size_t raw) {
 void deduplicateImages(QPDF& pdf) {
     QPDFPageDocumentHelper helper{pdf};
     std::unordered_map<size_t, std::vector<QPDFObjectHandle>> seen;
+    // A page can reference one indirect image many times. Hashing the same
+    // 32 MiB stream for every reference is quadratic work; remember the
+    // canonical replacement for each indirect image object instead.
+    std::map<QPDFObjGen, QPDFObjectHandle> canonical;
     for (auto& page : helper.getAllPages()) {
-        page.forEachImage(true, [&seen](QPDFObjectHandle& image, QPDFObjectHandle& xobjDict,
-                                        std::string const& key) {
-            if (!image.getDict().hasKey("/Length")) return;
-            auto declaredLength = image.getDict().getKey("/Length");
-            if (!declaredLength.isInteger() ||
-                declaredLength.getIntValue() > kDedupeMaxStreamBytes) {
-                return;
-            }
-            std::string dict;
-            size_t fingerprint = imageFingerprint(image, dict);
-            auto& bucket = seen[fingerprint];
-            for (auto& candidate : bucket) {
-                if (!sameImage(image, candidate, dict)) continue;
-                if (!image.isSameObjectAs(candidate)) {
-                    xobjDict.replaceKey(key, candidate);
-                }
-                return;
-            }
-            bucket.push_back(image);
-        });
+        page.forEachImage(true,
+                          [&seen, &canonical](QPDFObjectHandle& image, QPDFObjectHandle& xobjDict,
+                                              std::string const& key) {
+                              QPDFObjGen identity = image.getObjGen();
+                              if (identity.isIndirect()) {
+                                  auto known = canonical.find(identity);
+                                  if (known != canonical.end()) {
+                                      if (!image.isSameObjectAs(known->second)) {
+                                          xobjDict.replaceKey(key, known->second);
+                                      }
+                                      return;
+                                  }
+                              }
+                              if (!image.getDict().hasKey("/Length")) return;
+                              auto declaredLength = image.getDict().getKey("/Length");
+                              if (!declaredLength.isInteger() ||
+                                  declaredLength.getIntValue() > kDedupeMaxStreamBytes) {
+                                  return;
+                              }
+                              std::string dict;
+                              size_t fingerprint = imageFingerprint(image, dict);
+                              auto& bucket = seen[fingerprint];
+                              QPDFObjectHandle replacement = image;
+                              for (auto& candidate : bucket) {
+                                  if (!sameImage(image, candidate, dict)) continue;
+                                  replacement = candidate;
+                                  break;
+                              }
+                              if (replacement.isSameObjectAs(image)) {
+                                  bucket.push_back(image);
+                              } else {
+                                  xobjDict.replaceKey(key, replacement);
+                              }
+                              if (identity.isIndirect()) canonical.emplace(identity, replacement);
+                          });
     }
 }
 
@@ -376,8 +409,12 @@ void encodeBilevelJbig2(QPDF& pdf) {
                     return;
                 }
                 auto raw = image.getRawStreamData();
+                if (!raw) return;
                 int64_t encodedLen = pageLen + globalsLen;
-                if (!raw || !bilevelSmallEnough(encodedLen, raw->getSize())) return;
+                size_t baseline = raw->getSize();
+                size_t flateSize = recompressedFlateSize(decoded.get());
+                if (flateSize > 0 && flateSize < baseline) baseline = flateSize;
+                if (!bilevelSmallEnough(encodedLen, baseline)) return;
 
                 auto replacement = pdf.newStream();
                 auto replacementDict = dict.shallowCopy();
@@ -477,7 +514,11 @@ void encodeBilevelImages(QPDF& pdf) {
                     return;
                 }
                 auto raw = image.getRawStreamData();
-                if (!raw || !bilevelSmallEnough(outLen, raw->getSize())) return;
+                if (!raw) return;
+                size_t baseline = raw->getSize();
+                size_t flateSize = recompressedFlateSize(decoded.get());
+                if (flateSize > 0 && flateSize < baseline) baseline = flateSize;
+                if (!bilevelSmallEnough(outLen, baseline)) return;
 
                 auto replacement = pdf.newStream();
                 auto replacementDict = dict.shallowCopy();

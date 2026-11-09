@@ -78,9 +78,16 @@ public final class CompressOptions {
      * compatibility.
      */
     public boolean jpegProgressive() { return jpegProgressive; }
-    /** Re-encode qualifying 1-bit DeviceGray images as CCITT G4 when smaller. */
+    /**
+     * Re-encode bilevel images as CCITT G4. Disabled by default: the existing
+     * compressed stream is preserved unless this is explicitly enabled.
+     */
     public boolean ccittG4() { return ccittG4; }
-    /** Re-encode qualifying 1-bit DeviceGray images as JBIG2 when smaller. */
+    /**
+     * Re-encode bilevel images as JBIG2. Disabled by default because it
+     * allocates one byte per pixel during encoding; enable only when the
+     * smaller output is worth the cost.
+     */
     public boolean jbig2() { return jbig2; }
     public boolean optimizeStreams() { return optimizeStreams; }
     public boolean removeUnusedObjects() { return removeUnusedObjects; }
@@ -139,8 +146,8 @@ public final class CompressOptions {
         private int maxImageEdgePx;
         private boolean convertPngToJpeg;
         private boolean jpegProgressive;
-        private boolean ccittG4 = true;
-        private boolean jbig2 = true;
+        private boolean ccittG4;
+        private boolean jbig2;
         private boolean optimizeStreams = true;
         private boolean removeUnusedObjects = true;
         private boolean removeMetadata;
