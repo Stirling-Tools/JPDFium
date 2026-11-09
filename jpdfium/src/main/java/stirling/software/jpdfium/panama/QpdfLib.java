@@ -113,6 +113,13 @@ public final class QpdfLib {
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, JAVA_INT, ADDRESS, ADDRESS, ADDRESS,
                     JAVA_INT, ADDRESS, ADDRESS));
 
+    private static final MethodHandle REPLACE_FONT_STREAM_HANDLE =
+            Symbols.downcallOptionalUnguarded(
+                    "jpdfium_qpdf_replace_font_stream",
+                    FunctionDescriptor.of(
+                            JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS, ADDRESS, JAVA_LONG, ADDRESS,
+                            ADDRESS));
+
     private static final MethodHandle EMBED_FONTS_FILE_HANDLE =
             Symbols.downcallOptionalUnguarded(
                     "jpdfium_qpdf_embed_fonts_file",
