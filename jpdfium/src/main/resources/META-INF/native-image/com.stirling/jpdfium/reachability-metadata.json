@@ -246,6 +246,14 @@
     "downcalls": [
       {
         "returnType": "jint",
+        "parameterTypes": ["void*", "jlong", "jint", "void*", "jint", "jint", "jint", "void*", "void*", "void*", "jint"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["void*", "void*", "jint", "void*", "jint", "jint", "jint", "void*", "jint"]
+      },
+      {
+        "returnType": "jint",
         "parameterTypes": [
           "void*",
           "void*",
