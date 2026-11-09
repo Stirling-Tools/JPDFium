@@ -308,7 +308,9 @@ public final class PdfXConverter {
     }
 
     private static void requireEmbeddedFonts(PdfDocument document, PdfXOptions options) {
-        if (options.requireEmbeddedFonts() && PdfFontAuditor.hasNonEmbeddedFonts(document)) {
+        if (options.requireEmbeddedFonts()
+                && (PdfFontAuditor.hasNonEmbeddedFonts(document)
+                        || !PdfFontAuditor.auditAll(document).nonEmbeddedFonts().isEmpty())) {
             throw new JPDFiumException(
                     "PDF/X requires embedded fonts; conversion left a non-embedded font");
         }

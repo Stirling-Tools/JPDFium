@@ -381,6 +381,45 @@ static void ensure_freetype_init() {
     if (!ft_lib) FT_Init_FreeType(&ft_lib);
 }
 
+static std::string json_escape_fonts(std::string const& value) {
+    std::string out;
+    out.reserve(value.size());
+    for (unsigned char c : value) {
+        switch (c) {
+            case '"':
+                out += "\\\"";
+                break;
+            case '\\':
+                out += "\\\\";
+                break;
+            case '\b':
+                out += "\\b";
+                break;
+            case '\f':
+                out += "\\f";
+                break;
+            case '\n':
+                out += "\\n";
+                break;
+            case '\r':
+                out += "\\r";
+                break;
+            case '\t':
+                out += "\\t";
+                break;
+            default:
+                if (c < 0x20) {
+                    char escaped[7];
+                    std::snprintf(escaped, sizeof escaped, "\\u%04x", c);
+                    out += escaped;
+                } else {
+                    out += static_cast<char>(c);
+                }
+        }
+    }
+    return out;
+}
+
 int32_t jpdfium_font_get_data(int64_t page, int32_t font_index, uint8_t** data, int64_t* len) {
     try {
         PageWrapper* pw = decodePage(page);
@@ -439,6 +478,10 @@ int32_t jpdfium_font_classify(const uint8_t* data, int64_t len, char** json) {
         FT_Face face;
         FT_Error err = FT_New_Memory_Face(ft_lib, data, (FT_Long)len, 0, &face);
         if (err) return JPDFIUM_ERR_INVALID;
+        if (face->num_glyphs <= 0) {
+            FT_Done_Face(face);
+            return JPDFIUM_ERR_INVALID;
+        }
 
         const char* type_str;
         bool sfnt = FT_IS_SFNT(face);
@@ -476,17 +519,21 @@ int32_t jpdfium_font_classify(const uint8_t* data, int64_t len, char** json) {
             }
         }
 
-        char buf[512];
-        snprintf(buf, sizeof(buf),
+        std::string family = json_escape_fonts(face->family_name ? face->family_name : "");
+        char head[384];
+        snprintf(head, sizeof(head),
                  "{\"type\":\"%s\",\"sfnt\":%s,\"has_cmap\":%s,"
                  "\"num_glyphs\":%ld,\"units_per_em\":%d,\"has_kerning\":%s,"
-                 "\"is_subset\":%s,\"family\":\"%s\"}",
+                 "\"is_subset\":%s,\"family\":\"",
                  type_str, sfnt ? "true" : "false", has_cmap ? "true" : "false", face->num_glyphs,
                  (int)face->units_per_EM, has_kerning ? "true" : "false",
-                 is_subset ? "true" : "false", face->family_name ? face->family_name : "");
+                 is_subset ? "true" : "false");
+        std::string jsonText = head;
+        jsonText += family;
+        jsonText += "\"}";
 
         FT_Done_Face(face);
-        *json = strdup(buf);
+        *json = strdup(jsonText.c_str());
         return JPDFIUM_OK;
 
     } catch (...) {
@@ -648,6 +695,10 @@ int32_t jpdfium_font_subset(const uint8_t* font_data, int64_t font_len, const ui
         hb_blob_destroy(blob);
 
         if (!face) return JPDFIUM_ERR_INVALID;
+        if (hb_face_get_glyph_count(face) == 0) {
+            hb_face_destroy(face);
+            return JPDFIUM_ERR_INVALID;
+        }
 
         // Create subset input
         hb_subset_input_t* input = hb_subset_input_create_or_fail();
