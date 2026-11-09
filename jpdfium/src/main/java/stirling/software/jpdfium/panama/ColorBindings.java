@@ -5,6 +5,8 @@ import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.MemorySegment;
 import java.lang.invoke.MethodHandle;
 
+import stirling.software.jpdfium.exception.JPDFiumException;
+
 import static java.lang.foreign.ValueLayout.ADDRESS;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 import static java.lang.foreign.ValueLayout.JAVA_FLOAT;
@@ -106,6 +108,26 @@ public final class ColorBindings {
             FunctionDescriptor.of(JAVA_INT,
                     ADDRESS, ADDRESS, ADDRESS, JAVA_LONG,
                     ADDRESS, ADDRESS, ADDRESS, ADDRESS));
+
+    public static final int PDFX_CONVERT_COLOURS = 0x01;
+    public static final int PDFX_CONVERT_IMAGES = 0x02;
+    public static final int PDFX_NEUTRALS_TO_BLACK = 0x04;
+    public static final int PDFX_CONVERT_SPECIAL = 0x08;
+    public static final int PDFX_STRICT_IMAGES = 0x10;
+    private static final int JPDFIUM_ERR_PDFX_NONCONFORMANT = -11;
+    private static final int PDFX_MESSAGE_CAPACITY = 1024;
+
+    private static final MethodHandle PDFX_PREPARE_BYTES = downcallOptionalUnguarded(
+            "jpdfium_pdfx_prepare_bytes",
+            FunctionDescriptor.of(JAVA_INT,
+                    ADDRESS, JAVA_LONG, JAVA_INT, ADDRESS, JAVA_INT, JAVA_INT, JAVA_INT,
+                    ADDRESS, ADDRESS, ADDRESS, JAVA_INT));
+
+    private static final MethodHandle PDFX_PREPARE_FILE = downcallOptionalUnguarded(
+            "jpdfium_pdfx_prepare_file",
+            FunctionDescriptor.of(JAVA_INT,
+                    ADDRESS, ADDRESS, JAVA_INT, ADDRESS, JAVA_INT, JAVA_INT, JAVA_INT,
+                    ADDRESS, JAVA_INT));
 
     /** PDFium page-object CMYK setters/getters (absent on unpatched PDFium). */
     private static final MethodHandle SET_FILL_CMYK = downcallOptional(
@@ -469,6 +491,82 @@ public final class ColorBindings {
             NativeRuntime.rethrowFatal(t);
             return false;
         }
+    }
+
+    public static boolean pdfxPrepareAvailable() {
+        return PDFX_PREPARE_BYTES != null && PDFX_PREPARE_FILE != null;
+    }
+
+    public static byte[] pdfxPrepareBytes(byte[] pdf, int level, byte[] lut, int lutGrid,
+                                          int flags, int quality) {
+        if (PDFX_PREPARE_BYTES == null) {
+            throw new JPDFiumException(
+                    "This native build has no PDF/X preparation pass");
+        }
+        requireValidLut(lut, lutGrid);
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment in = arena.allocateFrom(JAVA_BYTE, pdf);
+            MemorySegment lutSeg = lut == null ? MemorySegment.NULL : arena.allocateFrom(JAVA_BYTE, lut);
+            MemorySegment outPtr = arena.allocate(ADDRESS);
+            MemorySegment outLen = arena.allocate(JAVA_LONG);
+            MemorySegment message = arena.allocate(PDFX_MESSAGE_CAPACITY);
+            int rc = (int) PDFX_PREPARE_BYTES.invokeExact(in, (long) pdf.length, level, lutSeg,
+                    lut == null ? 0 : lutGrid, flags, quality, outPtr, outLen, message,
+                    PDFX_MESSAGE_CAPACITY);
+            requirePdfxOk(rc, message);
+            return extractAndFree(outPtr, outLen);
+        } catch (JPDFiumException e) {
+            throw e;
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw new JPDFiumException(
+                    "PDF/X preparation failed", t);
+        }
+    }
+
+    public static void pdfxPrepareFile(String inPath, String outPath, int level, byte[] lut,
+                                       int lutGrid, int flags, int quality) {
+        if (PDFX_PREPARE_FILE == null) {
+            throw new JPDFiumException(
+                    "This native build has no PDF/X preparation pass");
+        }
+        requireValidLut(lut, lutGrid);
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment in = arena.allocateFrom(inPath);
+            MemorySegment out = arena.allocateFrom(outPath);
+            MemorySegment lutSeg = lut == null ? MemorySegment.NULL : arena.allocateFrom(JAVA_BYTE, lut);
+            MemorySegment message = arena.allocate(PDFX_MESSAGE_CAPACITY);
+            int rc = (int) PDFX_PREPARE_FILE.invokeExact(in, out, level, lutSeg,
+                    lut == null ? 0 : lutGrid, flags, quality, message, PDFX_MESSAGE_CAPACITY);
+            requirePdfxOk(rc, message);
+        } catch (JPDFiumException e) {
+            throw e;
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw new JPDFiumException(
+                    "PDF/X preparation failed", t);
+        }
+    }
+
+    private static void requireValidLut(byte[] lut, int lutGrid) {
+        if (lut == null) return;
+        if (lutGrid < 2 || lutGrid > 256
+                || lut.length != (long) lutGrid * lutGrid * lutGrid * 4) {
+            throw new IllegalArgumentException("CMYK LUT must hold grid^3 * 4 bytes for a grid of"
+                    + " 2 to 256; got " + lut.length + " bytes for grid " + lutGrid);
+        }
+    }
+
+    private static void requirePdfxOk(int rc, MemorySegment message) {
+        if (rc == JPDFIUM_OK) return;
+        String reason = message.getString(0);
+        if (rc == JPDFIUM_ERR_PDFX_NONCONFORMANT) {
+            throw new JPDFiumException(
+                    "Cannot produce PDF/X: " + reason);
+        }
+        throw new JPDFiumException(
+                "PDF/X preparation failed (code " + rc + ")"
+                        + (reason.isEmpty() ? "" : ": " + reason));
     }
 
     /** Read a page object's fill colour as DeviceCMYK. */

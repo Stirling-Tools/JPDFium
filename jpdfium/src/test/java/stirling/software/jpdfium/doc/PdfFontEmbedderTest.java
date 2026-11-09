@@ -10,13 +10,19 @@ import org.apache.pdfbox.cos.COSInteger;
 import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.PDPageContentStream;
 import org.apache.pdfbox.pdmodel.common.PDStream;
 import org.apache.pdfbox.pdmodel.PDResources;
 import org.apache.pdfbox.pdmodel.font.PDFont;
+import org.apache.pdfbox.pdmodel.font.PDType1Font;
+import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -35,6 +41,78 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 /** Contract tests for qpdf-backed exact font-stream replacement. */
 @EnabledIfSystemProperty(named = "jpdfium.integration", matches = "true")
 class PdfFontEmbedderTest {
+
+    @Test
+    void fileBackedEmbeddingWritesEmbeddedFontToOutput(@TempDir Path temp) throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
+        Path input = helveticaPage(temp.resolve("input.pdf"));
+        Path output = temp.resolve("output.pdf");
+
+        PdfFontEmbedder.FileResult result =
+                PdfFontEmbedder.embedMissingTo(input, output, liberationSansDir(temp));
+
+        assertEquals(List.of("Helvetica"), result.embedded());
+        assertTrue(firstFontEmbedded(output), "file-backed output font must be embedded");
+    }
+
+    @Test
+    void fileBackedEmbeddingRewritesInPlace(@TempDir Path temp) throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
+        Path pdf = helveticaPage(temp.resolve("input.pdf"));
+
+        PdfFontEmbedder.FileResult result =
+                PdfFontEmbedder.embedMissingTo(pdf, pdf, liberationSansDir(temp));
+
+        assertEquals(List.of("Helvetica"), result.embedded());
+        assertTrue(firstFontEmbedded(pdf), "in-place output font must be embedded");
+    }
+
+    @Test
+    void fileBackedEmbeddingCopiesTheInputWhenNoFontMatches(@TempDir Path temp) throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
+        Path input = helveticaPage(temp.resolve("input.pdf"));
+        Path output = temp.resolve("output.pdf");
+        Path empty = Files.createDirectory(temp.resolve("no-fonts"));
+
+        PdfFontEmbedder.FileResult result = PdfFontEmbedder.embedMissingTo(input, output, empty);
+
+        assertTrue(result.embedded().isEmpty());
+        assertEquals(List.of("Helvetica"), result.unresolved());
+        assertArrayEquals(Files.readAllBytes(input), Files.readAllBytes(output));
+    }
+
+    private static Path helveticaPage(Path target) throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage();
+            doc.addPage(page);
+            try (PDPageContentStream content = new PDPageContentStream(doc, page)) {
+                content.beginText();
+                content.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 12);
+                content.newLineAtOffset(72, 720);
+                content.showText("file backed font embedding");
+                content.endText();
+            }
+            doc.save(target.toFile());
+        }
+        return target;
+    }
+
+    private static Path liberationSansDir(Path temp) throws IOException {
+        Path dir = Files.createDirectories(temp.resolve("fonts"));
+        try (InputStream font = PDDocument.class.getResourceAsStream(
+                "/org/apache/pdfbox/resources/ttf/LiberationSans-Regular.ttf")) {
+            assertNotNull(font, "PDFBox no longer bundles LiberationSans");
+            Files.copy(font, dir.resolve("LiberationSans-Regular.ttf"));
+        }
+        return dir;
+    }
+
+    private static boolean firstFontEmbedded(Path pdf) throws IOException {
+        try (PDDocument doc = Loader.loadPDF(pdf.toFile())) {
+            PDResources resources = doc.getPage(0).getResources();
+            return resources.getFont(resources.getFontNames().iterator().next()).isEmbedded();
+        }
+    }
 
     @Test
     void replacesAnExistingEmbeddedFontStreamWithExactMatching() throws Exception {
