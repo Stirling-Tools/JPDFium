@@ -19,6 +19,15 @@ Bundled ICC profile (jpdfium main jar):
 - JPDFiumCompactCmyk.icc - generated generic CMYK fallback, MIT; see
   jpdfium/src/main/resources/icc/JPDFiumCompactCmyk.NOTICE.txt
 
+Bundled fallback fonts (jpdfium main jar):
+- Liberation Sans/Serif/Mono - SIL OFL 1.1
+- Carlito - SIL OFL 1.1
+- Caladea - SIL OFL 1.1
+- Noto Sans Arabic, Noto Sans SC - SIL OFL 1.1
+- DejaVu Sans/Serif/Sans Mono - Bitstream Vera license
+  See jpdfium/src/main/resources/fonts/NOTICE.txt for the full mapping and
+  OFL.txt / DejaVu-LICENSE.txt for the license texts.
+
 Bundled image stack (shipped in jpdfium-natives-vips-* jars,
 see native/licenses/NOTICE.txt for details):
 - libvips - LGPL-2.1-or-later
