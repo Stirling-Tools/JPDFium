@@ -2,9 +2,10 @@ package stirling.software.jpdfium.doc;
 
 /**
  * PDF/X family metadata. The intent/XMP bootstrap is available for every
- * family member; this is not a compliance claim. PDF/X-1a and PDF/X-3 rasterize
- * detected transparent pages at 300 dpi rather than rejecting them; font
- * embedding remains the caller's responsibility.
+ * family member; this is not a compliance claim. For PDF/X-1a and PDF/X-3,
+ * detected transparent pages are rasterized at 300 dpi, so their text is no
+ * longer selectable and vector content becomes pixels. Pages that remain
+ * transparent are rejected. Font embedding remains the caller's responsibility.
  */
 public enum PdfXStandard {
     PDF_X_1A("PDF 1.3", "PDF/X-1:2001", "PDF/X-1a:2001", true),
