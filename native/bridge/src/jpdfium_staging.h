@@ -94,7 +94,8 @@ inline void DiscardStaged(StagedFile* staged) {
 }
 
 #ifndef _WIN32
-// A new destination gets the mode a plain create in its directory would give it.
+// A new destination gets the mode a plain create in its directory would give it,
+// less world write.
 // That is measured on a throwaway file rather than by reading the umask, because
 // reading the umask means setting it process-wide while other threads create files.
 inline mode_t NewFileMode(const std::filesystem::path& dir) {
@@ -102,7 +103,7 @@ inline mode_t NewFileMode(const std::filesystem::path& dir) {
     for (int attempt = 0; attempt < 64; ++attempt) {
         const uint64_t token = (static_cast<uint64_t>(rd()) << 32) | rd();
         const std::filesystem::path probe = dir / (".jpdfium-mode." + std::to_string(token));
-        const int fd = ::open(probe.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0666);
+        const int fd = ::open(probe.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0664);
         if (fd < 0) {
             if (errno == EEXIST) continue;
             break;
@@ -198,10 +199,10 @@ bool WriteAndPublish(const char* destination, Write&& write, std::string* error)
     StagedFile staged;
     try {
         OpenUniqueSibling(destination, &staged);
+        write(staged);
         if (!ApplyPublishModeTo(staged.file, destination)) {
             throw std::runtime_error("cannot set the permissions of the staging file");
         }
-        write(staged);
     } catch (...) {
         DiscardStaged(&staged);
         throw;

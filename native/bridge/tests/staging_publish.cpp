@@ -104,6 +104,24 @@ void PosixChecks(const std::filesystem::path& dir) {
     Expect((std::filesystem::status(dest).permissions() & std::filesystem::perms::all) == mode,
            "destination mode preserved");
 
+    const auto shared = std::filesystem::perms::owner_read | std::filesystem::perms::owner_write |
+                        std::filesystem::perms::group_read | std::filesystem::perms::others_read;
+    std::filesystem::permissions(dest, shared);
+    mode_t during_write = 0;
+    std::string error;
+    Expect(jpdfium_staging::WriteAndPublish(
+               dest.c_str(),
+               [&during_write](jpdfium_staging::StagedFile& staged) {
+                   struct stat st;
+                   if (::fstat(::fileno(staged.file), &st) == 0) during_write = st.st_mode & 07777;
+                   std::fputs("private", staged.file);
+               },
+               &error),
+           "write and publish over an existing file");
+    Expect(during_write == 0600, "staging file stays owner-only while it is written");
+    Expect((std::filesystem::status(dest).permissions() & std::filesystem::perms::all) == shared,
+           "published file takes the destination mode");
+
     const mode_t previous = ::umask(027);
     const std::filesystem::path fresh = dir / "fresh.pdf";
     Expect(PublishText(fresh, "generated", nothing, true), "publish to a new destination");
