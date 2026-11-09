@@ -67,8 +67,9 @@ import stirling.software.jpdfium.panama.QpdfLib;
 public final class PdfFontEmbedder {
 
     /**
-     * The rewritten document, the fonts embedded into it, and the fonts in use that are still
-     * not embedded, as {@link PdfFontAuditor} reports them on the output.
+     * The rewritten document, the fonts embedded into it, the fonts in use that are still not
+     * embedded as {@link PdfFontAuditor} reports them on the output, and one
+     * {@link FontStatus} per requested name.
      */
     public record Result(
             byte[] pdf, List<String> embedded, List<String> unresolved, List<FontStatus> statuses) {
@@ -219,8 +220,9 @@ public final class PdfFontEmbedder {
     }
 
     /**
-     * Embed every non-embedded font in use from {@code fontDirs}, searched recursively and
-     * indexed once per distinct list; the system font directories when none are given.
+     * Embed every non-embedded font resource. The bundled fallback set is tried first, then
+     * {@code fontDirs} searched recursively and indexed once per distinct list; the system font
+     * directories when none are given.
      */
     public static Result embedMissing(byte[] pdf, Path... fontDirs) throws IOException {
         List<PdfFontAuditor.FontResource> resources = PdfFontAuditor.unembeddedResources(pdf);
