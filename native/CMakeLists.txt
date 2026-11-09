@@ -203,6 +203,7 @@ if(JPDFIUM_USE_PDFIUM)
         bridge/src/jpdfium_advanced.cpp
         bridge/src/jpdfium_image.cpp
         bridge/src/jpdfium_color.cpp
+        bridge/src/jpdfium_pdfx.cpp
         bridge/src/jpdfium_repair.cpp
         bridge/src/jpdfium_qpdf.cpp
         bridge/src/jpdfium_qpdf_sanitize.cpp
@@ -826,6 +827,12 @@ if(JPDFIUM_BUILD_TESTS)
         target_compile_options(registry_cost PRIVATE -Wall -Wextra -Wpedantic -Werror)
     endif()
     add_test(NAME registry_cost COMMAND registry_cost)
+    add_executable(staging_publish bridge/tests/staging_publish.cpp)
+    target_include_directories(staging_publish PRIVATE bridge/include bridge/src)
+    if(NOT MSVC)
+        target_compile_options(staging_publish PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    endif()
+    add_test(NAME staging_publish COMMAND staging_publish)
     # Test environment. ENVIRONMENT is a whole-property value, so every
     # contributor has to append here: setting it twice silently drops the first
     # assignment, which previously cost the component-build library path as soon
