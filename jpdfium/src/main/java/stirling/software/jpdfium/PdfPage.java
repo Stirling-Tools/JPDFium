@@ -1156,7 +1156,15 @@ public final class PdfPage implements AutoCloseable {
     public int commitRedactions(int argbColor, boolean removeContent) {
         ensureOpen();
         requireContentRemoval(removeContent);
-        int committed = JpdfiumLib.redactCommit(handle, argbColor, removeContent);
+        int committed;
+        try {
+            committed = JpdfiumLib.redactCommit(handle, argbColor, removeContent);
+        } catch (RuntimeException e) {
+            // A refused commit leaves native redaction state that must keep the
+            // document unsavable; the unchanged-bytes fast path must not hide it.
+            ownerDoc.markContentModified();
+            throw e;
+        }
         if (committed > 0) ownerDoc.markContentModified();
         return committed;
     }

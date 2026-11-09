@@ -8,11 +8,14 @@ import stirling.software.jpdfium.model.ColorScheme;
 import stirling.software.jpdfium.model.RenderResult;
 import stirling.software.jpdfium.panama.PageEditBindings;
 import stirling.software.jpdfium.panama.RenderBindings;
+import stirling.software.jpdfium.panama.RenderConversionBindings;
 
 import java.awt.image.BufferedImage;
+import java.awt.image.DataBufferInt;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.lang.invoke.MethodHandle;
 import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
@@ -31,6 +34,25 @@ public final class RenderOptions {
     private final ProcessingMode processingMode;
 
     private static final float POINTS_PER_INCH = 72f;
+
+    /**
+     * Native RGBA-to-ARGB packer for the allocating render path. It reads the
+     * bitmap in place, so the view's buffer must be tight and writable; the
+     * fallback copies the bytes out first and runs the scalar pack loop.
+     *
+     * <p>{@code -Djpdfium.render.scalar=true} forces the fallback so the SIMD
+     * gain can be measured on identical inputs.
+     */
+    private static final MethodHandle PACK_ARGB = resolvePacker();
+
+    private static MethodHandle resolvePacker() {
+        if (Boolean.getBoolean("jpdfium.render.scalar")) return null;
+        try {
+            return RenderConversionBindings.JPDFIUM_RGBA_TO_ARGB32;
+        } catch (LinkageError | RuntimeException absent) {
+            return null;
+        }
+    }
 
     private RenderOptions(Builder b) {
         this.dpi = b.dpi;
@@ -74,9 +96,32 @@ public final class RenderOptions {
      */
     public BufferedImage render(MemorySegment rawPage, float pageWidth, float pageHeight) {
         try (RenderedPageView view = renderView(rawPage, pageWidth, pageHeight)) {
-            byte[] rgba = view.pixels().toArray(ValueLayout.JAVA_BYTE);
-            return new RenderResult(view.width(), view.height(), rgba).toBufferedImage();
+            return toBufferedImage(view);
         }
+    }
+
+    private static BufferedImage toBufferedImage(RenderedPageView view) {
+        final int w = view.width();
+        final int h = view.height();
+        final long byteLen = (long) w * h * 4;
+        if (PACK_ARGB != null && view.isTight() && view.pixels().byteSize() >= byteLen) {
+            BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+            int[] raster = ((DataBufferInt) img.getRaster().getDataBuffer()).getData();
+            try {
+                // Alias source and destination: each 16-pixel block is fully
+                // loaded before it is stored back, and a later block never
+                // reads bytes an earlier block overwrote.
+                int rc = (int) PACK_ARGB.invokeExact(view.pixels(), view.pixels(), w * h);
+                if (rc == 0) {
+                    MemorySegment.copy(view.pixels(), ValueLayout.JAVA_INT, 0, raster, 0, w * h);
+                    return img;
+                }
+            } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
+            }
+        }
+        byte[] rgba = view.pixels().toArray(ValueLayout.JAVA_BYTE);
+        return new RenderResult(w, h, rgba).toBufferedImage();
     }
 
     RenderedPageView renderView(MemorySegment rawPage, float pageWidth, float pageHeight) {

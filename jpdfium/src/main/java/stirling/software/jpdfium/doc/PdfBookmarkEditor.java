@@ -85,8 +85,15 @@ public final class PdfBookmarkEditor {
         // never leave a half-written outline on the destination.
         SaveOptions policy = durable ? SaveOptions.fast() : SaveOptions.ephemeral();
         try (OutputTransaction tx = OutputTransaction.begin(output, durable)) {
-            // PDFium writes a classic xref table, which the appended outline extends.
-            doc.saveTo(tx.staging(), SaveOptions.ephemeral());
+            // PDFium writes a classic xref table, which the appended outline
+            // extends. Reopen validation forces the native writer even when the
+            // source bytes are unchanged, so QPDF/PDFBox xref streams are
+            // normalized before the appendix is added.
+            SaveOptions normalized = SaveOptions.builder()
+                    .durable(false)
+                    .verifyReopen(true)
+                    .build();
+            doc.saveTo(tx.staging(), normalized);
             OutlineMetadata metadata = readOutlineMetadata(tx.staging());
             long appendOffset = Files.size(tx.staging());
             byte[] appendix = buildOutlineAppendix(bookmarks, doc.pageCount(), metadata, appendOffset);

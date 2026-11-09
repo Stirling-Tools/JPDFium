@@ -19,6 +19,14 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Added
 
+- Guarded base+delta layer editing through `PdfDocument.openLayer`,
+  `saveLayerArtifact` and `saveLayerMaterialized`. Layers share one frozen base
+  and keep their edits in a separate artifact until materialized.
+- `PdfFormSnapshot.load(...)` reads an AcroForm into detached Java records
+  without parsing page content or promoting objects.
+- `PdfPageImporter` imports through the form-aware `EPDFDoc_ImportPages`
+  extension when the source pages carry form fields, so imported pages keep
+  them; other imports use the plain PDFium entry point.
 - Native qpdf font-stream replacement. `PdfFontEmbedder.embed(...)` replaces
   `/FontFile2` or `/FontFile3` streams by exact `/BaseFont`, updating
   `/Length1`; Type 1 `/FontFile` streams are rejected. `PdfXOptions.fontData(...)`
@@ -38,9 +46,22 @@ publishing workflows, not library releases, so they are not listed here.
   return a page's characters in a packed binary layout. `PdfTextExtractor` uses it
   when the native bundle exports it, instead of formatting and parsing JSON, which
   was most of the cost of text extraction.
+- `EmbedPdfAnnotations` can read and replace rich-text FreeText comments through
+  `getRichTextJson`, `setRichTextJson` and `setRichTextXhtml`.
 
 ### Changed
 
+- `RenderOptions.render` packs the rendered bitmap in native NEON and writes the
+  AWT raster directly, removing the intermediate RGBA `byte[]` and the Java
+  per-pixel loop: about 1.6-2.1x on the pack step and half the allocation per
+  allocating render. The scalar path remains as the stub/fallback.
+- An unmodified document saves its loaded bytes instead of re-serializing
+  through PDFium. Page reads no longer disable the fast path; a real edit or a
+  save option with reopen validation or an output cap still takes the native
+  writer. `PdfDocument.saveBytesNative()` forces a native serialization for
+  callers that wrote through a raw handle.
+- `PdfDocument.setPageRotation` uses the object-number extension when available
+  instead of loading the page and writing its dictionary.
 - `PdfMerge.mergeFilesToFile` and `PdfSplit.extractPageRangeToFile` write their
   staging file without fsync and flush once when they publish the output, which
   now gets the destination's permissions as other saves do. They previously

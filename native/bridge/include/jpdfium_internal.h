@@ -177,6 +177,16 @@ struct DocCore {
     void* redactPatternCache = nullptr;
     void (*redactPatternDeleter)(void*) = nullptr;
 
+    // Layer documents only: the frozen base and the exact bytes it was loaded
+    // from, retained so materialize can append the current delta.
+    void* layerBase = nullptr;
+    void (*layerBaseRelease)(void*) = nullptr;
+    uint8_t* layerBaseBytes = nullptr;
+    size_t layerBaseLen = 0;
+    // Shared cache ownership for the frozen base. When present, layerBase is
+    // borrowed from this entry and must not be released through layerBaseRelease.
+    std::shared_ptr<void> layerBaseOwner;
+
     // One scratch render frame per document, borrowed by the per-page and the
     // whole-document flatten paths so they can never hold two frames at once.
     // The borrow is exclusive because callers serialize on the PDFium domain.
@@ -259,6 +269,21 @@ inline std::shared_ptr<DocCore> makeDocCore(FPDF_DOCUMENT doc, uint8_t* buf = nu
         if (c->doc) {
             FPDF_CloseDocument(c->doc);
             c->doc = nullptr;
+        }
+        if (c->layerBaseOwner) {
+            c->layerBaseOwner.reset();
+            c->layerBase = nullptr;
+            c->layerBaseBytes = nullptr;
+            c->layerBaseLen = 0;
+        } else {
+            if (c->layerBase && c->layerBaseRelease) {
+                c->layerBaseRelease(c->layerBase);
+                c->layerBase = nullptr;
+            }
+            if (c->layerBaseBytes) {
+                free(c->layerBaseBytes);
+                c->layerBaseBytes = nullptr;
+            }
         }
         if (c->buf) {
             free(c->buf);

@@ -88,6 +88,9 @@
       "type": "stirling.software.jpdfium.panama.RenderBindings"
     },
     {
+      "type": "stirling.software.jpdfium.panama.RenderConversionBindings"
+    },
+    {
       "type": "stirling.software.jpdfium.panama.RustBridgeBindings"
     },
     {
@@ -243,6 +246,13 @@
   ],
   "foreign": {
     "downcalls": [
+      {
+        "returnType": "jlong",
+        "parameterTypes": [
+          "void*",
+          "void*"
+        ]
+      },
       {
         "returnType": "void*",
         "parameterTypes": [
@@ -2019,6 +2029,37 @@
           "jfloat",
           "jfloat",
           "jfloat"
+        ]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": [
+          "void*",
+          "void*",
+          "void*",
+          "jlong",
+          "jint",
+          "void*"
+        ]
+      },
+      {
+        "returnType": "jlong",
+        "parameterTypes": [
+          "void*",
+          "jint",
+          "jint",
+          "void*",
+          "jlong"
+        ]
+      },
+      {
+        "returnType": "jlong",
+        "parameterTypes": [
+          "void*",
+          "void*",
+          "jlong",
+          "void*",
+          "jlong"
         ]
       }
     ],

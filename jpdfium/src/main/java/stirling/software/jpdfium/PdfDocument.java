@@ -14,6 +14,7 @@ import stirling.software.jpdfium.doc.PdfPageImporter;
 import stirling.software.jpdfium.doc.PdfSignatures;
 import stirling.software.jpdfium.doc.Signature;
 import stirling.software.jpdfium.doc.SignatureDetails;
+import stirling.software.jpdfium.doc.PdfPageEditor;
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.model.ColorType;
 import stirling.software.jpdfium.model.FlattenMode;
@@ -45,8 +46,10 @@ import java.nio.channels.Channels;
 import java.nio.channels.WritableByteChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -96,6 +99,8 @@ public final class PdfDocument implements AutoCloseable {
      * and must never be reused verbatim by a save or split.
      */
     private volatile boolean encryptedSource;
+    /** Whether {@link #encryptedSource} has been determined for this document. */
+    private volatile boolean encryptionKnown;
 
     /**
      * Bumped by every successful content mutation: annotation flattening, cropping,
@@ -130,6 +135,7 @@ public final class PdfDocument implements AutoCloseable {
     /** Last-modified time of {@link #sourcePath} when it was recorded, or -1 when unknown. */
     private volatile long sourceMtime = -1L;
     private volatile byte[] sourceBytes;
+    private final boolean layerDocument;
 
     PdfDocument(long handle) {
         this(handle, null);
@@ -140,10 +146,15 @@ public final class PdfDocument implements AutoCloseable {
     }
 
     PdfDocument(long handle, Path ownedTempFile, int knownPageCount) {
+        this(handle, ownedTempFile, knownPageCount, false);
+    }
+
+    private PdfDocument(long handle, Path ownedTempFile, int knownPageCount, boolean layerDocument) {
         this.handle = handle;
         this.rawDocSegment = handle != 0L ? JpdfiumLib.docRawHandle(handle) : MemorySegment.NULL;
         this.ownedTempFile = ownedTempFile;
         this.knownPageCount = knownPageCount;
+        this.layerDocument = layerDocument;
     }
 
     /**
@@ -186,7 +197,25 @@ public final class PdfDocument implements AutoCloseable {
                 && contentGeneration.get() == 0
                 && structureEpoch.get() == 0
                 && !sanitizeOnSave
-                && !encryptedSource;
+                && !isEncryptedSource();
+    }
+
+    /** Resolve the encryption flag on first use (open must not pay the probe). */
+    private boolean isEncryptedSource() {
+        if (encryptionKnown) return encryptedSource;
+        if (handle == 0L) {
+            // Lazy temp documents are produced by merge/split and are already
+            // decrypted; probing here would force the lazy native open.
+            encryptionKnown = true;
+            return false;
+        }
+        synchronized (this) {
+            if (!encryptionKnown) {
+                encryptedSource = securityHandlerRevision() > 0;
+                encryptionKnown = true;
+            }
+        }
+        return encryptedSource;
     }
 
     /**
@@ -291,9 +320,9 @@ public final class PdfDocument implements AutoCloseable {
         PdfDocument doc = new PdfDocument(JpdfiumLib.docOpen(abs.toString()));
         doc.sourcePath = abs;
         doc.recordSourceStamp(abs);
-        // A PDF can be encrypted with an empty user password; detecting that
-        // keeps the verbatim source-reuse fast path off such documents.
-        doc.encryptedSource = doc.securityHandlerRevision() > 0;
+        // Encryption is only needed to decide whether the verbatim source-reuse
+        // path is safe; defer the native security-handler probe until a save or
+        // split actually asks for that reuse.
         return doc;
     }
 
@@ -332,6 +361,7 @@ public final class PdfDocument implements AutoCloseable {
                 : new PdfDocument(JpdfiumLib.docOpenBytesProtected(data, password));
         doc.sourceBytes = data;
         doc.encryptedSource = !password.isEmpty();
+        doc.encryptionKnown = !password.isEmpty();
         return doc;
     }
 
@@ -411,7 +441,10 @@ public final class PdfDocument implements AutoCloseable {
                     ? JpdfiumLib.docOpen(spooled.toAbsolutePath().toString())
                     : JpdfiumLib.docOpenProtected(spooled.toAbsolutePath().toString(), password);
             PdfDocument doc = new PdfDocument(handle, spooled);
-            doc.encryptedSource = password != null || doc.securityHandlerRevision() > 0;
+            if (password != null) {
+                doc.encryptedSource = true;
+                doc.encryptionKnown = true;
+            }
             ok = true;
             return doc;
         } finally {
@@ -466,6 +499,111 @@ public final class PdfDocument implements AutoCloseable {
             Files.deleteIfExists(p);
         } catch (IOException ignored) {
             // Best effort: a leftover spool is removed by the OS temp sweeper.
+        }
+    }
+
+    /**
+     * Open a layer view over a frozen base document.
+     *
+     * <p>The returned document supports ordinary page/annotation/form APIs, but
+     * edits are stored only in the layer. Persist them with {@link
+     * #saveLayerArtifact(Path)} and materialize with {@link #saveLayerMaterialized(Path)}.
+     * A full {@code save} is intentionally not the layer persistence format.
+     *
+     * @param base  immutable base PDF
+     * @param delta optional existing delta artifact; null/empty opens a fresh layer
+     * @return layer document, owned by the caller
+     * @throws IOException if the base/delta cannot be loaded
+     */
+    public static PdfDocument openLayer(Path base, Path delta) throws IOException {
+        if (base == null) throw new IllegalArgumentException("base must not be null");
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment cBase = arena.allocateFrom(base.toAbsolutePath().toString());
+            MemorySegment cDelta = delta == null
+                    ? MemorySegment.NULL
+                    : arena.allocateFrom(delta.toAbsolutePath().toString());
+            MemorySegment out = arena.allocate(ValueLayout.JAVA_LONG);
+            int rc;
+            try {
+                rc = (int) DocBindings.JPDFIUM_LAYER_OPEN.invokeExact(cBase, cDelta, out);
+            } catch (Throwable t) {
+                throw new JPDFiumException("layer open failed", t);
+            }
+            if (rc != 0) throw new IOException("layer open failed: " + rc);
+            long handle = out.get(ValueLayout.JAVA_LONG, 0);
+            if (handle == 0L) throw new IOException("layer open returned a null handle");
+            stirling.software.jpdfium.panama.PdfiumRuntime.documentOpened();
+            return new PdfDocument(handle, null, -1, true);
+        }
+    }
+
+    /** True when this document was opened with {@link #openLayer}. */
+    public boolean isLayerDocument() { return layerDocument; }
+
+    /**
+     * Save the layer artifact (base identity + cumulative delta). This is the
+     * file accepted by {@link #openLayer(Path, Path)}; it is not a standalone PDF.
+     */
+    public void saveLayerArtifact(Path destination) throws IOException {
+        if (!layerDocument) throw new IllegalStateException("not a layer document");
+        if (destination == null) throw new IllegalArgumentException("destination must not be null");
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment path = arena.allocateFrom(destination.toAbsolutePath().toString());
+            MemorySegment changed = arena.allocate(ValueLayout.JAVA_INT);
+            int rc;
+            try {
+                rc = (int) DocBindings.JPDFIUM_LAYER_SAVE_DELTA.invokeExact(handle, path, changed);
+            } catch (Throwable t) {
+                throw new JPDFiumException("layer delta save failed", t);
+            }
+            if (rc != 0) throw new IOException("layer delta save failed: " + rc);
+        }
+    }
+
+    /** SHA-256 of the exact base bytes a layer was opened on, lower-case hex. */
+    public java.util.Optional<String> layerBaseSha256() {
+        ensureOpen();
+        if (!layerDocument) return java.util.Optional.empty();
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment out = arena.allocate(32);
+            int rc = (int) DocBindings.JPDFIUM_LAYER_BASE_SHA256.invokeExact(handle, out);
+            if (rc != 0) return java.util.Optional.empty();
+            return java.util.Optional.of(HexFormat.of().formatHex(
+                    out.toArray(ValueLayout.JAVA_BYTE)));
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw new JPDFiumException("layer base sha256 failed", t);
+        }
+    }
+
+    /** Committed objects in the layer overlay; -1 for a non-layer document. */
+    public long layerPromotedObjectCount() {
+        ensureOpen();
+        if (!layerDocument) return -1L;
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment out = arena.allocate(ValueLayout.JAVA_LONG);
+            int rc = (int) DocBindings.JPDFIUM_LAYER_PROMOTED_OBJECT_COUNT.invokeExact(handle, out);
+            if (rc != 0) return -1L;
+            return out.get(ValueLayout.JAVA_LONG, 0);
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw new JPDFiumException("layer promoted object count failed", t);
+        }
+    }
+
+    /** Materialize base bytes followed by the current cumulative delta. */
+    public void saveLayerMaterialized(Path destination) throws IOException {
+        if (!layerDocument) throw new IllegalStateException("not a layer document");
+        if (destination == null) throw new IllegalArgumentException("destination must not be null");
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment path = arena.allocateFrom(destination.toAbsolutePath().toString());
+            int rc;
+            try {
+                rc = (int) DocBindings.JPDFIUM_LAYER_MATERIALIZE.invokeExact(handle, path);
+            } catch (Throwable t) {
+                throw new JPDFiumException("layer materialize failed", t);
+            }
+            if (rc != 0) throw new IOException("layer materialize failed: " + rc);
         }
     }
 
@@ -555,6 +693,7 @@ public final class PdfDocument implements AutoCloseable {
         doc.sourcePath = abs;
         doc.recordSourceStamp(abs);
         doc.encryptedSource = true;
+        doc.encryptionKnown = true;
         return doc;
     }
 
@@ -569,8 +708,9 @@ public final class PdfDocument implements AutoCloseable {
      */
     private void recordSourceStamp(Path path) {
         try {
-            sourceSize = Files.size(path);
-            sourceMtime = Files.getLastModifiedTime(path).toMillis();
+            BasicFileAttributes attrs = Files.readAttributes(path, BasicFileAttributes.class);
+            sourceSize = attrs.size();
+            sourceMtime = attrs.lastModifiedTime().toMillis();
         } catch (IOException e) {
             sourceSize = -1L;
             sourceMtime = -1L;
@@ -1270,8 +1410,16 @@ public final class PdfDocument implements AutoCloseable {
      * @param destination target file, overwritten on success
      * @param options     save policy; null uses {@link SaveOptions#fast()}
      */
+    private void rejectLayerSave() {
+        if (layerDocument) {
+            throw new IllegalStateException(
+                    "layer documents must use saveLayerArtifact/saveLayerMaterialized");
+        }
+    }
+
     public void saveTo(Path destination, SaveOptions options) {
         ensureOpen();
+        rejectLayerSave();
         if (destination == null) throw new IllegalArgumentException("destination must not be null");
         SaveOptions opts = options == null ? SaveOptions.fast() : options;
         // An untouched temp-owned document still matches its open-time file, so
@@ -1340,7 +1488,9 @@ public final class PdfDocument implements AutoCloseable {
      */
     public void saveTo(WritableByteChannel channel, SaveOptions options) throws IOException {
         ensureOpen();
-        JpdfiumLib.docSaveTo(ensureNativeHandle(), channel, options == null ? SaveOptions.fast() : options);
+        rejectLayerSave();
+        SaveOptions opts = options == null ? SaveOptions.fast() : options;
+        JpdfiumLib.docSaveTo(ensureNativeHandle(), channel, opts);
     }
 
     /**
@@ -1374,9 +1524,9 @@ public final class PdfDocument implements AutoCloseable {
      */
     public void saveTo(OutputStream out, SaveOptions options) throws IOException {
         ensureOpen();
+        rejectLayerSave();
         if (out == null) throw new IllegalArgumentException("out must not be null");
-        WritableByteChannel channel = Channels.newChannel(out);
-        JpdfiumLib.docSaveTo(ensureNativeHandle(), channel, options == null ? SaveOptions.fast() : options);
+        saveTo(Channels.newChannel(out), options);
     }
 
     /**
@@ -1384,8 +1534,7 @@ public final class PdfDocument implements AutoCloseable {
      * Useful when the caller needs a file path without choosing one.
      */
     public Path saveToTempFile() {
-        ensureOpen();
-        return JpdfiumLib.docSaveToTempFile(ensureNativeHandle(), SaveOptions.fast());
+        return saveToTempFile(SaveOptions.fast());
     }
 
     /**
@@ -1397,7 +1546,9 @@ public final class PdfDocument implements AutoCloseable {
      */
     public Path saveToTempFile(SaveOptions options) {
         ensureOpen();
-        return JpdfiumLib.docSaveToTempFile(ensureNativeHandle(), options == null ? SaveOptions.fast() : options);
+        rejectLayerSave();
+        SaveOptions opts = options == null ? SaveOptions.fast() : options;
+        return JpdfiumLib.docSaveToTempFile(ensureNativeHandle(), opts);
     }
 
     /**
@@ -1407,6 +1558,21 @@ public final class PdfDocument implements AutoCloseable {
      */
     public byte[] saveBytes() {
         ensureOpen();
+        rejectLayerSave();
+        return JpdfiumLib.docSaveBytes(ensureNativeHandle());
+    }
+
+    /**
+     * Serialise the document through PDFium even when it still appears
+     * unchanged. Use this after writing through a raw handle: those writes
+     * bypass edit tracking and the unchanged-bytes fast path, so {@link
+     * #saveBytes()} could otherwise return the open-time bytes and drop them.
+     *
+     * @return PDF bytes
+     */
+    public byte[] saveBytesNative() {
+        ensureOpen();
+        rejectLayerSave();
         return JpdfiumLib.docSaveBytes(ensureNativeHandle());
     }
 
@@ -1463,6 +1629,41 @@ public final class PdfDocument implements AutoCloseable {
             return Optional.of(new Rect(left, bottom, right - left, top - bottom));
         } catch (Throwable t) {
             return Optional.empty();
+        }
+    }
+
+    /**
+     * Set page rotation by index without loading the page when the object API
+     * is available. Falls back to a normal page open, preserving behavior for
+     * direct objects and unusual page trees.
+     *
+     * @param pageIndex zero-based page index
+     * @param degrees   rotation in degrees; normalized to 0/90/180/270
+     * @return true when the rotation was applied
+     */
+    public boolean setPageRotation(int pageIndex, int degrees) {
+        ensureOpen();
+        int rotation = ((degrees % 360) + 360) % 360;
+        if (rotation % 90 != 0) throw new IllegalArgumentException("rotation must be a multiple of 90");
+        int objectNumber = getPageObjectNumber(pageIndex);
+        MethodHandle mh = EmbedPdfDocumentBindings.EPDFDoc_SetPageRotationByObjectNumber;
+        if (objectNumber != 0 && mh != null) {
+            try {
+                if ((int) mh.invokeExact(ensureRawDocSegment(), objectNumber, rotation) != 0) {
+                    contentGeneration.incrementAndGet();
+                    return true;
+                }
+            } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
+            }
+        }
+        try (PdfPage page = page(pageIndex)) {
+            PdfPageEditor.setRotation(page.rawHandle(), rotation / 90);
+            contentGeneration.incrementAndGet();
+            return true;
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            return false;
         }
     }
 
@@ -1561,6 +1762,7 @@ public final class PdfDocument implements AutoCloseable {
      */
     public byte[] saveBytesIncremental() {
         ensureOpen();
+        rejectLayerSave();
         return JpdfiumLib.docSaveIncremental(ensureNativeHandle());
     }
 

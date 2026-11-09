@@ -3,6 +3,8 @@ package stirling.software.jpdfium.model;
 import org.junit.jupiter.api.Test;
 
 import java.awt.image.BufferedImage;
+import java.awt.image.DataBufferInt;
+import java.util.Random;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -57,6 +59,31 @@ class RenderResultTest {
         assertEquals(0xFF, r);
         assertEquals(0x00, g);
         assertEquals(0x00, b);
+    }
+
+    @Test
+    void vectorTailSizesMatchScalarPacking() {
+        // Sizes below, at and above the 16-pixel SIMD block, including tails,
+        // so the scalar loop and the native kernel must agree byte for byte.
+        for (int n : new int[] {1, 2, 3, 7, 15, 16, 17, 31, 64, 257}) {
+            byte[] rgba = new byte[n * 4];
+            new Random(n).nextBytes(rgba);
+            var result = new RenderResult(n, 1, rgba);
+            for (boolean alpha : new boolean[] {true, false}) {
+                BufferedImage img = result.toBufferedImage(alpha);
+                int[] actual = ((DataBufferInt) img.getRaster().getDataBuffer()).getData();
+                for (int i = 0; i < n; i++) {
+                    int off = i * 4;
+                    int r = rgba[off] & 0xFF;
+                    int g = rgba[off + 1] & 0xFF;
+                    int b = rgba[off + 2] & 0xFF;
+                    int a = rgba[off + 3] & 0xFF;
+                    int expected = alpha ? (a << 24) | (r << 16) | (g << 8) | b
+                            : (r << 16) | (g << 8) | b;
+                    assertEquals(expected, actual[i], "alpha=" + alpha + " n=" + n + " i=" + i);
+                }
+            }
+        }
     }
 
     @Test

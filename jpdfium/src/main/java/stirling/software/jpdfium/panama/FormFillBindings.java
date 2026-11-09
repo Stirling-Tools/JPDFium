@@ -48,6 +48,26 @@ public final class FormFillBindings {
     public static final MethodHandle EPDFForm_GetFieldWidgetObjNum = downcallOptional(
             "EPDFForm_GetFieldWidgetObjNum", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, JAVA_INT));
 
+    public static final MethodHandle EPDFForm_GetFormKind = downcallOptional("EPDFForm_GetFormKind",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS));
+
+    public static final MethodHandle EPDFForm_GetFieldName = downcallOptional("EPDFForm_GetFieldName",
+            FunctionDescriptor.of(JAVA_LONG, ADDRESS, JAVA_INT, ADDRESS, JAVA_LONG));
+
+    public static final MethodHandle EPDFForm_GetFieldAlternateName = downcallOptional(
+            "EPDFForm_GetFieldAlternateName",
+            FunctionDescriptor.of(JAVA_LONG, ADDRESS, JAVA_INT, ADDRESS, JAVA_LONG));
+
+    public static final MethodHandle EPDFForm_GetFieldFlags = downcallOptional(
+            "EPDFForm_GetFieldFlags", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
+
+    public static final MethodHandle EPDFForm_CountFieldValues = downcallOptional(
+            "EPDFForm_CountFieldValues", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
+
+    public static final MethodHandle EPDFForm_GetFieldValueAt = downcallOptional(
+            "EPDFForm_GetFieldValueAt",
+            FunctionDescriptor.of(JAVA_LONG, ADDRESS, JAVA_INT, JAVA_INT, ADDRESS, JAVA_LONG));
+
     public static final MethodHandle EPDFForm_GetFieldObjNum =
             downcallOptional("EPDFForm_GetFieldObjNum", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
 

@@ -181,15 +181,17 @@ public final class PdfCompressor {
                 read = null;
             }
             originalBytesKnown = read != null;
-            sourceBytes = read != null ? read : doc.saveBytes();
+            sourceBytes = read != null ? read : doc.saveBytesNative();
         } else {
-            sourceBytes = doc.saveBytes();
+            sourceBytes = doc.saveBytesNative();
             originalBytesKnown = false;
         }
 
         // Snapshot of the live document carrying any in-memory edits, so the size
-        // guarantee can fall back to it without discarding them.
-        byte[] openStateBytes = originalBytesKnown ? doc.saveBytes() : sourceBytes;
+        // guarantee can fall back to it without discarding them. Serialise through
+        // PDFium: a raw-handle edit bypasses edit tracking and would be dropped by
+        // the unchanged-bytes fast path.
+        byte[] openStateBytes = originalBytesKnown ? doc.saveBytesNative() : sourceBytes;
 
         // 0. Signed documents are never rewritten: recompression would
         //    invalidate the signature's /ByteRange coverage.
@@ -456,7 +458,7 @@ public final class PdfCompressor {
             return true;
         }
         try (PdfDocument pristine = PdfDocument.open(sourceBytes)) {
-            return equalIgnoringInstanceId(pristine.saveBytes(), liveBytes);
+            return equalIgnoringInstanceId(pristine.saveBytesNative(), liveBytes);
         } catch (Throwable t) {
             NativeRuntime.rethrowFatal(t);
             return false;

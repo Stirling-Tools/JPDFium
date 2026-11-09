@@ -139,6 +139,14 @@ JPDFIUM_EXPORT int32_t jpdfium_doc_open_bytes_protected(const uint8_t* data, int
                                                         const char* password, int64_t* handle);
 JPDFIUM_EXPORT int32_t jpdfium_doc_open_protected(const char* path, const char* password,
                                                   int64_t* handle);
+// Layer documents: a frozen base + an optional raw delta. The returned handle is
+// a normal bridge document for page/edit APIs; close it with jpdfium_doc_close.
+JPDFIUM_EXPORT int32_t jpdfium_layer_open(const char* base_path, const char* delta_path,
+                                          int64_t* handle);
+JPDFIUM_EXPORT int32_t jpdfium_layer_save_delta(int64_t doc, const char* path, int32_t* changed);
+JPDFIUM_EXPORT int32_t jpdfium_layer_materialize(int64_t doc, const char* path);
+JPDFIUM_EXPORT int32_t jpdfium_layer_base_sha256(int64_t doc, uint8_t* out32);
+JPDFIUM_EXPORT int32_t jpdfium_layer_promoted_object_count(int64_t doc, int64_t* count);
 JPDFIUM_EXPORT int32_t jpdfium_doc_page_count(int64_t doc, int32_t* count);
 JPDFIUM_EXPORT int32_t jpdfium_doc_save(int64_t doc, const char* path);
 JPDFIUM_EXPORT int32_t jpdfium_doc_save_bytes(int64_t doc, uint8_t** data, int64_t* len);
@@ -205,6 +213,14 @@ JPDFIUM_EXPORT int32_t jpdfium_render_page_progressive_continue(void* fpdf_page,
 JPDFIUM_EXPORT void jpdfium_render_page_progressive_close(void* fpdf_page) JPDFIUM_NOEXCEPT;
 
 JPDFIUM_EXPORT void jpdfium_free_buffer(uint8_t* buffer) JPDFIUM_NOEXCEPT;
+
+// Pack straight RGBA8 bytes into 32-bit AWT pixels. Pure pixel work: no PDFium
+// state is touched, so callers may use the unguarded downcall path. Returns
+// JPDFIUM_ERR_INVALID for a null pointer or negative count.
+JPDFIUM_EXPORT int32_t jpdfium_rgba_to_argb32(const uint8_t* src, uint32_t* dst,
+                                              int32_t pixels) JPDFIUM_NOEXCEPT;
+JPDFIUM_EXPORT int32_t jpdfium_rgba_to_rgb32(const uint8_t* src, uint32_t* dst,
+                                             int32_t pixels) JPDFIUM_NOEXCEPT;
 
 // Returns per-character data as a compact JSON array: [{i,u,x,y,w,h,font,size}, ...]
 // The caller owns the returned string and must free it with jpdfium_free_string.

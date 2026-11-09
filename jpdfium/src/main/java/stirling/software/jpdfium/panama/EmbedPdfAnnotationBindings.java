@@ -58,6 +58,19 @@ public final class EmbedPdfAnnotationBindings {
     public static final MethodHandle EPDFAnnot_ClearColor = downcall("EPDFAnnot_ClearColor",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
 
+    /** Read an annotation's rich-text model as UTF-8 JSON. */
+    public static final MethodHandle EPDFAnnot_GetRichTextJSON = downcallOptional(
+            "EPDFAnnot_GetRichTextJSON",
+            FunctionDescriptor.of(JAVA_LONG, ADDRESS, ADDRESS, NativeLayouts.C_ULONG));
+
+    /** Replace a FreeText annotation's rich text from the JSON model. */
+    public static final MethodHandle EPDFAnnot_SetRichTextJSON = downcallOptional(
+            "EPDFAnnot_SetRichTextJSON", FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
+
+    /** Replace a FreeText annotation's rich text from XHTML. */
+    public static final MethodHandle EPDFAnnot_SetRichTextXHTML = downcallOptional(
+            "EPDFAnnot_SetRichTextXHTML", FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
+
     /** Get border style and width. Returns FPDF_ANNOT_BORDER_STYLE enum. */
     public static final MethodHandle EPDFAnnot_GetBorderStyle = downcall("EPDFAnnot_GetBorderStyle",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));

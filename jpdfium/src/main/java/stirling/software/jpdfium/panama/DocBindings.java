@@ -34,6 +34,23 @@ public final class DocBindings {
     public static final MethodHandle FPDF_GetSecurityHandlerRevision = downcall("FPDF_GetSecurityHandlerRevision",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
+    /** Bridge layer entry points (not PDFium symbols; no guard wrapper). */
+    public static final MethodHandle JPDFIUM_LAYER_OPEN = Symbols.downcall(
+            "jpdfium_layer_open", FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
+
+    public static final MethodHandle JPDFIUM_LAYER_SAVE_DELTA = Symbols.downcall(
+            "jpdfium_layer_save_delta", FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS, ADDRESS));
+
+    public static final MethodHandle JPDFIUM_LAYER_MATERIALIZE = Symbols.downcall(
+            "jpdfium_layer_materialize", FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS));
+
+    public static final MethodHandle JPDFIUM_LAYER_BASE_SHA256 = Symbols.downcall(
+            "jpdfium_layer_base_sha256", FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS));
+
+    public static final MethodHandle JPDFIUM_LAYER_PROMOTED_OBJECT_COUNT = Symbols.downcall(
+            "jpdfium_layer_promoted_object_count",
+            FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS));
+
     public static final MethodHandle FPDF_GetFileIdentifier = downcall("FPDF_GetFileIdentifier",
             FunctionDescriptor.of(JAVA_LONG, ADDRESS, JAVA_INT, ADDRESS, JAVA_LONG));
 

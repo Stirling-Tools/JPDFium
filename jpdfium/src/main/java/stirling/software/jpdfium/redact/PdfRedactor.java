@@ -120,13 +120,24 @@ public final class PdfRedactor {
 
     static RedactResult redact(PdfDocument doc, RedactOptions options,
                                RedactionPipelineProfiler profiler) {
+        if (doc.isLayerDocument()) {
+            throw new IllegalArgumentException(
+                    "redaction requires a full document; a layer retains the pre-redaction base");
+        }
         long t0 = System.nanoTime();
         int totalPages = doc.pageCount();
         doc.setSanitizeOnSave(options.sanitizeStructure());
 
         long setupStart = System.nanoTime();
         FontNormalizer.Result fontResult = null;
-        if (options.normalizeFonts()) {
+        // Font repair only affects text matching. Metadata-only or flatten-only
+        // runs have nothing to match, so paying a FreeType/HarfBuzz pass over
+        // every page would be pure setup cost.
+        boolean needsContentMatching = !options.words().isEmpty()
+                || !options.piiPatterns().isEmpty()
+                || !options.entities().isEmpty()
+                || options.semanticRedact();
+        if (options.normalizeFonts() && needsContentMatching) {
             fontResult = runFontNormalization(doc, options);
         }
 
@@ -241,20 +252,13 @@ public final class PdfRedactor {
         List<RedactResult.PageResult> pageResults = new ArrayList<>();
 
         try (Arena regexArena = Arena.ofConfined()) {
-            MemorySegment premarshaledWords = null;
-            int premarshaledWordCount = 0;
-            Set<String> premarshaledWordSet = null;
-            if (!options.words().isEmpty()) {
-                // Distinct count: the page sets are HashSets, so duplicates in
-                // the configured list must not inflate the count used to prove
-                // a page holds no extra PII/entity entries. Works for literal
-                // words too: the native entry point takes the same pointer
-                // array and only interprets it per its useRegex flag.
+            MemorySegment premarshaledRegexes = null;
+            int regexWordCount = 0;
+            if (options.useRegex() && !options.words().isEmpty()) {
                 String[] allWords =
                         new LinkedHashSet<>(options.words()).toArray(String[]::new);
-                premarshaledWordCount = allWords.length;
-                premarshaledWordSet = Set.of(allWords);
-                premarshaledWords = JpdfiumLib.marshalWordPointers(regexArena, allWords);
+                regexWordCount = allWords.length;
+                premarshaledRegexes = JpdfiumLib.marshalWordPointers(regexArena, allWords);
             }
 
             for (int i = 0; i < totalPages; i++) {
@@ -280,12 +284,11 @@ public final class PdfRedactor {
                         }
 
                         try {
-                            if (premarshaledWords != null
-                                    && words.size() == premarshaledWordCount
-                                    && words.containsAll(premarshaledWordSet)) {
+                            if (options.useRegex() && premarshaledRegexes != null
+                                    && words.size() == regexWordCount) {
                                 matchesOnPage = page.redactWordsEx(
-                                        premarshaledWords, premarshaledWordCount, options.boxColor(),
-                                        options.padding(), options.wholeWord(), options.useRegex(),
+                                        premarshaledRegexes, regexWordCount, options.boxColor(),
+                                        options.padding(), options.wholeWord(), true,
                                         options.removeContent(), options.caseSensitive());
                             } else {
                                 String[] wordArray = words.toArray(String[]::new);
