@@ -9,6 +9,7 @@ import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
+import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -57,6 +58,12 @@ public final class PdfFontEmbedder {
      * not embedded, as {@link PdfFontAuditor} reports them on the output.
      */
     public record Result(byte[] pdf, List<String> embedded, List<String> unresolved) {}
+
+    /**
+     * Outcome of the file-backed embedding pass. The target always holds the document afterwards:
+     * rewritten when a font was embedded, otherwise a copy of the input.
+     */
+    public record FileResult(List<String> embedded, List<String> unresolved) {}
 
     private record Face(Path path, int offset) {}
 
@@ -155,6 +162,33 @@ public final class PdfFontEmbedder {
      */
     public static Result embedMissing(byte[] pdf, Path... fontDirs) throws IOException {
         List<String> missing = nonEmbedded(pdf);
+        Map<String, byte[]> found = programsFor(missing, fontDirs);
+        byte[] out = found.isEmpty() ? null : QpdfLib.embedFonts(pdf, found, true);
+        if (out == null) return new Result(pdf, List.of(), missing);
+        List<String> unresolved = nonEmbedded(out);
+        return new Result(out, missing.stream().filter(n -> !unresolved.contains(n)).toList(), unresolved);
+    }
+
+    /**
+     * File-backed variant of {@link #embedMissing(byte[], Path...)}: resolves the same fonts, then
+     * lets native qpdf read {@code input} and write {@code output} without loading the document
+     * into the Java heap.
+     */
+    public static FileResult embedMissingTo(Path input, Path output, Path... fontDirs)
+            throws IOException {
+        List<String> missing = nonEmbedded(input);
+        Map<String, byte[]> found = programsFor(missing, fontDirs);
+        if (found.isEmpty() || !QpdfLib.embedFontsToFile(input, output, found, true)) {
+            Files.copy(input, output, StandardCopyOption.REPLACE_EXISTING);
+            return new FileResult(List.of(), missing);
+        }
+        List<String> unresolved = nonEmbedded(output);
+        return new FileResult(
+                missing.stream().filter(n -> !unresolved.contains(n)).toList(), unresolved);
+    }
+
+    private static Map<String, byte[]> programsFor(List<String> missing, Path... fontDirs)
+            throws IOException {
         Map<String, Face> index = INDEXES.computeIfAbsent(
                 fontDirs.length == 0 ? SYSTEM_FONT_DIRS : List.of(fontDirs), PdfFontEmbedder::index);
         Map<String, byte[]> found = new LinkedHashMap<>();
@@ -166,13 +200,17 @@ public final class PdfFontEmbedder {
             if (data == null) programs.put(face, data = program(face));
             found.put(name, data);
         }
-        byte[] out = found.isEmpty() ? null : QpdfLib.embedFonts(pdf, found, true);
-        if (out == null) return new Result(pdf, List.of(), missing);
-        List<String> unresolved = nonEmbedded(out);
-        return new Result(out, missing.stream().filter(n -> !unresolved.contains(n)).toList(), unresolved);
+        return found;
     }
 
     private static List<String> nonEmbedded(byte[] pdf) {
+        try (PdfDocument doc = PdfDocument.open(pdf)) {
+            return PdfFontAuditor.audit(doc).nonEmbeddedFonts().stream()
+                    .map(PdfFontAuditor.FontInfo::baseName).distinct().toList();
+        }
+    }
+
+    private static List<String> nonEmbedded(Path pdf) {
         try (PdfDocument doc = PdfDocument.open(pdf)) {
             return PdfFontAuditor.audit(doc).nonEmbeddedFonts().stream()
                     .map(PdfFontAuditor.FontInfo::baseName).distinct().toList();
