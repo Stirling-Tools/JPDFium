@@ -2342,6 +2342,10 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
         QPDFWriter writer{*qpdf};
         writer.setCompressStreams(true);
         writer.setDecodeLevel(qpdf_dl_none);
+        // PDF/A 6.1.7.1-2 requires an EOL before endstream. qpdf's default
+        // omits it on some generated streams, which made a valid PDF/A-2u
+        // input fail after font embedding.
+        writer.setNewlineBeforeEndstream(true);
         if (openType) writer.setMinimumPDFVersion("1.6");
         if (out) {
             writer.setOutputFile("font-out", out, false);
