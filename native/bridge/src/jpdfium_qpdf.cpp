@@ -1361,6 +1361,25 @@ bool reachesSameGlyphs(FT_Library lib, std::string const& subset, FT_Face origin
     return same;
 }
 
+bool subsetKeepsCidGlyphs(FT_Library lib, std::string const& subset,
+                          std::map<uint32_t, uint32_t> const& unicodeByCid,
+                          std::map<uint32_t, FT_UInt> const& cidGlyph) {
+    FT_Face face = nullptr;
+    if (subset.empty() || FT_New_Memory_Face(lib, reinterpret_cast<const FT_Byte*>(subset.data()),
+                                             FT_Long(subset.size()), 0, &face))
+        return false;
+    bool same = !FT_Select_Charmap(face, FT_ENCODING_UNICODE);
+    for (auto const& [cid, gid] : cidGlyph) {
+        auto it = unicodeByCid.find(cid);
+        if (it == unicodeByCid.end() || !it->second || FT_Get_Char_Index(face, it->second) != gid) {
+            same = false;
+            break;
+        }
+    }
+    FT_Done_Face(face);
+    return same;
+}
+
 int unicodePreference(FT_ULong u, bool symbolic) {
     if (u >= 0xE000 && u <= 0xF8FF) return 0;
     if (!symbolic) return 1;
@@ -1879,6 +1898,16 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
                     target.replaceKey("/CIDToGIDMap",
                                       QPDFObjectHandle::newStream(
                                           qpdf.get(), std::string(map.begin(), map.end())));
+                    if (!hasProgram && program.kind == ProgramKind::TrueType &&
+                        !program.noSubsetting) {
+                        for (auto const& [code, gid] : cidGlyph) glyphs.insert(gid);
+                        glyphs.insert(0);
+                        subset = subsetProgram(program, glyphs);
+                        if (!subsetKeepsCidGlyphs(lib, subset, cidUnicode, cidGlyph)) {
+                            subset.clear();
+                            glyphs.clear();
+                        }
+                    }
                 }
                 setToUnicode(*qpdf, font, codes, true);
             }
