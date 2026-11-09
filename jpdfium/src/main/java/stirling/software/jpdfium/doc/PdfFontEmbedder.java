@@ -364,12 +364,27 @@ public final class PdfFontEmbedder {
         Map<String, Face> index = indexFor(fontDirs);
         Map<String, byte[]> found = new LinkedHashMap<>();
         Map<Face, byte[]> programs = new HashMap<>();
+        List<FontStatus> statuses = new ArrayList<>(missing.size());
         for (String name : missing) {
-            Face face = resolve(index, key(name));
-            if (face == null) continue;
+            if (!substitutable.getOrDefault(name, true)) {
+                statuses.add(new FontStatus(name, "", -1, false,
+                        "CID encoding cannot be rewritten safely"));
+                continue;
+            }
+            String key = key(name);
+            Face face = resolve(index, key);
+            if (face == null) {
+                Face restricted = restricted(index, key);
+                statuses.add(restricted == null
+                        ? new FontStatus(name, "", -1, false, "no matching font")
+                        : new FontStatus(name, source(restricted), restricted.fsType(), false,
+                                "embedding restricted by fsType " + restricted.fsType()));
+                continue;
+            }
             byte[] data = programs.get(face);
             if (data == null) programs.put(face, data = program(face));
             found.put(name, data);
+            statuses.add(new FontStatus(name, source(face), face.fsType(), true, "embedded"));
         }
         return found;
     }
