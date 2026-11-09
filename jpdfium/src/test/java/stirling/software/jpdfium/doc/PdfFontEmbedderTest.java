@@ -489,12 +489,17 @@ class PdfFontEmbedderTest {
     }
 
     @Test
-    void cidSubstituteMissingAUsedWidthIsLeftUnresolved() throws Exception {
-        assertCidSubstituteUnresolved("<0001> <0041>", 1, 2);
+    void cidSubstituteMissingAUsedCidIsLeftUnresolved() throws Exception {
+        assertCidSubstituteUnresolvedForCode("<0001> <0041>", 2, 1, 2);
     }
 
     private static void assertCidSubstituteUnresolved(
             String toUnicodeBody, int... widthCids) throws Exception {
+        assertCidSubstituteUnresolvedForCode(toUnicodeBody, 1, widthCids);
+    }
+
+    private static void assertCidSubstituteUnresolvedForCode(
+            String toUnicodeBody, int contentCid, int... widthCids) throws Exception {
         assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
         FontProgram source = findEmbeddedFont(
                 Files.readAllBytes(Path.of(PdfFontEmbedderTest.class
@@ -503,7 +508,8 @@ class PdfFontEmbedderTest {
         Path dir = Files.createTempDirectory("jpdfium-cid-unresolved");
         try {
             Files.write(dir.resolve(source.baseName() + ".ttf"), source.data());
-            byte[] input = identityCidPdf(source.baseName(), toUnicodeBody, widthCids);
+            byte[] input =
+                    identityCidPdfWithCode(source.baseName(), toUnicodeBody, contentCid, widthCids);
             PdfFontEmbedder.Result result = PdfFontEmbedder.embedMissing(input, dir);
             assertTrue(result.embedded().isEmpty(),
                     "an unusable mapping must not report the substitute as embedded");
