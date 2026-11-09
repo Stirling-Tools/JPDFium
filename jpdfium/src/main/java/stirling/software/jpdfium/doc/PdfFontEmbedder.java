@@ -333,8 +333,12 @@ public final class PdfFontEmbedder {
     }
 
     private static Map<String, Face> indexFor(Path... fontDirs) {
-        return INDEXES.computeIfAbsent(
+        Map<String, Face> index = INDEXES.computeIfAbsent(
                 fontDirs.length == 0 ? SYSTEM_FONT_DIRS : List.of(fontDirs), PdfFontEmbedder::index);
+        if (fontDirs.length == 0) return index;
+        Map<String, Face> isolated = new HashMap<>(index);
+        isolated.entrySet().removeIf(entry -> entry.getValue().resource() != null);
+        return isolated;
     }
 
     private static String source(Face face) {
@@ -357,8 +361,7 @@ public final class PdfFontEmbedder {
 
     private static Map<String, byte[]> programsFor(List<String> missing, Path... fontDirs)
             throws IOException {
-        Map<String, Face> index = INDEXES.computeIfAbsent(
-                fontDirs.length == 0 ? SYSTEM_FONT_DIRS : List.of(fontDirs), PdfFontEmbedder::index);
+        Map<String, Face> index = indexFor(fontDirs);
         Map<String, byte[]> found = new LinkedHashMap<>();
         Map<Face, byte[]> programs = new HashMap<>();
         for (String name : missing) {
@@ -541,8 +544,6 @@ public final class PdfFontEmbedder {
                 String line;
                 while ((line = reader.readLine()) != null) {
                     if (line.isBlank() || line.startsWith("#")) continue;
-                    int tab = line.indexOf('\t');
-                    if (tab < 0) continue;
                     String[] columns = line.split("\t", 3);
                     if (columns.length < 2) continue;
                     String resource = columns[0].trim();

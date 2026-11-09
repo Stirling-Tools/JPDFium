@@ -4,13 +4,15 @@ Bundled fallback fonts (all shipped as .xz resources in this directory):
   Copyright (c) 2012 Red Hat, Inc., with Reserved Font Name Liberation.
   SIL Open Font License 1.1 (OFL.txt)
 - Carlito 2.1
-  Copyright 2012 The Carlito Project Authors.
+  Copyright 2013 The Carlito Project Authors
+  (https://github.com/googlefonts/carlito).
   SIL Open Font License 1.1 (OFL.txt)
 - Caladea 1.0
-  Copyright 2012 The Caladea Project Authors.
+  Copyright 2012 The Caladea Project Authors
+  (https://github.com/huertatipografica/Caladea).
   SIL Open Font License 1.1 (OFL.txt)
 - Noto Sans Arabic
-  Copyright 2018 The Noto Project Authors (github.com/googlei18n/noto-fonts).
+  Copyright 2015-2021 Google LLC. All Rights Reserved.
   SIL Open Font License 1.1 (OFL.txt)
 - Noto Sans SC (Noto Sans CJK)
   Copyright 2014-2021 Adobe (http://www.adobe.com/), with Reserved Font Name
@@ -20,6 +22,8 @@ Bundled fallback fonts (all shipped as .xz resources in this directory):
   Copyright (c) Bitstream (see DejaVu-LICENSE.txt). DejaVu changes are in the
   public domain. Bitstream Vera license (DejaVu-LICENSE.txt).
 
-The .xz files are byte-for-byte the upstream TTF/OTF font files compressed with XZ.
+The .xz files are font files compressed with XZ using a 16 MiB dictionary so
+the runtime can decode them with a bounded memory limit. Noto Sans SC is a
+wght=400 static instance of Google Fonts' variable Noto Sans SC face.
 manifest.tsv maps each resource to its PostScript name; PdfFontEmbedder reads it
 to build the deterministic fallback index without decompressing every face.
