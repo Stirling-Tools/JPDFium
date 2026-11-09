@@ -28,6 +28,7 @@ import stirling.software.jpdfium.model.PdfVersion;
 import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.transform.PdfPageGeometry;
 import stirling.software.jpdfium.panama.DocBindings;
+import stirling.software.jpdfium.panama.ColorBindings;
 import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.RenderBindings;
 import stirling.software.jpdfium.panama.QpdfLib;
@@ -631,4 +632,43 @@ public final class PdfXConverter {
     public static void validate(byte[] pdf, PdfXOptions options) {
         checkMetadata(pdf, options);
     }
+
+    private static byte[] nativePrepare(byte[] pdf, PdfXOptions options) {
+        IccCmykTransform xform = new IccCmykTransform(options.outputIntentProfile());
+        return ColorBindings.pdfxPrepareBytes(pdf, nativeLevel(options.standard()),
+                xform.lutBytes(), IccCmykTransform.lutGrid(), nativeFlags(options),
+                options.jpegQuality());
+    }
+
+    private static void nativePrepare(Path pdf, PdfXOptions options) {
+        IccCmykTransform xform = new IccCmykTransform(options.outputIntentProfile());
+        ColorBindings.pdfxPrepareFile(pdf.toString(), pdf.toString(),
+                nativeLevel(options.standard()), xform.lutBytes(), IccCmykTransform.lutGrid(),
+                nativeFlags(options), options.jpegQuality());
+    }
+
+    private static int nativeLevel(PdfXStandard standard) {
+        return switch (standard) {
+            case PDF_X_1A -> 1;
+            case PDF_X_3 -> 3;
+            case PDF_X_4 -> 4;
+            case PDF_X_6 -> 6;
+        };
+    }
+
+    private static int nativeFlags(PdfXOptions options) {
+        int flags = ColorBindings.PDFX_CONVERT_SPECIAL;
+        if (options.convertColors()) flags |= ColorBindings.PDFX_CONVERT_COLOURS;
+        if (options.convertImages()) flags |= ColorBindings.PDFX_CONVERT_IMAGES;
+        if (options.neutralsToBlack()) flags |= ColorBindings.PDFX_NEUTRALS_TO_BLACK;
+        if (options.strictImages()) flags |= ColorBindings.PDFX_STRICT_IMAGES;
+        return flags;
+    }
+
+    /**
+     * Reject transparent page content for standards whose PDF version forbids
+     * it. Package-private so the read-only probe can be tested without a
+     * native CMYK build.
+     */
+
 }
