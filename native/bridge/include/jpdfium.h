@@ -45,6 +45,12 @@ extern "C" {
 #define JPDFIUM_ERR_REDACT_UNVERIFIABLE (-8)  // redaction could not run/verify (no silent degrade)
 #define JPDFIUM_ERR_TOO_LARGE (-9)            // save aborted: output exceeded the byte budget
 #define JPDFIUM_ERR_CONTENT_MUTATED (-10)     // operation modified content, then failed
+#define JPDFIUM_ERR_PDFX_NONCONFORMANT (-11)
+#define JPDFIUM_PDFX_CONVERT_COLOURS (0x01)
+#define JPDFIUM_PDFX_CONVERT_IMAGES (0x02)
+#define JPDFIUM_PDFX_NEUTRALS_TO_BLACK (0x04)
+#define JPDFIUM_PDFX_CONVERT_SPECIAL (0x08)
+#define JPDFIUM_PDFX_STRICT_IMAGES (0x10)
 #define JPDFIUM_ERR_NATIVE (-99)
 
 // Bridge ABI version and layout probe surface. Packaged Java/native
