@@ -11,7 +11,8 @@ below ships in 1.3.0. Every incompatible change is listed here under "Removed"
 or "Changed", and [compatibility.md](docs/compatibility.md) states the policy in
 full.
 
-This file covers library releases on Maven Central (the `v*.*.*` tags).
+This file covers library releases (the `v*.*.*` tags), published to
+https://maven.stirlingpdf.com and mirrored to Maven Central.
 Infrastructure tags such as `pdfium-*` and `vips-*` are prebuild inputs for the
 publishing workflows, not library releases, so they are not listed here.
 
@@ -53,6 +54,11 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Changed
 
+- Releases publish to https://maven.stirlingpdf.com first and are then mirrored
+  to Maven Central. Add `maven("https://maven.stirlingpdf.com")` to your
+  repositories to get a release as soon as it is out; earlier releases are there
+  too. Runtime native downloads (`jpdfium.native.download`) now default to this
+  repository.
 - `PdfMerge.mergeFilesToFile` and `PdfSplit.extractPageRangeToFile` write their
   staging file without fsync and flush once when they publish the output, which
   now gets the destination's permissions as other saves do. They previously
