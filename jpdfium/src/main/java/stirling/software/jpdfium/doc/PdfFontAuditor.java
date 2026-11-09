@@ -10,6 +10,9 @@ import stirling.software.jpdfium.panama.PageEditBindings;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -293,8 +296,14 @@ public final class PdfFontAuditor {
             MemorySegment buf = arena.allocate(needed);
             long written = (long) PageEditBindings.FPDFFont_GetBaseFontName.invokeExact(font, buf, needed);
             if (written <= 0) return "<unknown>";
-            // The returned buffer is a NUL-terminated UTF-8 string
-            return buf.getString(0);
+            long length = 0;
+            while (length < written && buf.get(ValueLayout.JAVA_BYTE, length) != 0) length++;
+            byte[] raw = buf.asSlice(0, length).toArray(ValueLayout.JAVA_BYTE);
+            try {
+                return StandardCharsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(raw)).toString();
+            } catch (CharacterCodingException latin1) {
+                return new String(raw, StandardCharsets.ISO_8859_1);
+            }
         } catch (Throwable t) {
             return "<unknown>";
         }
