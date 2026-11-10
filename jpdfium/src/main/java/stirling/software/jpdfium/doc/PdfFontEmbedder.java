@@ -278,7 +278,7 @@ public final class PdfFontEmbedder {
                         "embedding restricted by fsType " + fsType));
                 continue;
             }
-            found.put(name, data);
+            found.put(name, singleFace(data, name));
             statuses.add(new FontStatus(name, source(face), fsType, true, "embedded"));
         }
         byte[] out = found.isEmpty() ? null : QpdfLib.embedFonts(pdf, found, true);
@@ -420,7 +420,7 @@ public final class PdfFontEmbedder {
             if (face == null) continue;
             byte[] data = program(face);
             if (!embeddableProgram(programFsType(face, data))) continue;
-            found.put(name, data);
+            found.put(name, singleFace(data, name));
         }
         return found;
     }
@@ -788,14 +788,94 @@ public final class PdfFontEmbedder {
 
     private static byte[] singleFace(byte[] data, String name) {
         ByteBuffer b = ByteBuffer.wrap(data);
-        if (data.length < 16 || b.getInt(0) != TTCF) return data;
-        String wanted = key(name);
-        for (int f = 0; f < b.getInt(8); f++) {
-            if (names(b, b.getInt(12 + 4 * f)).stream().map(PdfFontEmbedder::key).anyMatch(wanted::equals)) {
-                return extractFace(data, b.getInt(12 + 4 * f));
+        byte[] face = data;
+        if (data.length >= 16 && b.getInt(0) == TTCF) {
+            String wanted = key(name);
+            int foundFace = -1;
+            for (int f = 0; f < b.getInt(8); f++) {
+                if (names(b, b.getInt(12 + 4 * f)).stream().map(PdfFontEmbedder::key).anyMatch(wanted::equals)) {
+                    foundFace = b.getInt(12 + 4 * f);
+                    break;
+                }
+            }
+            face = extractFace(data, foundFace >= 0 ? foundFace : b.getInt(12));
+        }
+        if (isSymbolicName(name)) {
+            face = sanitizeSymbolicTrueType(face);
+        }
+        return face;
+    }
+
+    private static boolean isSymbolicName(String name) {
+        String n = name.toLowerCase(java.util.Locale.ROOT).replaceFirst("^[a-z]{6}\\+", "");
+        return n.contains("symbol") || n.contains("dingbat");
+    }
+
+    private static byte[] sanitizeSymbolicTrueType(byte[] fontData) {
+        if (fontData.length < 12) return fontData;
+        ByteBuffer buf = ByteBuffer.wrap(fontData);
+        int tag = buf.getInt(0);
+        if (tag != 0x00010000 && tag != 0x74727565) return fontData;
+        int numTables = buf.getShort(4) & 0xFFFF;
+        if (numTables < 1 || 12 + numTables * 16 > fontData.length) return fontData;
+        int cmapRecordOffset = -1;
+        for (int i = 0; i < numTables; i++) {
+            int rec = 12 + i * 16;
+            if (buf.getInt(rec) == 0x636D6170) {
+                cmapRecordOffset = rec;
+                break;
             }
         }
-        return extractFace(data, b.getInt(12));
+        if (cmapRecordOffset < 0) return fontData;
+        int cmapOffset = buf.getInt(cmapRecordOffset + 8);
+        int cmapLength = buf.getInt(cmapRecordOffset + 12);
+        if (cmapOffset < 0 || cmapLength < 4 || cmapOffset + cmapLength > fontData.length) return fontData;
+
+        int numSubtables = buf.getShort(cmapOffset + 2) & 0xFFFF;
+        if (numSubtables <= 1) return fontData;
+
+        int selectedSubtableOffset = -1;
+        for (int j = 0; j < numSubtables; j++) {
+            int subRec = cmapOffset + 4 + j * 8;
+            if (subRec + 8 > cmapOffset + cmapLength) break;
+            int platformId = buf.getShort(subRec) & 0xFFFF;
+            int encodingId = buf.getShort(subRec + 2) & 0xFFFF;
+            if (platformId == 3 && encodingId == 0) {
+                return fontData;
+            }
+            if (platformId == 1 && encodingId == 0) {
+                selectedSubtableOffset = subRec;
+            } else if (selectedSubtableOffset < 0 && platformId == 0) {
+                selectedSubtableOffset = subRec;
+            }
+        }
+        if (selectedSubtableOffset < 0) {
+            selectedSubtableOffset = cmapOffset + 4;
+        }
+
+        byte[] modified = fontData.clone();
+        ByteBuffer out = ByteBuffer.wrap(modified);
+        out.putShort(cmapOffset + 2, (short) 1);
+        for (int b = 0; b < 8; b++) {
+            modified[cmapOffset + 4 + b] = fontData[selectedSubtableOffset + b];
+        }
+
+        int checksum = 0;
+        int nWords = (cmapLength + 3) / 4;
+        for (int w = 0; w < nWords; w++) {
+            int off = cmapOffset + w * 4;
+            if (off + 4 <= modified.length) {
+                checksum += out.getInt(off);
+            } else {
+                int last = 0;
+                for (int b = 0; b < modified.length - off; b++) {
+                    last |= (modified[off + b] & 0xFF) << (24 - 8 * b);
+                }
+                checksum += last;
+            }
+        }
+        out.putInt(cmapRecordOffset + 4, checksum);
+        return modified;
     }
 
     private static byte[] extractFace(byte[] collection, int face) {

@@ -1230,9 +1230,111 @@ std::string subsetProgram(FontProgram const& p, std::set<FT_UInt> const& glyphs)
     return out;
 }
 
+void ensureMicrosoftUnicodeCmap(std::string& sfnt) {
+    if (sfnt.size() < 12) return;
+    auto read16 = [&](size_t off) -> uint16_t {
+        return (static_cast<uint8_t>(sfnt[off]) << 8) | static_cast<uint8_t>(sfnt[off + 1]);
+    };
+    auto read32 = [&](size_t off) -> uint32_t {
+        return (static_cast<uint32_t>(static_cast<uint8_t>(sfnt[off])) << 24) |
+               (static_cast<uint32_t>(static_cast<uint8_t>(sfnt[off + 1])) << 16) |
+               (static_cast<uint32_t>(static_cast<uint8_t>(sfnt[off + 2])) << 8) |
+               static_cast<uint32_t>(static_cast<uint8_t>(sfnt[off + 3]));
+    };
+    auto write16 = [&](size_t off, uint16_t v) {
+        sfnt[off] = static_cast<char>((v >> 8) & 0xFF);
+        sfnt[off + 1] = static_cast<char>(v & 0xFF);
+    };
+    auto write32 = [&](size_t off, uint32_t v) {
+        sfnt[off] = static_cast<char>((v >> 24) & 0xFF);
+        sfnt[off + 1] = static_cast<char>((v >> 16) & 0xFF);
+        sfnt[off + 2] = static_cast<char>((v >> 8) & 0xFF);
+        sfnt[off + 3] = static_cast<char>(v & 0xFF);
+    };
+
+    uint16_t numTables = read16(4);
+    if (sfnt.size() < 12 + static_cast<size_t>(numTables) * 16) return;
+
+    size_t cmapEntryOff = 0;
+    uint32_t cmapOffset = 0;
+    uint32_t cmapLength = 0;
+    uint32_t headOffset = 0;
+
+    for (size_t i = 0; i < numTables; ++i) {
+        size_t entry = 12 + i * 16;
+        if (std::memcmp(&sfnt[entry], "cmap", 4) == 0) {
+            cmapEntryOff = entry;
+            cmapOffset = read32(entry + 8);
+            cmapLength = read32(entry + 12);
+        } else if (std::memcmp(&sfnt[entry], "head", 4) == 0) {
+            headOffset = read32(entry + 8);
+        }
+    }
+
+    if (!cmapEntryOff || cmapOffset + 4 > sfnt.size() || cmapOffset + cmapLength > sfnt.size())
+        return;
+
+    uint16_t numSubtables = read16(cmapOffset + 2);
+    if (cmapOffset + 4 + static_cast<size_t>(numSubtables) * 8 > sfnt.size()) return;
+
+    bool hasMsUnicode = false;
+    size_t unicodeSubtableOff = 0;
+
+    for (size_t i = 0; i < numSubtables; ++i) {
+        size_t subOff = cmapOffset + 4 + i * 8;
+        uint16_t plat = read16(subOff);
+        uint16_t enc = read16(subOff + 2);
+        if (plat == 3 && (enc == 1 || enc == 10)) {
+            hasMsUnicode = true;
+            break;
+        }
+        if (plat == 0 && (enc == 3 || enc == 4 || enc == 0)) {
+            unicodeSubtableOff = subOff;
+        }
+    }
+
+    if (hasMsUnicode || !unicodeSubtableOff) return;
+
+    // Convert Unicode subtable (0, 3) to Microsoft Unicode (3, 1)
+    write16(unicodeSubtableOff, 3);
+    write16(unicodeSubtableOff + 2, 1);
+
+    // Recalculate cmap checksum
+    uint32_t cmapSum = 0;
+    for (size_t i = 0; i < cmapLength; i += 4) {
+        uint32_t word = 0;
+        for (size_t b = 0; b < 4 && i + b < cmapLength; ++b) {
+            word = (word << 8) | static_cast<uint8_t>(sfnt[cmapOffset + i + b]);
+        }
+        if (cmapLength - i < 4) {
+            word <<= (4 - (cmapLength - i)) * 8;
+        }
+        cmapSum += word;
+    }
+    write32(cmapEntryOff + 4, cmapSum);
+
+    // Recalculate head checkSumAdjustment if head table is present
+    if (headOffset && headOffset + 12 <= sfnt.size()) {
+        write32(headOffset + 8, 0);
+        uint32_t fontSum = 0;
+        for (size_t i = 0; i < sfnt.size(); i += 4) {
+            uint32_t word = 0;
+            for (size_t b = 0; b < 4 && i + b < sfnt.size(); ++b) {
+                word = (word << 8) | static_cast<uint8_t>(sfnt[i + b]);
+            }
+            if (sfnt.size() - i < 4) {
+                word <<= (4 - (sfnt.size() - i)) * 8;
+            }
+            fontSum += word;
+        }
+        write32(headOffset + 8, 0xB1B0AFBA - fontSum);
+    }
+}
+
 QPDFObjectHandle makeProgramStream(QPDF& qpdf, FontProgram const& p, ProgramKind kind, bool cid,
                                    std::string const& subset) {
-    auto const& bytes = subset.empty() ? p.bytes : subset;
+    std::string bytes = subset.empty() ? p.bytes : subset;
+    if (kind == ProgramKind::TrueType) ensureMicrosoftUnicodeCmap(bytes);
     auto stream = QPDFObjectHandle::newStream(&qpdf, bytes);
     auto dict = stream.getDict();
     if (kind == ProgramKind::TrueType)
@@ -1298,12 +1400,14 @@ FT_UInt glyphForCode(FT_Face face, int code, bool symbolic, SimpleEncoding const
             if (FT_UInt gid = FT_Get_Char_Index(face, u)) return gid;
         }
     }
-    for (int pass = 0; pass < 2; ++pass) {
-        for (int i = 0; i < face->num_charmaps; ++i) {
-            if ((face->charmaps[i]->encoding == FT_ENCODING_UNICODE) != (pass == 1)) continue;
-            FT_Set_Charmap(face, face->charmaps[i]);
-            if (FT_UInt gid = FT_Get_Char_Index(face, code)) return gid;
-            if (FT_UInt gid = FT_Get_Char_Index(face, 0xF000 | code)) return gid;
+    if (symbolic) {
+        for (int pass = 0; pass < 2; ++pass) {
+            for (int i = 0; i < face->num_charmaps; ++i) {
+                if ((face->charmaps[i]->encoding == FT_ENCODING_UNICODE) != (pass == 1)) continue;
+                FT_Set_Charmap(face, face->charmaps[i]);
+                if (FT_UInt gid = FT_Get_Char_Index(face, code)) return gid;
+                if (FT_UInt gid = FT_Get_Char_Index(face, 0xF000 | code)) return gid;
+            }
         }
     }
     return 0;
@@ -2317,34 +2421,62 @@ std::string subsetCidProgram(FontProgram const& program, std::set<uint32_t> cons
 }
 
 void pinTrueTypeMapping(QPDF& qpdf, QPDFObjectHandle font, FT_Face face, bool symbolic) {
+    if (symbolic) {
+        font.removeKey("/Encoding");
+        auto unicodeOf = unicodeByGlyph(face, symbolic);
+        std::map<uint32_t, FT_ULong> codes;
+        for (int code = 0; code < 256; ++code) {
+            FT_UInt gid = FT_Get_Char_Index(face, code);
+            if (!gid) gid = FT_Get_Char_Index(face, 0xF000 | code);
+            if (gid) {
+                if (auto it = unicodeOf.find(gid); it != unicodeOf.end()) codes[code] = it->second;
+            }
+        }
+        setToUnicode(qpdf, font, codes, false);
+        return;
+    }
     auto enc = parseEncoding(font);
     auto unicodeOf = unicodeByGlyph(face, symbolic);
     std::map<uint32_t, FT_ULong> codes;
     auto differences = QPDFObjectHandle::newArray();
+    int lastCode = -2;
     for (int code = 0; code < 256; ++code) {
         FT_UInt gid = glyphForCode(face, code, symbolic, enc);
         bool differs = enc.differences.contains(code);
-        FT_ULong u = symbolic || differs ? 0 : baseEncodingUnicode(enc.base, code);
+        FT_ULong u = differs ? 0 : baseEncodingUnicode(enc.base, code);
         if (auto it = unicodeOf.find(gid); !u && gid && it != unicodeOf.end()) u = it->second;
-        if (!symbolic && !enc.namedBase &&
-            (differs || u != baseEncodingUnicode(BaseEncoding::WinAnsi, code))) {
-            char name[64] = ".notdef";
-            if (differs)
-                std::snprintf(name, sizeof name, "%s", enc.differences.at(code).c_str());
-            else if (!gid || !FT_HAS_GLYPH_NAMES(face) ||
-                     FT_Get_Glyph_Name(face, gid, name, sizeof name))
-                std::snprintf(name, sizeof name, u ? "uni%04lX" : ".notdef", u);
-            differences.appendItem(QPDFObjectHandle::newInteger(code));
-            differences.appendItem(QPDFObjectHandle::newName(std::string("/") + name));
+        if ((code >= 0x20 || differs) &&
+            (differs || (u != 0 && u != baseEncodingUnicode(BaseEncoding::WinAnsi, code)))) {
+            char name[64] = "";
+            if (differs) {
+                if (const char* agl = adobeGlyphNameForUnicode(static_cast<uint32_t>(u))) {
+                    std::snprintf(name, sizeof name, "%s", agl);
+                } else if (unicodeForGlyphName(enc.differences.at(code))) {
+                    std::snprintf(name, sizeof name, "%s", enc.differences.at(code).c_str());
+                } else {
+                    std::snprintf(name, sizeof name, ".notdef");
+                }
+            } else if (const char* agl = adobeGlyphNameForUnicode(static_cast<uint32_t>(u))) {
+                std::snprintf(name, sizeof name, "%s", agl);
+            }
+            if (name[0]) {
+                if (code != lastCode + 1) {
+                    differences.appendItem(QPDFObjectHandle::newInteger(code));
+                }
+                differences.appendItem(QPDFObjectHandle::newName(std::string("/") + name));
+                lastCode = code;
+            }
         }
         if (gid && u) codes[code] = u;
     }
-    if (!symbolic && !enc.namedBase) {
+    if (differences.getArrayAsVector().empty()) {
+        font.replaceKey("/Encoding", QPDFObjectHandle::newName("/WinAnsiEncoding"));
+    } else {
         auto encoding = QPDFObjectHandle::newDictionary();
         encoding.replaceKey("/Type", QPDFObjectHandle::newName("/Encoding"));
         encoding.replaceKey("/BaseEncoding", QPDFObjectHandle::newName("/WinAnsiEncoding"));
         encoding.replaceKey("/Differences", differences);
-        font.replaceKey("/Encoding", encoding);
+        font.replaceKey("/Encoding", qpdf.makeIndirectObject(encoding));
     }
     setToUnicode(qpdf, font, codes, false);
 }
@@ -2868,15 +3000,26 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
             }
             auto flags =
                 descriptor.isDictionary() ? descriptor.getKey("/Flags") : QPDFObjectHandle();
-            bool symbolic = flags.isInteger()
-                                ? (flags.getIntValue() & 4) != 0
-                                : targetName == "Symbol" || targetName == "ZapfDingbats";
+            bool hasEncoding = font.hasKey("/Encoding") || target.hasKey("/Encoding");
+            bool isSymbolName = (targetName == "Symbol" || targetName == "ZapfDingbats" ||
+                                 targetName.find("Symbol") != std::string::npos ||
+                                 targetName.find("Dingbats") != std::string::npos);
+            bool symbolic = !hasEncoding && (isSymbolName || (flags.isInteger() && (flags.getIntValue() & 4) != 0));
+            target.replaceKey("/Type", QPDFObjectHandle::newName("/Font"));
+            if (cid) font.replaceKey("/Type", QPDFObjectHandle::newName("/Font"));
             if (!descriptor.isDictionary()) {
                 descriptor = newDescriptor(*qpdf, target, program.face, symbolic);
                 target.replaceKey("/FontDescriptor", descriptor);
             }
-            if (!cid && !target.getKey("/Widths").isArray())
-                addWidths(target, program.face, symbolic);
+            if (descriptor.isDictionary() && descriptor.hasKey("/Flags") && descriptor.getKey("/Flags").isInteger()) {
+                long long f = descriptor.getKey("/Flags").getIntValue();
+                if (symbolic) {
+                    f = (f | 4) & ~32;
+                } else {
+                    f = (f & ~4) | 32;
+                }
+                descriptor.replaceKey("/Flags", QPDFObjectHandle::newInteger(f));
+            }
             std::set<FT_UInt> glyphs;
             std::string subset;
             if (!hasProgram && !cid && !symbolic && !program.noSubsetting &&
@@ -2914,6 +3057,8 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
                     target.replaceKey("/CIDToGIDMap", QPDFObjectHandle::newName("/Identity"));
                 if (!cid && glyf) pinTrueTypeMapping(*qpdf, target, program.face, symbolic);
             }
+            if (!cid && !target.getKey("/Widths").isArray())
+                addWidths(target, program.face, symbolic);
             // OTTO/CFF can be carried by a pre-1.6 PDF as /FontFile3
             // /Subtype /Type1C instead of requiring /Subtype /OpenType and a
             // PDF 1.6 bump.
