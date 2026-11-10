@@ -1095,6 +1095,7 @@ class PdfFontEmbedderTest {
 
         Path output = temp.resolve("output.pdf");
         PdfFontEmbedder.FileResult result = PdfFontEmbedder.embedMissingTo(input, output, dir);
+        assertArrayEquals(Files.readAllBytes(input), Files.readAllBytes(output));
         assertTrue(result.embedded().isEmpty(), result.embedded().toString());
         assertTrue(result.unresolved().contains("Helvetica"), result.unresolved().toString());
     }
@@ -1217,13 +1218,14 @@ class PdfFontEmbedderTest {
     }
 
     private static byte[] withFsType(byte[] font, int fsType) {
-        ByteBuffer buffer = ByteBuffer.wrap(font).order(ByteOrder.BIG_ENDIAN);
+        byte[] copy = font.clone();
+        ByteBuffer buffer = ByteBuffer.wrap(copy).order(ByteOrder.BIG_ENDIAN);
         int tables = buffer.getShort(4) & 0xFFFF;
         for (int i = 0; i < tables; i++) {
             int record = 12 + 16 * i;
             if (buffer.getInt(record) == 0x4F532F32) {
                 buffer.putShort(buffer.getInt(record + 8) + 8, (short) fsType);
-                return font;
+                return copy;
             }
         }
         throw new IllegalArgumentException("font has no OS/2 table");

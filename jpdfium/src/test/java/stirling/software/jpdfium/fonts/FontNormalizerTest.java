@@ -4,6 +4,7 @@ import org.apache.pdfbox.pdmodel.PDDocument;
 import org.junit.jupiter.api.Test;
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.model.FontType;
+import stirling.software.jpdfium.panama.NativeRuntime;
 
 import java.io.InputStream;
 import java.nio.ByteBuffer;
@@ -12,7 +13,9 @@ import java.nio.ByteOrder;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeFalse;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
@@ -77,27 +80,18 @@ class FontNormalizerTest {
 
     @Test
     void classifyRejectsFontWithoutGlyphs() throws Exception {
+        assumeFalse(NativeRuntime.isStub(), "requires real native bridge");
         byte[] font = liberationSansBytes();
         setMaxpNumGlyphs(font, 0);
 
-        try {
-            FontNormalizer.classify(font);
-            assumeTrue(false, "native font classification accepted a zero-glyph font");
-        } catch (JPDFiumException expected) {
-            // Expected with the real FreeType/HarfBuzz bridge.
-        }
+        assertThrows(JPDFiumException.class, () -> FontNormalizer.classify(font));
     }
 
     @Test
     void classifyEscapesQuotesInFamilyName() throws Exception {
+        assumeFalse(NativeRuntime.isStub(), "requires real native bridge");
         byte[] font = liberationSansBytes();
-        FontNormalizer.FontClassification baseline;
-        try {
-            baseline = FontNormalizer.classify(font);
-        } catch (Exception e) {
-            assumeTrue(false, "native font classification unavailable: " + e.getMessage());
-            return;
-        }
+        FontNormalizer.FontClassification baseline = FontNormalizer.classify(font);
         assumeTrue("Liberation Sans".equals(baseline.family()),
                 "unexpected family name: " + baseline.family());
 
@@ -110,14 +104,11 @@ class FontNormalizerTest {
 
     @Test
     void subsetRejectsCorruptFontWithoutGlyphs() {
+        assumeFalse(NativeRuntime.isStub(), "requires real native bridge");
         byte[] corrupt = new byte[64];
 
-        try {
-            FontNormalizer.subset(corrupt, new int[] {0x41}, true);
-            assumeTrue(false, "native font subsetting accepted corrupt bytes");
-        } catch (JPDFiumException expected) {
-            // Expected with the real FreeType/HarfBuzz bridge.
-        }
+        assertThrows(JPDFiumException.class,
+                () -> FontNormalizer.subset(corrupt, new int[] {0x41}, true));
     }
 
     private static byte[] liberationSansBytes() throws Exception {

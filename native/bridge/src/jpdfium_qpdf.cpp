@@ -1455,7 +1455,8 @@ std::string stripCmapComments(std::string const& in) {
     bool inHex = false;
     int literalDepth = 0;
     bool escaped = false;
-    for (size_t i = 0; i < in.size(); ++i) {
+    size_t i = 0;
+    while (i < in.size()) {
         char c = in[i];
         if (literalDepth > 0) {
             out += c;
@@ -1468,26 +1469,30 @@ std::string stripCmapComments(std::string const& in) {
             } else if (c == ')') {
                 --literalDepth;
             }
+            ++i;
             continue;
         }
         if (inHex) {
             out += c;
             if (c == '>') inHex = false;
+            ++i;
             continue;
         }
         if (c == '<' && i + 1 < in.size() && in[i + 1] == '<') {
             out += "<<";
-            ++i;
+            i += 2;
             continue;
         }
         if (c == '<') {
             inHex = true;
             out += c;
+            ++i;
             continue;
         }
         if (c == '(') {
             literalDepth = 1;
             out += c;
+            ++i;
             continue;
         }
         if (c == '%') {
@@ -1495,10 +1500,14 @@ std::string stripCmapComments(std::string const& in) {
                 out += ' ';
                 ++i;
             }
-            if (i < in.size()) out += in[i];
+            if (i < in.size()) {
+                out += in[i];
+                ++i;
+            }
             continue;
         }
         out += c;
+        ++i;
     }
     return out;
 }
