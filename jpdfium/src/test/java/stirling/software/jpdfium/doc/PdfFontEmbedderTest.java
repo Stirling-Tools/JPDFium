@@ -423,6 +423,15 @@ class PdfFontEmbedderTest {
                 assertEquals(4, bytes.length, "CID 1 needs a two-byte glyph entry");
                 int gid = ((bytes[2] & 0xFF) << 8) | (bytes[3] & 0xFF);
                 assertEquals(36, gid, "CID 1 must select A in ArialMT");
+                COSBase file2 = descriptor.getDictionaryObject(COSName.FONT_FILE2);
+                assertTrue(file2 instanceof COSStream);
+                byte[] installed;
+                try (var in = ((COSStream) file2).createInputStream()) {
+                    installed = in.readAllBytes();
+                }
+                assertTrue(installed.length < source.data().length,
+                        "CID program must be subset, got " + installed.length + " of "
+                                + source.data().length);
             }
         } finally {
             try (var files = Files.list(dir)) {
