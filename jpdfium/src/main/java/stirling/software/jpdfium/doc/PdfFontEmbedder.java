@@ -4,6 +4,7 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.StringReader;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.Charset;
@@ -539,32 +540,48 @@ public final class PdfFontEmbedder {
                     BUNDLED_FACES = Map.of();
                     return BUNDLED_FACES;
                 }
-                BufferedReader reader = new BufferedReader(new InputStreamReader(
-                        manifest, StandardCharsets.UTF_8));
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    if (line.isBlank() || line.startsWith("#")) continue;
-                    String[] columns = line.split("\t", 3);
-                    if (columns.length < 2) continue;
-                    String resource = columns[0].trim();
-                    String postScriptName = columns[1].trim();
-                    if (resource.isEmpty() || postScriptName.isEmpty()) continue;
-                    int fsType = -1;
-                    if (columns.length > 2) {
-                        try {
-                            fsType = Integer.parseInt(columns[2].trim());
-                        } catch (NumberFormatException malformed) {
-                            // A malformed durability hint means "unknown", not a broken pack.
-                        }
-                    }
-                    index.putIfAbsent(key(postScriptName),
-                            new Face(null, "/fonts/" + resource, -1, 0, true, fsType));
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(
+                        manifest, StandardCharsets.UTF_8))) {
+                    parseBundledManifest(reader, index);
                 }
             } catch (IOException ignored) {
                 // No bundled pack means the system directories are the only source.
             }
             BUNDLED_FACES = Map.copyOf(index);
             return BUNDLED_FACES;
+        }
+    }
+
+    static Map<String, Face> parseBundledManifest(String manifest) {
+        Map<String, Face> index = new HashMap<>();
+        try (BufferedReader reader = new BufferedReader(new StringReader(manifest))) {
+            parseBundledManifest(reader, index);
+        } catch (IOException impossible) {
+            throw new AssertionError(impossible);
+        }
+        return index;
+    }
+
+    private static void parseBundledManifest(BufferedReader reader, Map<String, Face> index)
+            throws IOException {
+        String line;
+        while ((line = reader.readLine()) != null) {
+            if (line.isBlank() || line.startsWith("#")) continue;
+            String[] columns = line.split("\t", 3);
+            if (columns.length < 2) continue;
+            String resource = columns[0].trim();
+            String postScriptName = columns[1].trim();
+            if (resource.isEmpty() || postScriptName.isEmpty()) continue;
+            int fsType = -1;
+            if (columns.length > 2) {
+                try {
+                    fsType = Integer.parseInt(columns[2].trim());
+                } catch (NumberFormatException malformed) {
+                    // A malformed durability hint means "unknown", not a broken pack.
+                }
+            }
+            index.putIfAbsent(key(postScriptName),
+                    new Face(null, "/fonts/" + resource, -1, 0, true, fsType));
         }
     }
 
