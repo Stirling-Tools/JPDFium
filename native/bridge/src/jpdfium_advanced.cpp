@@ -533,7 +533,9 @@ int32_t jpdfium_font_classify(const uint8_t* data, int64_t len, char** json) {
         jsonText += "\"}";
 
         FT_Done_Face(face);
-        *json = strdup(jsonText.c_str());
+        char* dup = strdup(jsonText.c_str());
+        if (!dup) return JPDFIUM_ERR_NATIVE;
+        *json = dup;
         return JPDFIUM_OK;
 
     } catch (...) {

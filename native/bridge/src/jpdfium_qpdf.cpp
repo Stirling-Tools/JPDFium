@@ -1926,10 +1926,22 @@ void collectStringCids(std::string const& bytes, std::set<uint32_t>& cids) {
     }
 }
 
+struct CidScanResult {
+    std::set<uint32_t> cids;
+    bool complete = true;
+};
+
+void scanResourceStreams(QPDFObjectHandle const& resources, QPDFObjectHandle const& target,
+                         std::set<uint32_t>& cids, int depth, std::set<QPDFObjGen>& seenStreams,
+                         int& budget, bool& complete);
+
 void scanContentStream(std::string const& data, QPDFObjectHandle const& resources,
                        QPDFObjectHandle const& target, std::set<uint32_t>& cids, int depth,
-                       std::set<QPDFObjGen>& seenForms) {
-    if (depth > 16) return;
+                       std::set<QPDFObjGen>& seenStreams, int& budget, bool& complete) {
+    if (depth > 16 || budget-- <= 0) {
+        complete = false;
+        return;
+    }
     ContentLexer lexer{data};
     std::vector<ContentOperand> operands;
     std::vector<bool> fontStack;
@@ -1982,7 +1994,7 @@ void scanContentStream(std::string const& data, QPDFObjectHandle const& resource
                         QPDFObjGen formId;
                         if (form.isIndirect()) {
                             formId = form.getObjGen();
-                            seen = !seenForms.insert(formId).second;
+                            seen = !seenStreams.insert(formId).second;
                         }
                         if (!seen) {
                             auto formResources = form.getDict().getKey("/Resources");
@@ -1994,14 +2006,13 @@ void scanContentStream(std::string const& data, QPDFObjectHandle const& resource
                                         reinterpret_cast<char const*>(streamData->getBuffer()),
                                         streamData->getSize());
                                     scanContentStream(content, formResources, target, cids,
-                                                      depth + 1, seenForms);
+                                                      depth + 1, seenStreams, budget, complete);
+                                    scanResourceStreams(formResources, target, cids, depth + 1,
+                                                        seenStreams, budget, complete);
                                 }
                             } catch (...) {
                             }
-                            // Only the recursion path needs cycle protection: a form may
-                            // legitimately appear again on another page or with other
-                            // inherited resources.
-                            if (form.isIndirect()) seenForms.erase(formId);
+                            if (form.isIndirect()) seenStreams.erase(formId);
                         }
                     }
                 }
@@ -2013,9 +2024,67 @@ void scanContentStream(std::string const& data, QPDFObjectHandle const& resource
     }
 }
 
-std::set<uint32_t> usedCidsForFont(QPDF& qpdf, QPDFObjectHandle const& target) {
-    std::set<uint32_t> cids;
-    std::set<QPDFObjGen> seenForms;
+void scanResourceStreams(QPDFObjectHandle const& resources, QPDFObjectHandle const& target,
+                         std::set<uint32_t>& cids, int depth, std::set<QPDFObjGen>& seenStreams,
+                         int& budget, bool& complete) {
+    if (depth > 16 || budget <= 0 || !resources.isDictionary()) {
+        if (budget <= 0) complete = false;
+        return;
+    }
+    auto scanStream = [&](QPDFObjectHandle stream, QPDFObjectHandle const& fallbackResources) {
+        if (!stream.isStream() || budget <= 0) {
+            if (budget <= 0) complete = false;
+            return;
+        }
+        bool seen = false;
+        QPDFObjGen id;
+        if (stream.isIndirect()) {
+            id = stream.getObjGen();
+            seen = !seenStreams.insert(id).second;
+        }
+        if (seen) return;
+        auto streamResources = stream.getDict().getKey("/Resources");
+        if (!streamResources.isDictionary()) streamResources = fallbackResources;
+        try {
+            auto data = stream.getStreamData(qpdf_dl_generalized);
+            if (data && data->getSize()) {
+                std::string content(reinterpret_cast<char const*>(data->getBuffer()),
+                                    data->getSize());
+                scanContentStream(content, streamResources, target, cids, depth + 1, seenStreams,
+                                  budget, complete);
+                scanResourceStreams(streamResources, target, cids, depth + 1, seenStreams, budget,
+                                    complete);
+            }
+        } catch (...) {
+        }
+        if (stream.isIndirect()) seenStreams.erase(id);
+    };
+
+    auto patterns = resources.getKey("/Pattern");
+    if (patterns.isDictionary()) {
+        for (auto const& entry : patterns.getDictAsMap()) scanStream(entry.second, resources);
+    }
+
+    auto fonts = resources.getKey("/Font");
+    if (fonts.isDictionary()) {
+        for (auto const& entry : fonts.getDictAsMap()) {
+            auto font = entry.second;
+            if (!font.isDictionary() || !font.getKey("/Subtype").isNameAndEquals("/Type3"))
+                continue;
+            auto charProcs = font.getKey("/CharProcs");
+            if (!charProcs.isDictionary()) continue;
+            auto fontResources = font.getKey("/Resources");
+            if (!fontResources.isDictionary()) fontResources = resources;
+            for (auto const& glyph : charProcs.getDictAsMap())
+                scanStream(glyph.second, fontResources);
+        }
+    }
+}
+
+CidScanResult usedCidsForFont(QPDF& qpdf, QPDFObjectHandle const& target) {
+    CidScanResult result;
+    int budget = 2048;
+    std::set<QPDFObjGen> seenStreams;
     try {
         for (auto& page : QPDFPageDocumentHelper{qpdf}.getAllPages()) {
             auto pageObj = page.getObjectHandle();
@@ -2038,7 +2107,10 @@ std::set<uint32_t> usedCidsForFont(QPDF& qpdf, QPDFObjectHandle const& target) {
                     if (!data || !data->getSize()) return;
                     std::string content(reinterpret_cast<char const*>(data->getBuffer()),
                                         data->getSize());
-                    scanContentStream(content, streamResources, target, cids, 0, seenForms);
+                    scanContentStream(content, streamResources, target, result.cids, 0, seenStreams,
+                                      budget, result.complete);
+                    scanResourceStreams(streamResources, target, result.cids, 0, seenStreams,
+                                        budget, result.complete);
                 } catch (...) {
                 }
             };
@@ -2064,40 +2136,22 @@ std::set<uint32_t> usedCidsForFont(QPDF& qpdf, QPDFObjectHandle const& target) {
                 }
             }
 
-            if (!resources.isDictionary()) continue;
-
-            // Tiling pattern streams use the font resources of the pattern or the
-            // resource dictionary that contains them.
-            auto patterns = resources.getKey("/Pattern");
-            if (patterns.isDictionary()) {
-                for (auto const& entry : patterns.getDictAsMap())
-                    scanStreamData(entry.second, resources);
-            }
-
-            // Type 3 glyph procedures can reference the target font.
-            auto fonts = resources.getKey("/Font");
-            if (fonts.isDictionary()) {
-                for (auto const& entry : fonts.getDictAsMap()) {
-                    auto font = entry.second;
-                    if (!font.isDictionary() || !font.getKey("/Subtype").isNameAndEquals("/Type3"))
-                        continue;
-                    auto charProcs = font.getKey("/CharProcs");
-                    if (!charProcs.isDictionary()) continue;
-                    auto fontResources = font.getKey("/Resources");
-                    if (!fontResources.isDictionary()) fontResources = resources;
-                    for (auto const& glyph : charProcs.getDictAsMap())
-                        scanStreamData(glyph.second, fontResources);
-                }
-            }
+            if (resources.isDictionary())
+                scanResourceStreams(resources, target, result.cids, 0, seenStreams, budget,
+                                    result.complete);
         }
     } catch (...) {
-        return {};
+        result.complete = false;
+        return result;
     }
-    return cids;
+    return result;
 }
 
 bool coversWidthCids(QPDFObjectHandle const& font, std::map<uint32_t, uint32_t> const& unicodeByCid,
-                     std::set<uint32_t> const& usedCids) {
+                     std::set<uint32_t> const& usedCids, bool scanComplete) {
+    // A scan that exhausted its budget cannot prove that every drawn CID is
+    // mapped; leave the font unchanged rather than falling back to /W.
+    if (!scanComplete) return false;
     // Prefer the CIDs the content actually draws with. /W remains the fallback
     // when the content scan finds nothing, because a partial map that turns an
     // unseen CID into .notdef is worse than refusing the font.
@@ -2360,8 +2414,11 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
                 // the Identity encodings this rewrite can remap.
                 if (!identityCidMap || !identityEncoding) continue;
                 cidUnicode = parseToUnicode(font);
-                usedCids = usedCidsForFont(*qpdf, font);
-                if (cidUnicode.empty() || !coversWidthCids(target, cidUnicode, usedCids)) continue;
+                auto scan = usedCidsForFont(*qpdf, font);
+                usedCids = scan.cids;
+                if (cidUnicode.empty() ||
+                    !coversWidthCids(target, cidUnicode, usedCids, scan.complete))
+                    continue;
                 if (program.kind == ProgramKind::TrueType) {
                     cidRemap = !cidGlyphOrderMatches(program.face, cidUnicode);
                     // Every mapped CID must reach a glyph before the font is touched;
