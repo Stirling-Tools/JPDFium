@@ -567,6 +567,8 @@ JPDFIUM_EXPORT int32_t jpdfium_repair_inspect(const uint8_t* input, int64_t inpu
 #define JPDFIUM_QPDF_REMOVE_UNREFERENCED_RESOURCES 0x40
 // Image pass, equivalent to --optimize-images; jpegQuality < 0 keeps DCT data.
 #define JPDFIUM_QPDF_OPTIMIZE_IMAGES 0x80
+// Subset already-embedded TrueType/OpenType fonts in-place.
+#define JPDFIUM_QPDF_SUBSET_FONTS 0x100
 // objectStreamMode: 0=disable,1=preserve,2=generate,-1=default
 // streamDataMode:   0=uncompress,1=preserve,2=compress,-1=default
 // decodeLevel:      0=none,1=generalized,2=specialized,3=all,-1=default
@@ -659,6 +661,13 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_embed_fonts_file(const char* in_path, const 
                                                      int32_t count, const char* const* names,
                                                      const uint8_t* const* fonts,
                                                      const int64_t* fontLens, int32_t onlyMissing);
+
+// Subset already-embedded TrueType/OpenType fonts in-place using HarfBuzz
+// RETAIN_GIDS. Returns 0 when at least one font was subsetted (*output populated),
+// 1 when no font needed subsetting (*output is NULL), negative on error.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_subset_fonts(const uint8_t* input, int64_t inputLen,
+                                                 uint8_t** output, int64_t* outputLen,
+                                                 int32_t* fontsSubset);
 
 // In-process qpdf structural sanitization (FFM, no CLI).
 // Scrubs metadata/info/structure, JavaScript actions, embedded files, AcroForm

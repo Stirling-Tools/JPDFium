@@ -213,6 +213,10 @@ void optimizeImages(QPDF& pdf, int32_t jpegQuality) {
     }
 }
 
+// Subset every embedded TrueType/OpenType program that the document references
+// and that is not already subset-tagged. Defined below with the font helpers.
+int subsetEmbeddedFonts(QPDF& qpdf);
+
 void applyDocumentOptions(QPDF& pdf, const OptimizeOptions& options) {
     if (options.flags & JPDFIUM_QPDF_QDF) {
         if (options.flags & JPDFIUM_QPDF_LINEARIZE) {
@@ -221,6 +225,9 @@ void applyDocumentOptions(QPDF& pdf, const OptimizeOptions& options) {
     }
     if (options.flags & JPDFIUM_QPDF_OPTIMIZE_IMAGES) {
         optimizeImages(pdf, options.jpegQuality);
+    }
+    if (options.flags & JPDFIUM_QPDF_SUBSET_FONTS) {
+        subsetEmbeddedFonts(pdf);
     }
     if (options.flags & JPDFIUM_QPDF_REMOVE_UNREFERENCED_RESOURCES) {
         QPDFPageDocumentHelper{pdf}.removeUnreferencedResources();
@@ -2356,6 +2363,319 @@ void updateCidSet(QPDF& qpdf, QPDFObjectHandle descriptor, std::set<uint32_t> co
     descriptor.replaceKey("/CIDSet", QPDFObjectHandle::newStream(&qpdf, bits));
 }
 
+bool hasSubsetTag(std::string const& name) {
+    if (name.size() <= 7 || name[6] != '+') return false;
+    return std::all_of(name.begin(), name.begin() + 6,
+                       [](unsigned char c) { return c >= 'A' && c <= 'Z'; });
+}
+
+std::string makeSubsetTag(std::string const& name, std::set<FT_UInt> const& glyphs) {
+    size_t hash = std::hash<std::string>{}(name);
+    for (FT_UInt g : glyphs) hash = hash * 31 + g;
+    std::string tag;
+    for (int i = 0; i < 6; ++i, hash /= 26) tag += char('A' + hash % 26);
+    return tag;
+}
+
+bool subsetKeepsAdvances(FT_Library lib, std::string const& subsetBytes, FT_Face original,
+                         std::set<FT_UInt> const& glyphs) {
+    FT_Face face = nullptr;
+    if (subsetBytes.empty() ||
+        FT_New_Memory_Face(lib, reinterpret_cast<const FT_Byte*>(subsetBytes.data()),
+                           FT_Long(subsetBytes.size()), 0, &face))
+        return false;
+    bool same = face->num_glyphs > 0;
+    for (FT_UInt gid : glyphs) {
+        if (!same) break;
+        FT_Fixed before = 0, after = 0;
+        if (FT_Get_Advance(original, gid, FT_LOAD_NO_SCALE, &before) ||
+            FT_Get_Advance(face, gid, FT_LOAD_NO_SCALE, &after) || before != after)
+            same = false;
+    }
+    FT_Done_Face(face);
+    return same;
+}
+
+bool subsetKeepsSimpleGlyphs(FT_Library lib, std::string const& subsetBytes, FT_Face original,
+                             bool symbolic, SimpleEncoding const& enc,
+                             std::set<uint32_t> const& codes) {
+    FT_Face face = nullptr;
+    if (subsetBytes.empty() ||
+        FT_New_Memory_Face(lib, reinterpret_cast<const FT_Byte*>(subsetBytes.data()),
+                           FT_Long(subsetBytes.size()), 0, &face))
+        return false;
+    bool same = true;
+    for (uint32_t code : codes) {
+        if (!same || code >= 256) continue;
+        same = glyphForCode(face, static_cast<int>(code), symbolic, enc) ==
+               glyphForCode(original, static_cast<int>(code), symbolic, enc);
+    }
+    FT_Done_Face(face);
+    return same;
+}
+
+// Subset an already-embedded Identity-H or Identity-V Type0/CIDFont TrueType/OpenType
+// program to the CIDs drawn in the document. Returns true if the font stream was rewritten.
+bool subsetEmbeddedCidFont(QPDF& qpdf, FT_Library lib, QPDFObjectHandle& font,
+                           QPDFObjectHandle& target, QPDFObjectHandle& descriptor,
+                           FontProgram const& program, std::string const& baseName) {
+    if (!font.getKey("/Encoding").isNameAndEquals("/Identity-H") &&
+        !font.getKey("/Encoding").isNameAndEquals("/Identity-V"))
+        return false;
+    if (FT_IS_CID_KEYED(program.face)) return false;
+
+    // Scan all content streams referencing this Type0 font; fail closed if incomplete.
+    auto scan = usedCidsForFont(qpdf, font, true);
+    if (!scan.complete || scan.cids.empty()) return false;
+
+    // Resolve each used CID through /CIDToGIDMap (/Identity or explicit 2-byte stream).
+    auto cidMap = target.getKey("/CIDToGIDMap");
+    bool identity = cidMap.isNull() || cidMap.isNameAndEquals("/Identity");
+    std::shared_ptr<Buffer> mapBytes;
+    if (!identity) {
+        if (!cidMap.isStream()) return false;
+        try {
+            mapBytes = cidMap.getStreamData(qpdf_dl_generalized);
+        } catch (...) {
+            return false;
+        }
+        if (!mapBytes) return false;
+    }
+
+    std::set<FT_UInt> targetGlyphs{0};
+    std::set<uint32_t> activeCids{0};
+    for (uint32_t c : scan.cids) {
+        uint32_t gid = c;
+        if (!identity) {
+            if (mapBytes->getSize() < 2 * (size_t(c) + 1)) return false;
+            auto const* bytes = mapBytes->getBuffer();
+            gid = (uint32_t(bytes[2 * c]) << 8) | bytes[2 * c + 1];
+        }
+        if (gid >= static_cast<uint32_t>(program.face->num_glyphs)) return false;
+        targetGlyphs.insert(gid);
+        activeCids.insert(c);
+    }
+    if (targetGlyphs.size() >= static_cast<size_t>(program.face->num_glyphs)) return false;
+
+    // Build and verify the GID-preserving subset before replacing the stream.
+    std::string subset = subsetProgram(program, targetGlyphs);
+    if (subset.empty() || subset.size() + 64 >= program.bytes.size()) return false;
+    if (!subsetKeepsAdvances(lib, subset, program.face, targetGlyphs)) return false;
+
+    std::string tag = makeSubsetTag(baseName, targetGlyphs);
+    auto tagged = QPDFObjectHandle::newName("/" + tag + "+" + baseName);
+    font.replaceKey("/BaseFont", tagged);
+    target.replaceKey("/BaseFont", tagged);
+    descriptor.replaceKey("/FontName", tagged);
+
+    for (char const* key : {"/FontFile", "/FontFile2", "/FontFile3"}) descriptor.removeKey(key);
+    descriptor.replaceKey(program.kind == ProgramKind::TrueType ? "/FontFile2" : "/FontFile3",
+                          makeProgramStream(qpdf, program, program.kind, true, subset));
+    if (descriptor.hasKey("/CIDSet")) updateCidSet(qpdf, descriptor, activeCids);
+    return true;
+}
+
+// Subset an already-embedded simple (8-bit) TrueType/OpenType font program to the
+// character codes drawn in the document. Returns true if the font stream was rewritten.
+bool subsetEmbeddedSimpleFont(QPDF& qpdf, FT_Library lib, QPDFObjectHandle& font,
+                              QPDFObjectHandle& target, QPDFObjectHandle& descriptor,
+                              FontProgram const& program, std::string const& baseName) {
+    // Scan all content streams referencing this simple font; fail closed if incomplete.
+    auto scan = usedCidsForFont(qpdf, font, false);
+    if (!scan.complete || scan.cids.empty()) return false;
+
+    auto flags = descriptor.getKey("/Flags");
+    bool symbolic = flags.isInteger() ? (flags.getIntValue() & 4) != 0
+                                      : baseName == "Symbol" || baseName == "ZapfDingbats";
+    auto enc = parseEncoding(target);
+
+    // Collect every candidate glyph index that any PDF viewer encoding path may select.
+    std::set<FT_UInt> targetGlyphs{0};
+    for (uint32_t code : scan.cids) {
+        if (code >= 256) continue;
+        targetGlyphs.insert(glyphForCode(program.face, static_cast<int>(code), false, enc));
+        targetGlyphs.insert(glyphForCode(program.face, static_cast<int>(code), true, enc));
+        if (code < static_cast<uint32_t>(program.face->num_glyphs))
+            targetGlyphs.insert(static_cast<FT_UInt>(code));
+        if (!FT_Select_Charmap(program.face, FT_ENCODING_UNICODE)) {
+            for (auto base :
+                 {BaseEncoding::Standard, BaseEncoding::WinAnsi, BaseEncoding::MacRoman})
+                targetGlyphs.insert(
+                    FT_Get_Char_Index(program.face, baseEncodingUnicode(base, int(code))));
+        }
+    }
+    if (targetGlyphs.size() >= static_cast<size_t>(program.face->num_glyphs)) return false;
+
+    // Build and verify the subset program before installing it into the descriptor.
+    std::string subset = subsetProgram(program, targetGlyphs);
+    if (subset.empty() || subset.size() + 64 >= program.bytes.size()) return false;
+    if (!subsetKeepsSimpleGlyphs(lib, subset, program.face, symbolic, enc, scan.cids)) return false;
+
+    std::string tag = makeSubsetTag(baseName, targetGlyphs);
+    auto tagged = QPDFObjectHandle::newName("/" + tag + "+" + baseName);
+    target.replaceKey("/BaseFont", tagged);
+    descriptor.replaceKey("/FontName", tagged);
+
+    for (char const* key : {"/FontFile", "/FontFile2", "/FontFile3"}) descriptor.removeKey(key);
+    descriptor.replaceKey(program.kind == ProgramKind::TrueType ? "/FontFile2" : "/FontFile3",
+                          makeProgramStream(qpdf, program, program.kind, false, subset));
+    return true;
+}
+
+// Inspect a single font resource and subset its embedded SFNT stream when safe.
+bool subsetEmbeddedFontResource(QPDF& qpdf, FT_Library lib, QPDFObjectHandle& font,
+                                std::map<QPDFObjGen, int> const& descriptorUseCount,
+                                std::map<QPDFObjGen, int> const& streamUseCount) {
+    auto descendants = font.getKey("/DescendantFonts");
+    bool cid = descendants.isArray() && descendants.getArrayNItems() > 0 &&
+               descendants.getArrayItem(0).isDictionary();
+    auto target = cid ? descendants.getArrayItem(0) : font;
+    auto descriptor = target.getKey("/FontDescriptor");
+    if (!descriptor.isDictionary()) return false;
+
+    // Skip fonts that are already subset-tagged or share a descriptor/stream with another font.
+    auto baseFont = target.getKey("/BaseFont");
+    if (!baseFont.isName()) baseFont = font.getKey("/BaseFont");
+    auto fontBaseFont = font.getKey("/BaseFont");
+    std::string baseName =
+        baseFont.isName() ? stripPdfNamePrefix(baseFont.getName()) : std::string();
+    std::string parentName =
+        fontBaseFont.isName() ? stripPdfNamePrefix(fontBaseFont.getName()) : std::string();
+    if (hasSubsetTag(baseName) || hasSubsetTag(parentName)) return false;
+    if (descriptor.isIndirect()) {
+        auto it = descriptorUseCount.find(descriptor.getObjGen());
+        if (it != descriptorUseCount.end() && it->second > 1) return false;
+    }
+
+    auto stream = descriptor.getKey("/FontFile2");
+    if (!stream.isStream()) {
+        auto ff3 = descriptor.getKey("/FontFile3");
+        if (ff3.isStream() && ff3.getDict().getKey("/Subtype").isNameAndEquals("/OpenType"))
+            stream = ff3;
+    }
+    if (!stream.isStream()) return false;
+    if (stream.isIndirect()) {
+        auto it = streamUseCount.find(stream.getObjGen());
+        if (it != streamUseCount.end() && it->second > 1) return false;
+    }
+
+    // Decompress and parse the embedded SFNT program with FreeType.
+    std::shared_ptr<Buffer> data;
+    try {
+        data = stream.getStreamData(qpdf_dl_generalized);
+    } catch (...) {
+        return false;
+    }
+    if (!data || data->getSize() < 64) return false;
+
+    FontProgram program;
+    struct FaceGuard {
+        FT_Face& face;
+        ~FaceGuard() {
+            if (face) FT_Done_Face(face);
+        }
+    } guard{program.face};
+    bool loaded = loadProgram(lib, {data->getBuffer(), data->getSize()}, program);
+    program.usable = loaded;
+    if (!loaded || !program.usable || program.noSubsetting) return false;
+    if ((program.kind != ProgramKind::TrueType && program.kind != ProgramKind::OpenType) ||
+        program.face->num_glyphs <= 1)
+        return false;
+
+    return cid ? subsetEmbeddedCidFont(qpdf, lib, font, target, descriptor, program, baseName)
+               : subsetEmbeddedSimpleFont(qpdf, lib, font, target, descriptor, program, baseName);
+}
+
+// Subset every embedded TrueType/OpenType program that the document references
+// and that is not already subset-tagged. Returns the number of fonts rewritten.
+int subsetEmbeddedFonts(QPDF& qpdf) {
+    auto hasSignatureValue = [](QPDFObjectHandle const& field) {
+        if (!field.isDictionary()) return false;
+        auto value = field.getKey("/V");
+        return field.hasKey("/ByteRange") || (value.isDictionary() && value.hasKey("/ByteRange"));
+    };
+
+    // Collect top-level font dictionaries across all objects and resource dictionaries.
+    std::vector<QPDFObjectHandle> fonts;
+    auto collectFromResources = [&](QPDFObjectHandle const& res) {
+        auto fontDict = res.isDictionary() ? res.getKey("/Font") : QPDFObjectHandle();
+        if (!fontDict.isDictionary()) return;
+        for (auto const& [name, font] : fontDict.getDictAsMap())
+            if (font.isDictionary()) fonts.push_back(font);
+    };
+    for (auto& object : qpdf.getAllObjects()) {
+        auto dict = object.isStream() ? object.getDict() : object;
+        if (!dict.isDictionary()) continue;
+        if (hasSignatureValue(dict)) return 0;
+        auto type = dict.getKey("/Type");
+        auto subtypeName = dict.getKey("/Subtype");
+        bool cidDescendant = subtypeName.isName() && (subtypeName.getName() == "/CIDFontType0" ||
+                                                      subtypeName.getName() == "/CIDFontType2");
+        if (type.isName() && type.getName() == "/Font" && !cidDescendant) fonts.push_back(dict);
+        collectFromResources(dict.getKey("/Resources"));
+    }
+
+    // Refuse to modify signed documents discovered via the AcroForm field tree.
+    auto acroForm = qpdf.getRoot().getKey("/AcroForm");
+    std::vector<QPDFObjectHandle> pendingFields{acroForm};
+    std::set<QPDFObjGen> visitedFields;
+    while (!pendingFields.empty()) {
+        QPDFObjectHandle field = pendingFields.back();
+        pendingFields.pop_back();
+        if (!field.isDictionary()) continue;
+        if (field.isIndirect() && !visitedFields.insert(field.getObjGen()).second) continue;
+        if (hasSignatureValue(field)) return 0;
+        for (char const* key : {"/Fields", "/Kids"}) {
+            QPDFObjectHandle children = field.getKey(key);
+            if (!children.isArray()) continue;
+            for (auto& child : children.getArrayAsVector()) pendingFields.push_back(child);
+        }
+    }
+    if (acroForm.isDictionary()) collectFromResources(acroForm.getKey("/DR"));
+
+    // Deduplicate indirect font dictionaries and count shared descriptors/streams.
+    std::set<QPDFObjGen> seenFonts;
+    std::vector<QPDFObjectHandle> uniqueFonts;
+    for (auto const& font : fonts) {
+        if (font.isIndirect() && !seenFonts.insert(font.getObjGen()).second) continue;
+        uniqueFonts.push_back(font);
+    }
+
+    std::map<QPDFObjGen, int> descriptorUseCount;
+    std::map<QPDFObjGen, int> streamUseCount;
+    for (auto const& font : uniqueFonts) {
+        auto descendants = font.getKey("/DescendantFonts");
+        bool cid = descendants.isArray() && descendants.getArrayNItems() > 0 &&
+                   descendants.getArrayItem(0).isDictionary();
+        auto descriptor = (cid ? descendants.getArrayItem(0) : font).getKey("/FontDescriptor");
+        if (descriptor.isIndirect()) ++descriptorUseCount[descriptor.getObjGen()];
+        if (!descriptor.isDictionary()) continue;
+        auto stream = descriptor.getKey("/FontFile2");
+        if (!stream.isStream()) {
+            auto ff3 = descriptor.getKey("/FontFile3");
+            if (ff3.isStream() && ff3.getDict().getKey("/Subtype").isNameAndEquals("/OpenType"))
+                stream = ff3;
+        }
+        if (stream.isIndirect()) ++streamUseCount[stream.getObjGen()];
+    }
+
+    FT_Library lib = nullptr;
+    struct LibraryGuard {
+        FT_Library& library;
+        ~LibraryGuard() {
+            if (library) FT_Done_FreeType(library);
+        }
+    } libraryGuard{lib};
+    if (FT_Init_FreeType(&lib)) return 0;
+
+    int subsetCount = 0;
+    for (auto& font : uniqueFonts) {
+        if (subsetEmbeddedFontResource(qpdf, lib, font, descriptorUseCount, streamUseCount))
+            ++subsetCount;
+    }
+    return subsetCount;
+}
+
 QPDFObjectHandle newDescriptor(QPDF& qpdf, QPDFObjectHandle font, FT_Face face, bool symbolic) {
     auto scaled = [&](long v) {
         return QPDFObjectHandle::newInteger(v * 1000 /
@@ -3275,6 +3595,43 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_embed_fonts_file(const char* in_path, const 
     }
 }
 
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_subset_fonts(const uint8_t* input, int64_t inputLen,
+                                                 uint8_t** output, int64_t* outputLen,
+                                                 int32_t* fontsSubset) {
+    if (!input || inputLen <= 0 || !output || !outputLen || !fontsSubset) return -1;
+    *output = nullptr;
+    *outputLen = 0;
+    *fontsSubset = 0;
+    try {
+        auto qpdf = QPDF::create();
+        qpdf->processMemoryFile("subset-in", reinterpret_cast<const char*>(input),
+                                static_cast<size_t>(inputLen));
+        int count = subsetEmbeddedFonts(*qpdf);
+        *fontsSubset = count;
+        if (count <= 0) return count == 0 ? 1 : -1;
+
+        QPDFWriter writer{*qpdf};
+        writer.setCompressStreams(true);
+        writer.setDecodeLevel(qpdf_dl_none);
+        writer.setNewlineBeforeEndstream(true);
+        writer.setOutputMemory();
+        WriterLock lock{-1};
+        writer.write();
+        auto buf = writer.getBufferSharedPointer();
+        if (!buf || buf->getSize() == 0) return -1;
+        *outputLen = static_cast<int64_t>(buf->getSize());
+        *output = static_cast<uint8_t*>(malloc(static_cast<size_t>(*outputLen)));
+        if (!*output) {
+            *outputLen = 0;
+            return -1;
+        }
+        std::memcpy(*output, buf->getBuffer(), static_cast<size_t>(*outputLen));
+        return 0;
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
+    }
+}
+
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_replace_font_stream(const uint8_t* input, int64_t inputLen,
                                                         const char* baseFont,
                                                         const uint8_t* fontData, int64_t fontLen,
@@ -3992,6 +4349,14 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_decrypt_file(const char*, const char*, const
 
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_copy_encryption_file(const char*, const char*, const char*,
                                                          const char*) {
+    return -1;
+}
+
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_subset_fonts(const uint8_t*, int64_t, uint8_t** output,
+                                                 int64_t* outputLen, int32_t* fontsSubset) {
+    if (output) *output = nullptr;
+    if (outputLen) *outputLen = 0;
+    if (fontsSubset) *fontsSubset = 0;
     return -1;
 }
 
