@@ -225,6 +225,9 @@ public final class PdfFontEmbedder {
      * directories when none are given.
      */
     public static Result embedMissing(byte[] pdf, Path... fontDirs) throws IOException {
+        if (pdf == null || pdf.length == 0) {
+            return new Result(pdf == null ? new byte[0] : pdf, List.of(), List.of(), List.of());
+        }
         List<PdfFontAuditor.FontResource> resources = PdfFontAuditor.unembeddedResources(pdf);
         Set<String> names = new LinkedHashSet<>();
         Map<String, Boolean> substitutable = new HashMap<>();
@@ -245,7 +248,16 @@ public final class PdfFontEmbedder {
                 continue;
             }
             String key = key(name);
-            Face face = bundled == null ? null : resolve(bundled, key);
+            Face face = bundled == null ? null : bundled.get(key);
+            if (face != null && !face.embeddable()) face = null;
+            if (face == null) {
+                if (index == null) index = indexFor(fontDirs);
+                face = index.get(key);
+                if (face != null && !face.embeddable()) face = null;
+            }
+            if (face == null && bundled != null) {
+                face = resolve(bundled, key);
+            }
             if (face == null) {
                 if (index == null) index = indexFor(fontDirs);
                 face = resolve(index, key);
@@ -327,14 +339,25 @@ public final class PdfFontEmbedder {
     public static FontStatus diagnose(String baseName, Path... fontDirs) {
         String key = key(baseName);
         if (fontDirs.length == 0) {
-            Face bundledFace = resolve(bundledFaces(), key);
-            if (bundledFace != null) {
+            Face bundledFace = bundledFaces().get(key);
+            if (bundledFace != null && bundledFace.embeddable()) {
                 return new FontStatus(baseName, source(bundledFace), bundledFace.fsType(), true,
                         "available");
             }
         }
         Map<String, Face> index = indexFor(fontDirs);
-        Face face = resolve(index, key);
+        Face face = index.get(key);
+        if (face != null && face.embeddable()) {
+            return new FontStatus(baseName, source(face), face.fsType(), true, "available");
+        }
+        if (fontDirs.length == 0) {
+            Face bundledMetric = resolve(bundledFaces(), key);
+            if (bundledMetric != null) {
+                return new FontStatus(baseName, source(bundledMetric), bundledMetric.fsType(), true,
+                        "available");
+            }
+        }
+        face = resolve(index, key);
         if (face != null) {
             return new FontStatus(baseName, source(face), face.fsType(), true, "available");
         }
@@ -488,8 +511,13 @@ public final class PdfFontEmbedder {
             String style = styleOf(key.substring(family.length()));
             for (String member : group) {
                 Face face = index.get(member + style);
-                if (face == null && !style.isEmpty()) face = index.get(member);
                 if (face != null && (!embeddableOnly || face.embeddable())) return face;
+            }
+            if (!style.isEmpty()) {
+                for (String member : group) {
+                    Face face = index.get(member);
+                    if (face != null && (!embeddableOnly || face.embeddable())) return face;
+                }
             }
         }
         return null;
