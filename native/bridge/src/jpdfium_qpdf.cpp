@@ -1361,6 +1361,17 @@ bool reachesSameGlyphs(FT_Library lib, std::string const& subset, FT_Face origin
     return same;
 }
 
+struct UnicodeScalar {
+    // A ToUnicode destination can pack a surrogate pair into one 32-bit value;
+    // FreeType indexes by the decoded scalar instead.
+    static uint32_t decode(uint32_t value) {
+        if (value <= 0xFFFF) return value;
+        uint32_t high = value >> 16, low = value & 0xFFFF;
+        if (high < 0xD800 || high > 0xDBFF || low < 0xDC00 || low > 0xDFFF) return 0;
+        return 0x10000 + ((high - 0xD800) << 10) + (low - 0xDC00);
+    }
+};
+
 bool subsetKeepsCidGlyphs(FT_Library lib, std::string const& subset,
                           std::map<uint32_t, uint32_t> const& unicodeByCid,
                           std::map<uint32_t, FT_UInt> const& cidGlyph) {
@@ -1371,7 +1382,8 @@ bool subsetKeepsCidGlyphs(FT_Library lib, std::string const& subset,
     bool same = !FT_Select_Charmap(face, FT_ENCODING_UNICODE);
     for (auto const& [cid, gid] : cidGlyph) {
         auto it = unicodeByCid.find(cid);
-        if (it == unicodeByCid.end() || !it->second || FT_Get_Char_Index(face, it->second) != gid) {
+        uint32_t scalar = it == unicodeByCid.end() ? 0 : UnicodeScalar::decode(it->second);
+        if (!scalar || FT_Get_Char_Index(face, scalar) != gid) {
             same = false;
             break;
         }
@@ -1428,17 +1440,6 @@ void setToUnicode(QPDF& qpdf, QPDFObjectHandle font, std::map<uint32_t, FT_ULong
     cmap += "endcmap CMapName currentdict /CMap defineresource pop end end\n";
     font.replaceKey("/ToUnicode", QPDFObjectHandle::newStream(&qpdf, cmap));
 }
-
-struct UnicodeScalar {
-    // A ToUnicode destination can pack a surrogate pair into one 32-bit value;
-    // FreeType indexes by the decoded scalar instead.
-    static uint32_t decode(uint32_t value) {
-        if (value <= 0xFFFF) return value;
-        uint32_t high = value >> 16, low = value & 0xFFFF;
-        if (high < 0xD800 || high > 0xDBFF || low < 0xDC00 || low > 0xDFFF) return 0;
-        return 0x10000 + ((high - 0xD800) << 10) + (low - 0xDC00);
-    }
-};
 
 // CIDs are two-byte codes for the Identity encodings this rewrite supports, so a
 // ToUnicode mapping outside that range cannot describe the document and is rejected
