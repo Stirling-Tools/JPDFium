@@ -37,7 +37,7 @@ class BundledFontManifestTest {
 
             byte[] data;
             try (XZInputStream xz = new XZInputStream(
-                    Files.newInputStream(root.resolve(resource)), 32 * 1024 * 1024)) {
+                    Files.newInputStream(root.resolve(resource)), 96 * 1024)) {
                 data = xz.readAllBytes();
             }
             TrueTypeFont font = new TTFParser().parseEmbedded(new ByteArrayInputStream(data));
