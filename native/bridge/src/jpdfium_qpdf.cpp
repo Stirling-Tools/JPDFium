@@ -3317,44 +3317,17 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
                                                                 : "/FontFile3",
                                   stream);
             if (cid) {
-                std::set<uint32_t> activeCids{0};
-                bool cidSetComplete = true;
-                if (!remappedGlyph.empty()) {
-                    for (auto const& [c, gid] : remappedGlyph) {
-                        (void)gid;
-                        activeCids.insert(c);
-                    }
-                } else if (!cidGlyph.empty()) {
-                    for (auto const& [c, gid] : cidGlyph) {
-                        (void)gid;
-                        activeCids.insert(c);
-                    }
-                } else if (identityCidMap) {
-                    long maxGlyph = std::min<long>(program.face->num_glyphs - 1, kMaxCid);
-                    for (long g = 0; g <= maxGlyph; ++g)
-                        activeCids.insert(static_cast<uint32_t>(g));
-                } else {
-                    // A non-Identity /CIDToGIDMap names CIDs directly. Glyph
-                    // indices are not CIDs, so enumerate the retained map.
-                    cidSetComplete = false;
-                    auto retained = target.getKey("/CIDToGIDMap");
-                    if (retained.isStream()) {
-                        try {
-                            auto map = retained.getStreamData(qpdf_dl_generalized);
-                            if (map && (map->getSize() % 2) == 0) {
-                                auto const* bytes =
-                                    reinterpret_cast<unsigned char const*>(map->getBuffer());
-                                for (size_t candidate = 0;
-                                     candidate < map->getSize() / 2 && candidate <= kMaxCid;
-                                     ++candidate) {
-                                    uint32_t gid = (uint32_t(bytes[2 * candidate]) << 8) |
-                                                   bytes[2 * candidate + 1];
-                                    if (gid < static_cast<uint32_t>(program.face->num_glyphs))
-                                        activeCids.insert(static_cast<uint32_t>(candidate));
-                                }
-                                cidSetComplete = true;
-                            }
-                        } catch (...) {
+                std::set<uint32_t> activeCids = cidsPresentInProgram(target, program.face);
+                if (activeCids.empty()) {
+                    // The installed map could not be read back. Derive the bitmap
+                    // from the mapping this rewrite actually wrote, or leave the
+                    // CIDSet absent when the mapping is unknown.
+                    activeCids.insert(0);
+                    bool cidSetComplete = true;
+                    if (!remappedGlyph.empty()) {
+                        for (auto const& [c, gid] : remappedGlyph) {
+                            (void)gid;
+                            activeCids.insert(c);
                         }
                     } else if (!cidGlyph.empty()) {
                         for (auto const& [c, gid] : cidGlyph) {
