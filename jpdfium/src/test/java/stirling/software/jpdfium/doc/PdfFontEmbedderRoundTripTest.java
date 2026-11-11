@@ -219,8 +219,8 @@ class PdfFontEmbedderRoundTripTest {
         assertEquals(result.embedded().size(), verified, "every embedded standard font was checked");
         try (PdfDocument doc = PdfDocument.open(result.pdf())) {
             List<String> left = PdfFontAuditor.audit(doc).nonEmbeddedFonts().stream()
-                    .map(PdfFontAuditor.FontInfo::baseName).toList();
-            assertEquals(result.unresolved(), left);
+                    .map(PdfFontAuditor.FontInfo::baseName).sorted().toList();
+            assertEquals(result.unresolved().stream().sorted().toList(), left);
         }
     }
 
