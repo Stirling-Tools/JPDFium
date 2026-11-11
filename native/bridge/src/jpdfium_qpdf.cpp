@@ -1260,12 +1260,18 @@ FT_UInt glyphForName(FT_Face face, std::string const& name) {
     if (!u && name.size() >= 5 && name[0] == 'u') {
         bool hex = name.size() <= 7;
         for (size_t i = 1; hex && i < name.size(); ++i) hex = std::isxdigit(uint8_t(name[i]));
-        if (hex) u = uint32_t(std::strtoul(name.c_str() + 1, nullptr, 16));
+        if (hex) {
+            uint32_t value = uint32_t(std::strtoul(name.c_str() + 1, nullptr, 16));
+            if (value <= 0x10FFFF) u = value;
+        }
     }
     if (!u && name.size() == 7 && name.starts_with("uni")) {
         bool hex = true;
-        for (size_t i = 3; i < 7; ++i) hex = std::isxdigit(uint8_t(name[i]));
-        if (hex) u = uint32_t(std::strtoul(name.c_str() + 3, nullptr, 16));
+        for (size_t i = 3; hex && i < 7; ++i) hex = std::isxdigit(uint8_t(name[i]));
+        if (hex) {
+            uint32_t value = uint32_t(std::strtoul(name.c_str() + 3, nullptr, 16));
+            if (value <= 0x10FFFF) u = value;
+        }
     }
     if (!u) {
         auto const* first = std::begin(kAdobeGlyphNames);
@@ -1404,6 +1410,22 @@ void setToUnicode(QPDF& qpdf, QPDFObjectHandle font, std::map<uint32_t, FT_ULong
     font.replaceKey("/ToUnicode", QPDFObjectHandle::newStream(&qpdf, cmap));
 }
 
+struct UnicodeScalar {
+    // A ToUnicode destination can pack a surrogate pair into one 32-bit value;
+    // FreeType indexes by the decoded scalar instead.
+    static uint32_t decode(uint32_t value) {
+        if (value <= 0xFFFF) return value;
+        uint32_t high = value >> 16, low = value & 0xFFFF;
+        if (high < 0xD800 || high > 0xDBFF || low < 0xDC00 || low > 0xDFFF) return 0;
+        return 0x10000 + ((high - 0xD800) << 10) + (low - 0xDC00);
+    }
+};
+
+// CIDs are two-byte codes for the Identity encodings this rewrite supports, so a
+// ToUnicode mapping outside that range cannot describe the document and is rejected
+// instead of being allowed to size the generated CIDToGIDMap.
+constexpr uint32_t kMaxCid = 0xFFFF;
+
 std::map<uint32_t, uint32_t> parseToUnicode(QPDFObjectHandle const& font) {
     std::map<uint32_t, uint32_t> map;
     auto stream = font.getKey("/ToUnicode");
@@ -1412,76 +1434,152 @@ std::map<uint32_t, uint32_t> parseToUnicode(QPDFObjectHandle const& font) {
     if (!data || !data->getSize()) return map;
     std::string text(reinterpret_cast<char const*>(data->getBuffer()), data->getSize());
 
-    auto hexAt = [&](size_t& pos, uint32_t& value) {
+    // PDF hex strings may interleave whitespace and pad an odd final digit with
+    // zero. The byte count decides whether the value can name a CID or a scalar.
+    auto hexAt = [&](size_t& pos, uint32_t& value, size_t& bytes) {
         if (pos >= text.size() || text[pos] != '<') return false;
         ++pos;
-        size_t start = pos;
-        while (pos < text.size() && text[pos] != '>') ++pos;
-        if (pos >= text.size() || pos == start || pos - start > 8) return false;
-        value = uint32_t(std::strtoul(text.substr(start, pos - start).c_str(), nullptr, 16));
+        std::string digits;
+        while (pos < text.size() && text[pos] != '>') {
+            unsigned char c = uint8_t(text[pos++]);
+            if (std::isspace(c)) continue;
+            if (!std::isxdigit(c) || digits.size() >= 8) return false;
+            digits += char(c);
+        }
+        if (pos >= text.size() || digits.empty()) return false;
         ++pos;
+        if (digits.size() % 2) digits += '0';
+        value = uint32_t(std::strtoul(digits.c_str(), nullptr, 16));
+        bytes = digits.size() / 2;
         return true;
+    };
+    auto validDestination = [](uint32_t value, size_t bytes) {
+        if (bytes <= 2) return true;
+        // Four bytes is a surrogate pair only when it decodes to a valid scalar.
+        return bytes == 4 && UnicodeScalar::decode(value) != 0;
     };
     auto skipSpace = [&](size_t& pos) {
         while (pos < text.size() && std::isspace(uint8_t(text[pos]))) ++pos;
     };
-    auto find = [&](std::string const& token, size_t from) { return text.find(token, from); };
 
-    size_t pos = find("beginbfchar", 0);
-    if (pos != std::string::npos) {
-        pos += std::strlen("beginbfchar");
-        size_t end = find("endbfchar", pos);
+    auto parseChars = [&](size_t pos, size_t end) {
         while (pos < end) {
             skipSpace(pos);
+            if (pos >= end) break;
             uint32_t code = 0;
-            if (!hexAt(pos, code)) {
-                ++pos;
-                continue;
-            }
+            size_t codeBytes = 0;
+            if (!hexAt(pos, code, codeBytes) || codeBytes > 2 || code > kMaxCid) return false;
             skipSpace(pos);
             uint32_t unicode = 0;
-            if (hexAt(pos, unicode)) map[code] = unicode;
+            size_t destinationBytes = 0;
+            if (!hexAt(pos, unicode, destinationBytes) ||
+                !validDestination(unicode, destinationBytes))
+                return false;
+            map[code] = unicode;
         }
-    }
-    pos = find("beginbfrange", 0);
-    if (pos != std::string::npos) {
-        pos += std::strlen("beginbfrange");
-        size_t end = find("endbfrange", pos);
+        return true;
+    };
+    auto parseRanges = [&](size_t pos, size_t end) {
         while (pos < end) {
             skipSpace(pos);
+            if (pos >= end) break;
             uint32_t low = 0;
-            if (!hexAt(pos, low)) {
-                ++pos;
-                continue;
-            }
+            size_t lowBytes = 0;
+            if (!hexAt(pos, low, lowBytes) || lowBytes > 2) return false;
             skipSpace(pos);
             uint32_t high = 0;
-            if (!hexAt(pos, high) || high < low) continue;
+            size_t highBytes = 0;
+            if (!hexAt(pos, high, highBytes) || highBytes > 2 || high < low || high > kMaxCid)
+                return false;
             skipSpace(pos);
             if (pos < end && text[pos] == '[') {
                 ++pos;
-                for (uint32_t code = low; code <= high; ++code) {
+                uint64_t expected = uint64_t(high) - low + 1;
+                for (uint64_t i = 0; i < expected; ++i) {
                     skipSpace(pos);
                     uint32_t unicode = 0;
-                    if (!hexAt(pos, unicode)) break;
-                    map[code] = unicode;
+                    size_t destinationBytes = 0;
+                    if (!hexAt(pos, unicode, destinationBytes) ||
+                        !validDestination(unicode, destinationBytes))
+                        return false;
+                    map[low + uint32_t(i)] = unicode;
                 }
-                while (pos < end && text[pos] != ']') ++pos;
-                if (pos < end) ++pos;
+                skipSpace(pos);
+                if (pos >= end || text[pos] != ']') return false;
+                ++pos;
             } else {
                 uint32_t unicode = 0;
-                if (!hexAt(pos, unicode)) continue;
-                for (uint32_t code = low; code <= high; ++code) map[code] = unicode + code - low;
+                size_t destinationBytes = 0;
+                if (!hexAt(pos, unicode, destinationBytes)) return false;
+                // Incrementing a packed surrogate pair has no defined meaning.
+                if (!validDestination(unicode, destinationBytes) || destinationBytes > 2)
+                    return false;
+                uint64_t base = unicode;
+                for (uint32_t code = low; code <= high; ++code) {
+                    uint64_t value = base + (code - low);
+                    if (value > 0x10FFFF) return false;
+                    map[code] = uint32_t(value);
+                }
             }
         }
+        return true;
+    };
+
+    size_t pos = 0;
+    while ((pos = text.find("beginbfchar", pos)) != std::string::npos) {
+        pos += std::strlen("beginbfchar");
+        size_t end = text.find("endbfchar", pos);
+        if (end == std::string::npos || !parseChars(pos, end)) return {};
+        pos = end + std::strlen("endbfchar");
+    }
+    pos = 0;
+    while ((pos = text.find("beginbfrange", pos)) != std::string::npos) {
+        pos += std::strlen("beginbfrange");
+        size_t end = text.find("endbfrange", pos);
+        if (end == std::string::npos || !parseRanges(pos, end)) return {};
+        pos = end + std::strlen("endbfrange");
     }
     return map;
+}
+
+std::set<uint32_t> widthCids(QPDFObjectHandle const& font) {
+    std::set<uint32_t> cids;
+    auto widths = font.getKey("/W");
+    if (!widths.isArray()) return cids;
+    auto items = widths.getArrayAsVector();
+    for (size_t i = 0; i < items.size();) {
+        if (!items[i].isInteger()) break;
+        long long first = items[i++].getIntValue();
+        if (first < 0 || first > static_cast<long long>(kMaxCid) || i >= items.size()) break;
+        if (items[i].isArray()) {
+            auto list = items[i++].getArrayAsVector();
+            for (size_t j = 0; j < list.size() && size_t(first) + j <= kMaxCid; ++j)
+                cids.insert(uint32_t(first + static_cast<long long>(j)));
+        } else if (items[i].isInteger()) {
+            long long last = items[i++].getIntValue();
+            if (i >= items.size()) break;
+            ++i;
+            if (last < first || last > static_cast<long long>(kMaxCid)) break;
+            for (uint32_t cid = uint32_t(first); cid <= uint32_t(last); ++cid) cids.insert(cid);
+        } else {
+            break;
+        }
+    }
+    return cids;
+}
+
+bool coversWidthCids(QPDFObjectHandle const& font,
+                     std::map<uint32_t, uint32_t> const& unicodeByCid) {
+    for (uint32_t cid : widthCids(font))
+        if (cid && !unicodeByCid.contains(cid)) return false;
+    return true;
 }
 
 bool cidGlyphOrderMatches(FT_Face face, std::map<uint32_t, uint32_t> const& unicodeByCid) {
     if (unicodeByCid.empty() || FT_Select_Charmap(face, FT_ENCODING_UNICODE)) return false;
     for (auto const& [cid, unicode] : unicodeByCid) {
-        if (FT_Get_Char_Index(face, unicode) != cid) return false;
+        uint32_t scalar = UnicodeScalar::decode(unicode);
+        if (!scalar || FT_Get_Char_Index(face, scalar) != cid) return false;
     }
     return true;
 }
@@ -1546,7 +1644,7 @@ QPDFObjectHandle newDescriptor(QPDF& qpdf, QPDFObjectHandle font, FT_Face face, 
 
 EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
                             std::vector<FontSource> const& sources, bool onlyMissing,
-                            FILE* out = nullptr) {
+                            FILE* out = nullptr, bool existingOnly = false) {
     struct Programs : std::vector<FontProgram> {
         FT_Library lib = nullptr;
         ~Programs() {
@@ -1653,6 +1751,12 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
             if (subtype.isName() && subtype.getName() == "/Type3") continue;
             auto& program = programs[source - sources.begin()];
             if (!program.usable) continue;
+            auto descriptor = target.getKey("/FontDescriptor");
+            bool hasProgram = descriptor.isDictionary() &&
+                              (descriptor.hasKey("/FontFile") || descriptor.hasKey("/FontFile2") ||
+                               descriptor.hasKey("/FontFile3"));
+            if (existingOnly && !hasProgram) continue;
+            if (hasProgram && onlyMissing) continue;
             if (cid && program.kind == ProgramKind::Type1) {
                 return {nullptr, "a Type 1 program cannot back a CIDFont: " + fontName, -4};
             }
@@ -1665,22 +1769,35 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
                 return {nullptr,
                         "MacExpertEncoding fonts cannot be substituted safely: " + fontName, -4};
             }
-            auto descriptor = target.getKey("/FontDescriptor");
-            bool hasProgram = descriptor.isDictionary() &&
-                              (descriptor.hasKey("/FontFile") || descriptor.hasKey("/FontFile2") ||
-                               descriptor.hasKey("/FontFile3"));
-            if (hasProgram && onlyMissing) continue;
             auto cidMap = target.getKey("/CIDToGIDMap");
             bool identityCidMap = cidMap.isNull() || cidMap.isNameAndEquals("/Identity");
+            bool identityEncoding = font.getKey("/Encoding").isNameAndEquals("/Identity-H") ||
+                                    font.getKey("/Encoding").isNameAndEquals("/Identity-V");
             std::map<uint32_t, uint32_t> cidUnicode;
+            std::map<uint32_t, FT_UInt> cidGlyph;
             bool cidRemap = false;
             if (cid && !hasProgram && onlyMissing) {
-                if (!identityCidMap) continue;
+                // ToUnicode keys are character codes, which equal CIDs only for
+                // the Identity encodings this rewrite can remap.
+                if (!identityCidMap || !identityEncoding) continue;
                 cidUnicode = parseToUnicode(font);
-                if (cidUnicode.empty()) continue;
-                bool sameOrder = cidGlyphOrderMatches(program.face, cidUnicode);
-                if (!sameOrder && program.kind != ProgramKind::TrueType) continue;
-                cidRemap = !sameOrder;
+                if (cidUnicode.empty() || !coversWidthCids(target, cidUnicode)) continue;
+                if (!cidGlyphOrderMatches(program.face, cidUnicode)) {
+                    if (program.kind != ProgramKind::TrueType) continue;
+                    // Every mapped CID must reach a glyph before the font is touched;
+                    // a partial map would silently turn uncovered CIDs into .notdef.
+                    for (auto const& [code, unicode] : cidUnicode) {
+                        uint32_t scalar = UnicodeScalar::decode(unicode);
+                        FT_UInt gid = scalar ? FT_Get_Char_Index(program.face, scalar) : 0;
+                        if (!gid) {
+                            cidGlyph.clear();
+                            break;
+                        }
+                        cidGlyph[code] = gid;
+                    }
+                    if (cidGlyph.size() != cidUnicode.size()) continue;
+                    cidRemap = true;
+                }
             }
             if (descriptor.isIndirect()) {
                 // A descriptor can be shared by a font that is not being
@@ -1741,23 +1858,21 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
                     target.replaceKey("/CIDToGIDMap", QPDFObjectHandle::newName("/Identity"));
                 if (!cid && glyf) pinTrueTypeMapping(*qpdf, target, program.face, symbolic);
             }
-            if (cid && glyf && !hasProgram &&
-                (font.getKey("/Encoding").isNameAndEquals("/Identity-H") ||
-                 font.getKey("/Encoding").isNameAndEquals("/Identity-V")) &&
-                identityCidMap) {
+            if (cid && glyf && identityEncoding && identityCidMap) {
                 std::map<uint32_t, FT_ULong> codes;
-                std::map<uint32_t, FT_UInt> gidByCid;
-                uint32_t maxCid = 0;
-                for (auto [code, u] : cidUnicode) {
-                    if (FT_UInt gid = FT_Get_Char_Index(program.face, u)) {
-                        codes[code] = u;
-                        gidByCid[code] = gid;
-                        maxCid = std::max(maxCid, code);
-                    }
+                if (!cidUnicode.empty()) {
+                    for (auto const& [code, unicode] : cidUnicode) codes[code] = unicode;
+                } else if (!hasProgram) {
+                    // Explicit replacement keeps the supplied program's glyph order, so
+                    // its own Unicode cmap is the only source for a missing ToUnicode.
+                    for (auto [gid, unicode] : unicodeByGlyph(program.face, symbolic))
+                        codes[gid] = unicode;
                 }
-                if (cidRemap && !gidByCid.empty()) {
+                if (cidRemap && !cidGlyph.empty()) {
+                    uint32_t maxCid = 0;
+                    for (auto const& [code, gid] : cidGlyph) maxCid = std::max(maxCid, code);
                     std::vector<uint8_t> map(2 * (size_t(maxCid) + 1), 0);
-                    for (auto [code, gid] : gidByCid) {
+                    for (auto const& [code, gid] : cidGlyph) {
                         map[2 * code] = uint8_t(gid >> 8);
                         map[2 * code + 1] = uint8_t(gid & 0xFF);
                     }
@@ -2203,6 +2318,45 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_optimize_ex(const uint8_t* input, int64_t in
     }
 }
 
+static int32_t embedFontsExport(const uint8_t* input, int64_t inputLen, int32_t count,
+                                const char* const* names, const uint8_t* const* fonts,
+                                const int64_t* fontLens, bool onlyMissing, bool existingOnly,
+                                uint8_t** output, int64_t* outputLen) {
+    try {
+        if (!input || inputLen <= 0 || count <= 0 || !names || !fonts || !fontLens || !output ||
+            !outputLen) {
+            return -1;
+        }
+        *output = nullptr;
+        *outputLen = 0;
+        std::vector<FontSource> sources;
+        for (int32_t i = 0; i < count; ++i) {
+            if (!names[i] || !*names[i] || !fonts[i] || fontLens[i] <= 0) return -1;
+            sources.push_back({names[i], {fonts[i], static_cast<size_t>(fontLens[i])}});
+        }
+        auto result = embedFonts(
+            [&](QPDF& qpdf) {
+                qpdf.processMemoryFile("font-in", reinterpret_cast<const char*>(input),
+                                       static_cast<size_t>(inputLen));
+            },
+            sources, onlyMissing, nullptr, existingOnly);
+        if (result.rc != 0) {
+            std::fprintf(stderr, "jpdfium qpdf embed fonts: %s\n", result.error.c_str());
+            return result.rc;
+        }
+        *outputLen = static_cast<int64_t>(result.buffer->getSize());
+        *output = static_cast<uint8_t*>(malloc(static_cast<size_t>(*outputLen)));
+        if (!*output) {
+            *outputLen = 0;
+            return -1;
+        }
+        std::memcpy(*output, result.buffer->getBuffer(), static_cast<size_t>(*outputLen));
+        return 0;
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
+    }
+}
+
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_embed_fonts(const uint8_t* input, int64_t inputLen,
                                                 int32_t count, const char* const* names,
                                                 const uint8_t* const* fonts,
@@ -2277,7 +2431,7 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_replace_font_stream(const uint8_t* input, in
     const char* names[1] = {baseFont};
     const uint8_t* fonts[1] = {fontData};
     const int64_t lens[1] = {fontLen};
-    return jpdfium_qpdf_embed_fonts(input, inputLen, 1, names, fonts, lens, 0, output, outputLen);
+    return embedFontsExport(input, inputLen, 1, names, fonts, lens, false, true, output, outputLen);
 }
 
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_optimize(const uint8_t* input, int64_t inputLen,

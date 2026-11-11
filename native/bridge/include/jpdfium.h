@@ -632,7 +632,8 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_force_version(const uint8_t* input, int64_t 
                                                   const char* version, uint8_t** output,
                                                   int64_t* outputLen);
 
-// Replace the stream behind a matching /BaseFont font descriptor.
+// Replace the stream behind a matching /BaseFont font descriptor that already
+// carries a font program. Fonts without a program are left untouched.
 // Retained for ABI compatibility; new code should use jpdfium_qpdf_embed_fonts.
 // Caller frees *output with jpdfium_free_buffer.
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_replace_font_stream(const uint8_t* input, int64_t inputLen,
