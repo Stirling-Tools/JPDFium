@@ -37,6 +37,8 @@ import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
+import java.util.Base64;
+import java.util.zip.GZIPInputStream;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -517,6 +519,8 @@ class FontNormalizerTest {
                 assertTrue(font.getNameAsString(COSName.BASE_FONT)
                                 .matches("[A-Z]{6}\\+FaceTwo-Regular"),
                         "a re-subset collection font must carry a deterministic subset tag");
+                assertEquals("H", new PDFTextStripper().getText(loaded).trim(),
+                        "the re-subset font program must still draw drawn glyphs");
             }
 
             FontNormalizer.Result second = FontNormalizer.normalizePage(doc, 0);
@@ -559,6 +563,8 @@ class FontNormalizerTest {
                         FontNormalizer.classify(cffBytes);
                 assertFalse(classification.sfnt(), "converted program must be a bare CFF");
                 assertTrue(classification.numGlyphs() > 1);
+                assertEquals("H", new PDFTextStripper().getText(loaded).trim(),
+                        "the converted bare Type1C font program must still draw drawn glyphs");
             }
 
             FontNormalizer.Result second = FontNormalizer.normalizePage(doc, 0);
@@ -596,6 +602,41 @@ class FontNormalizerTest {
             assertEquals(0, second.widthsRepaired());
             assertEquals(0, second.type1Converted());
             assertEquals(0, second.resubset());
+        }
+    }
+
+    @Test
+    void singlePurposeNormalizerCallsDoNotRewriteCidSetOrInvalidatePages() throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real native library");
+        // Start from a fully normalized CID PDF so ToUnicode and widths are already correct
+        byte[] basePdf;
+        try (PdfDocument initial = PdfDocument.open(cidTrueTypePdf("ABCDEF+LiberationSans", false))) {
+            FontNormalizer.normalizeAll(initial);
+            basePdf = initial.saveBytes();
+        }
+        // Inject a stale /CIDSet stream into the descriptor
+        byte[] pdfWithStaleCidSet;
+        try (PDDocument doc = Loader.loadPDF(basePdf)) {
+            COSDictionary descendant = cidDescendant(doc);
+            assertNotNull(descendant);
+            COSDictionary descriptor = (COSDictionary) descendant.getDictionaryObject(COSName.FONT_DESC);
+            assertNotNull(descriptor);
+            COSStream stale = new PDStream(doc, new ByteArrayInputStream(new byte[] {0})).getCOSObject();
+            descriptor.setItem(COSName.CID_SET, stale);
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            doc.save(out);
+            pdfWithStaleCidSet = out.toByteArray();
+        }
+
+        try (PdfDocument doc = PdfDocument.open(pdfWithStaleCidSet)) {
+            PdfPage page = doc.page(0);
+            int tuc = FontNormalizer.fixToUnicode(doc, 0);
+            assertEquals(0, tuc, "fixToUnicode should not report repairs when ToUnicode is already valid");
+            assertEquals(0, page.rotation(), "page must remain valid; /CIDSet was not touched by single-purpose call");
+
+            int widths = FontNormalizer.repairWidths(doc, 0);
+            assertEquals(0, widths, "repairWidths should not report repairs when widths are already valid");
+            assertEquals(0, page.rotation(), "page must remain valid; /CIDSet was not touched by single-purpose call");
         }
     }
 
@@ -1048,9 +1089,8 @@ class FontNormalizerTest {
     }
 
     private static byte[] gunzipBase64(String value) throws IOException {
-        byte[] compressed = java.util.Base64.getDecoder().decode(value);
-        try (java.util.zip.GZIPInputStream in = new java.util.zip.GZIPInputStream(
-                new ByteArrayInputStream(compressed))) {
+        byte[] compressed = Base64.getDecoder().decode(value);
+        try (GZIPInputStream in = new GZIPInputStream(new ByteArrayInputStream(compressed))) {
             return in.readAllBytes();
         }
     }
