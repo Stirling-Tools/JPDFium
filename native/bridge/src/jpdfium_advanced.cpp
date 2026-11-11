@@ -1221,6 +1221,7 @@ struct FnContentLexer {
     std::string_view data;
     size_t pos = 0;
     bool malformed = false;
+    int array_depth = 0;
 
     void skipSpace() {
         while (pos < data.size()) {
@@ -1378,16 +1379,28 @@ struct FnContentLexer {
     bool array(FnContentOperand& out) {
         if (pos >= data.size() || data[pos] != '[') return false;
         ++pos;
+        if (++array_depth > 32) {
+            malformed = true;
+            --array_depth;
+            return false;
+        }
         out.kind = FnContentOperand::Kind::Array;
         while (pos < data.size()) {
             skipSpace();
-            if (pos >= data.size()) return false;
+            if (pos >= data.size()) {
+                --array_depth;
+                return false;
+            }
             if (data[pos] == ']') {
                 ++pos;
+                --array_depth;
                 return true;
             }
             FnContentToken token;
-            if (!next(token)) return false;
+            if (!next(token)) {
+                --array_depth;
+                return false;
+            }
             if (!token.word) {
                 if (token.operand.kind == FnContentOperand::Kind::String) {
                     out.strings.push_back(token.operand.text);
@@ -1397,6 +1410,7 @@ struct FnContentLexer {
                 }
             }
         }
+        --array_depth;
         return false;
     }
 
@@ -1686,6 +1700,21 @@ static void fn_scan_resource_streams(QPDFObjectHandle const& resources,
     auto patterns = resources.getKey("/Pattern");
     if (patterns.isDictionary()) {
         for (auto const& entry : patterns.getDictAsMap()) scan_stream(entry.second, resources);
+    }
+
+    auto extgstates = resources.getKey("/ExtGState");
+    if (extgstates.isDictionary()) {
+        for (auto const& entry : extgstates.getDictAsMap()) {
+            auto const& gs = entry.second;
+            if (!gs.isDictionary()) continue;
+            auto smask = gs.getKey("/SMask");
+            if (!smask.isDictionary()) continue;
+            auto group = smask.getKey("/G");
+            if (!group.isStream()) continue;
+            auto group_resources = group.getDict().getKey("/Resources");
+            if (!group_resources.isDictionary()) group_resources = resources;
+            scan_stream(group, group_resources);
+        }
     }
 
     auto fonts = resources.getKey("/Font");
@@ -2206,7 +2235,8 @@ static void convert_cff_in_sfnt(QPDF& pdf, QPDFObjectHandle& target, QPDFObjectH
     cff_stream.getDict().replaceKey("/Subtype",
                                     QPDFObjectHandle::newName(cid ? "/CIDFontType0C" : "/Type1C"));
     descriptor.replaceKey("/FontFile3", cff_stream);
-    if (FT_Face reloaded = load_font_face(ft_lib, cff, 0)) face.reset(reloaded);
+    // Do not reload the FreeType face from `cff`: the buffer is destroyed when this
+    // function returns, which would leave the face pointing at freed memory.
     ++state.type1_converted;
     state.changed = true;
 }
@@ -2240,7 +2270,8 @@ static void convert_cff_in_sfnt(QPDF& pdf, QPDFObjectHandle& target, QPDFObjectH
  *    - Generates a deterministic 6-character uppercase tag (e.g., 'ABCDEF+FontName').
  *    - Updates /BaseFont in font and descendant dictionaries, and /FontName in descriptor.
  *    - Replaces /FontFile2 (TrueType) or /FontFile3 (OpenType/CFF) stream data and Length.
- *    - Reloads FreeType face with the new subset program and updates active CID tracking.
+ *    - Keeps the original FreeType face, whose backing buffer outlives this call, and updates
+ *      active CID tracking.
  *
  * @param pdf Document handle.
  * @param font Referring font dictionary handle.
@@ -2249,7 +2280,7 @@ static void convert_cff_in_sfnt(QPDF& pdf, QPDFObjectHandle& target, QPDFObjectH
  * @param stream Embedded font program stream handle.
  * @param data Decompressed raw bytes of the original font program.
  * @param face_index Face index in TTC collection, or 0 for standalone fonts.
- * @param face In-out FreeType face pointer; reloaded upon successful subsetting.
+ * @param face FreeType face pointer; not reloaded because the subset buffer is temporary.
  * @param cid True for 2-byte composite fonts; false for 1-byte simple fonts.
  * @param cid_to_gid /CIDToGIDMap stream handle (or /Identity).
  * @param cid_identity True if /CIDToGIDMap is /Identity.
@@ -2367,7 +2398,9 @@ static bool resubset_embedded_sfnt(QPDF& pdf, QPDFObjectHandle& font, QPDFObject
         replacement_dict.replaceKey("/Subtype", QPDFObjectHandle::newName("/OpenType"));
         descriptor.replaceKey("/FontFile3", replacement);
     }
-    if (FT_Face reloaded = load_font_face(ft_lib, subset, face_index)) face.reset(reloaded);
+    // Keep the original face: `subset` is destroyed when this function returns, so
+    // reloading from it would leave a dangling face buffer. The original face stays
+    // alive for the remainder of process_font() and still describes the glyphs.
     if (!cid) {
         std::string charset_str;
         char glyph_name[256];
@@ -2400,7 +2433,7 @@ static bool resubset_embedded_sfnt(QPDF& pdf, QPDFObjectHandle& font, QPDFObject
 static void repair_cidset_stream(QPDF& pdf, QPDFObjectHandle& font, QPDFObjectHandle& descriptor,
                                  bool did_resubset, bool have_active_cids,
                                  std::set<uint32_t> const& active_cids, FontNormalizeState& state) {
-    if (!descriptor.hasKey("/CIDSet") && !did_resubset) return;
+    if (!did_resubset && !have_active_cids) return;
     std::set<uint32_t> cids{0};
     bool complete = true;
     if (have_active_cids) {
@@ -2590,15 +2623,19 @@ static void process_font(QPDF& pdf, QPDFObjectHandle font, bool do_fix_tounicode
     }
 
     const bool full = do_fix_tounicode && do_repair_widths;
+    bool did_convert = false;
     if (full) {
+        const int32_t converted_before = state.type1_converted;
         convert_cff_in_sfnt(pdf, target, descriptor, face, cid, subtype_name, state);
+        did_convert = state.type1_converted != converted_before;
     }
     std::set<uint32_t> active_cids{0};
     bool have_active_cids = false;
     const bool did_resubset =
-        full && resubset_embedded_sfnt(pdf, font, target, descriptor, stream, data, face_index,
-                                       face, cid, cid_to_gid, cid_identity, simple_glyphs, usage,
-                                       active_cids, have_active_cids, state);
+        full && !did_convert &&
+        resubset_embedded_sfnt(pdf, font, target, descriptor, stream, data, face_index, face, cid,
+                               cid_to_gid, cid_identity, simple_glyphs, usage, active_cids,
+                               have_active_cids, state);
     if (cid && full) {
         repair_cidset_stream(pdf, font, descriptor, did_resubset, have_active_cids, active_cids,
                              state);

@@ -578,7 +578,12 @@ class FontNormalizerTest {
     @Test
     void normalizeAllRepairsCidSetBitsetFromDrawnCids() throws Exception {
         assumeTrue(NativeRuntime.isFull(), "needs real native library");
-        byte[] pdf = cidTrueTypePdf("ABCDEF+LiberationSans", true);
+        // A valid /CIDSet that marks CID 0, the drawn CID 36, and the unreferenced
+        // CID 50. Subsetting is skipped for the already-tagged font, so the
+        // normalizer must preserve this stream instead of replacing it with the
+        // drawn-only CID set.
+        byte[] validCidSet = new byte[] {(byte) 0x80, 0, 0, 0, 0x08, 0, 0x20};
+        byte[] pdf = cidTrueTypePdf("ABCDEF+LiberationSans", validCidSet);
 
         try (PdfDocument doc = PdfDocument.open(pdf)) {
             FontNormalizer.Result first = FontNormalizer.normalizeAll(doc);
@@ -592,9 +597,8 @@ class FontNormalizerTest {
                 COSDictionary descriptor =
                         (COSDictionary) descendant.getDictionaryObject(COSName.FONT_DESC);
                 assertNotNull(descriptor);
-                assertArrayEquals(new byte[] {(byte) 0x80, 0, 0, 0, 0x08},
-                        streamBytes(descriptor, COSName.CID_SET),
-                        "/CIDSet must mark CID 0 (.notdef) and the drawn CID 36");
+                assertArrayEquals(validCidSet, streamBytes(descriptor, COSName.CID_SET),
+                        "/CIDSet must be preserved and not overwritten with drawn-only CIDs");
             }
 
             FontNormalizer.Result second = FontNormalizer.normalizeAll(doc);
@@ -610,7 +614,7 @@ class FontNormalizerTest {
         assumeTrue(NativeRuntime.isFull(), "needs real native library");
         // Start from a fully normalized CID PDF so ToUnicode and widths are already correct
         byte[] basePdf;
-        try (PdfDocument initial = PdfDocument.open(cidTrueTypePdf("ABCDEF+LiberationSans", false))) {
+        try (PdfDocument initial = PdfDocument.open(cidTrueTypePdf("ABCDEF+LiberationSans", null))) {
             FontNormalizer.normalizeAll(initial);
             basePdf = initial.saveBytes();
         }
@@ -890,14 +894,14 @@ class FontNormalizerTest {
      * {@code /ToUnicode} and the descendant's {@code /W} removed. CID and GID are identical.
      */
     private static byte[] cidTrueTypePdf() throws IOException {
-        return cidTrueTypePdf("LiberationSans", false);
+        return cidTrueTypePdf("LiberationSans", null);
     }
 
     /**
      * Builds an Identity-H CIDFontType2 PDF. {@code baseFont} may carry a subset
-     * tag, and {@code withCidSet} adds a deliberately wrong /CIDSet stream.
+     * tag, and {@code cidSet} adds an existing /CIDSet stream when non-null.
      */
-    private static byte[] cidTrueTypePdf(String baseFont, boolean withCidSet)
+    private static byte[] cidTrueTypePdf(String baseFont, byte[] cidSet)
             throws IOException {
         byte[] program = liberationSansBytes();
         try (PDDocument doc = new PDDocument()) {
@@ -918,9 +922,9 @@ class FontNormalizerTest {
                     .getCOSObject();
             fontFile.setInt(COSName.LENGTH1, program.length);
             descriptor.setItem(COSName.FONT_FILE2, fontFile);
-            if (withCidSet) {
+            if (cidSet != null) {
                 COSStream stale = new PDStream(doc,
-                        new ByteArrayInputStream(new byte[] {0})).getCOSObject();
+                        new ByteArrayInputStream(cidSet)).getCOSObject();
                 descriptor.setItem(COSName.CID_SET, stale);
             }
 
