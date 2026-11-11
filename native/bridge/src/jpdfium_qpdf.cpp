@@ -2712,12 +2712,13 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
                             if (map && (map->getSize() % 2) == 0) {
                                 auto const* bytes =
                                     reinterpret_cast<unsigned char const*>(map->getBuffer());
-                                for (size_t cid = 0; cid < map->getSize() / 2 && cid <= kMaxCid;
-                                     ++cid) {
-                                    uint32_t gid =
-                                        (uint32_t(bytes[2 * cid]) << 8) | bytes[2 * cid + 1];
+                                for (size_t candidate = 0;
+                                     candidate < map->getSize() / 2 && candidate <= kMaxCid;
+                                     ++candidate) {
+                                    uint32_t gid = (uint32_t(bytes[2 * candidate]) << 8) |
+                                                   bytes[2 * candidate + 1];
                                     if (gid < static_cast<uint32_t>(program.face->num_glyphs))
-                                        activeCids.insert(static_cast<uint32_t>(cid));
+                                        activeCids.insert(static_cast<uint32_t>(candidate));
                                 }
                                 cidSetComplete = true;
                             }
