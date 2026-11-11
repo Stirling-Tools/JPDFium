@@ -3374,7 +3374,6 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
                     }
                 }
                 if (!activeCids.empty()) updateCidSet(*qpdf, descriptor, activeCids);
-                }
             }
             openType |= kind == ProgramKind::OpenType;
             ++embedded;
