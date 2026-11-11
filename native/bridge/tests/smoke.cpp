@@ -286,6 +286,21 @@ static void runFontEncodingChecks() {
     CHECK(unicodeForGlyphName("A") == 0x41, "unicode A");
     CHECK(unicodeForGlyphName("Euro") == 0x20AC, "unicode Euro");
     CHECK(unicodeForGlyphName("nonexistent_glyph_xyz") == 0, "unicode unknown");
+    CHECK(unicodeForGlyphName("uFACE") == 0xFACE, "unicode uFACE");
+    CHECK(unicodeForGlyphName("uface") == 0, "unicode uface is not a hex name");
+    CHECK(unicodeForGlyphName("uni0041") == 0x41, "unicode uni0041");
+
+    auto dalet = unicodeSequenceForGlyphName("dalethatafpatah");
+    CHECK(dalet.size() == 2 && dalet[0] == 0x5D3 && dalet[1] == 0x5B2,
+          "AGL dalethatafpatah sequence");
+    auto lamed = unicodeSequenceForGlyphName("lamedholamdagesh");
+    CHECK(lamed.size() == 3 && lamed[0] == 0x5DC && lamed[1] == 0x5B9 &&
+              lamed[2] == 0x5BC,
+          "AGL lamedholamdagesh sequence");
+    auto rehyeh = unicodeSequenceForGlyphName("rehyehaleflamarabic");
+    CHECK(rehyeh.size() == 4 && rehyeh[0] == 0x631 && rehyeh[1] == 0xFEF3 &&
+              rehyeh[2] == 0xFE8E && rehyeh[3] == 0x644,
+          "AGL rehyehaleflamarabic sequence");
 }
 
 }  // namespace

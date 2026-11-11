@@ -3,6 +3,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstdint>
 #include <cstdlib>
@@ -80,6 +81,16 @@ inline bool allHex(std::string const& value, size_t start, size_t end) {
     return true;
 }
 
+// AGL uXXXX/uniXXXX names require uppercase hex. Accepting lowercase makes
+// ordinary names such as "uface" collide with U+FACE.
+inline bool allUpperHex(std::string const& value, size_t start, size_t end) {
+    for (size_t i = start; i < end; ++i) {
+        char c = value[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F'))) return false;
+    }
+    return true;
+}
+
 inline bool isSurrogate(uint32_t value) {
     return value >= 0xD800 && value <= 0xDFFF;
 }
@@ -92,7 +103,7 @@ inline uint32_t unicodeForGlyphName(std::string const& raw_name) {
     std::string name = detail::stripGlyphVariant(raw_name);
     if (name.size() == 1) return static_cast<uint8_t>(name[0]);
     if (name.size() >= 5 && name.size() <= 7 && name[0] == 'u') {
-        if (detail::allHex(name, 1, name.size())) {
+        if (detail::allUpperHex(name, 1, name.size())) {
             uint32_t value = static_cast<uint32_t>(std::strtoul(name.c_str() + 1, nullptr, 16));
             if (value <= 0x10FFFF && !detail::isSurrogate(value)) return value;
         }
@@ -129,6 +140,18 @@ inline std::vector<uint32_t> unicodeSequenceForGlyphName(std::string const& raw_
             sequence.push_back(value);
         }
         return sequence;
+    }
+    // AGL sequence names such as dalethatafpatah.
+    auto const* seq_first = std::begin(kAdobeGlyphSequences);
+    auto const* seq_last = std::end(kAdobeGlyphSequences);
+    auto seq_it = std::lower_bound(
+        seq_first, seq_last, name,
+        [](AdobeGlyphSequence const& entry, std::string const& value) {
+            return std::strcmp(entry.name, value.c_str()) < 0;
+        });
+    if (seq_it != seq_last && name == seq_it->name) {
+        return std::vector<uint32_t>(seq_it->unicode.begin(),
+                                     seq_it->unicode.begin() + seq_it->length);
     }
     // Ligature names: resolve each '_'-separated component.
     if (name.find('_') != std::string::npos) {
