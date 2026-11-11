@@ -493,6 +493,36 @@ class PdfFontEmbedderTest {
         assertCidSubstituteUnresolvedForCode("<0001> <0041>", 2, 1, 2);
     }
 
+    @Test
+    void cidSubstituteIgnoresWidthEntriesForUndrawnCids() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
+        FontProgram source = findEmbeddedFont(
+                Files.readAllBytes(Path.of(PdfFontEmbedderTest.class
+                        .getResource("/pdfs/general/basic-text.pdf").toURI())), "ArialMT");
+        assertNotNull(source, "fixture must contain ArialMT");
+        Path dir = Files.createTempDirectory("jpdfium-cid-unused-width");
+        try {
+            Files.write(dir.resolve(source.baseName() + ".ttf"), source.data());
+            byte[] input = identityCidPdfWithCode(
+                    source.baseName(), "<0001> <0041>", 1, 1, 2);
+            PdfFontEmbedder.Result result = PdfFontEmbedder.embedMissing(input, dir);
+            assertTrue(result.embedded().contains(source.baseName()),
+                    "an unused /W entry must not block a used CID: " + result);
+            assertTrue(result.unresolved().isEmpty(), "unresolved: " + result.unresolved());
+            try (PDDocument pdf = Loader.loadPDF(result.pdf())) {
+                assertTrue(identityCidDescendant(pdf)
+                                .getCOSDictionary(COSName.FONT_DESC)
+                                .containsKey(COSName.FONT_FILE2),
+                        "the substitute program must be installed");
+            }
+        } finally {
+            try (var files = Files.list(dir)) {
+                for (Path file : files.toList()) Files.deleteIfExists(file);
+            }
+            Files.deleteIfExists(dir);
+        }
+    }
+
     private static void assertCidSubstituteUnresolved(
             String toUnicodeBody, int... widthCids) throws Exception {
         assertCidSubstituteUnresolvedForCode(toUnicodeBody, 1, widthCids);
