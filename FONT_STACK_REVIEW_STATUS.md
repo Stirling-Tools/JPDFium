@@ -25,7 +25,7 @@ This file records what was **verified**, not what a previous tracker claimed.
 | `compileJava` / `compileTestJava` | PASS |
 | `clang-format --dry-run --Werror` | PASS |
 | AGL table vs official `glyphlist.txt` | 4,200 single-scalar + 81 sequences, 0 missing |
-| veraPDF 2b on repaired `issue20065.pdf` | no font-rule failures; only `6.6.4-1`, `6.2.4.3-4` |
+| veraPDF 2b on repaired `issue20065.pdf` | no font-rule failures; `6.2.11.4.2-2` (CIDSet) and `6.2.11.5-1` (widths) pass; only `6.6.4-1`, `6.2.4.3-4` remain |
 | Simple TrueType compression (`LiberationSans`, 11 glyphs) | 212,243 B → 6,591 B, text and render identical |
 
 The round-trip suite is the important one: it re-embeds stripped programs across
