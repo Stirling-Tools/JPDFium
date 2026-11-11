@@ -2176,9 +2176,6 @@ static void repair_cid_font_widths(QPDF& pdf, QPDFObjectHandle& font, QPDFObject
     // Vertical writing uses /DW2 and /W2, not horizontal /W.
     if (font.getKey("/Encoding").isNameAndEquals("/Identity-V")) return;
 
-    QPDFObjectHandle dw = target.getKey("/DW");
-    const int default_dw =
-        dw.isNumber() ? static_cast<int>(std::lround(dw.getNumericValue())) : 1000;
     // /W is keyed by CID, not GID.
     std::map<uint32_t, FT_UInt> cid_gid;
     if (cid_to_gid.isStream()) {
