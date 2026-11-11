@@ -166,6 +166,28 @@ JPDFium does not create signatures, verify cryptographic signatures, or validate
 
 Whether an existing signature remains valid across a save is not determined by JPDFium. Because `save()` performs a full rewrite, verify signatures yourself after any save.
 
+## Fonts
+
+`PdfFontAuditor.audit(doc)` reports fonts that page content draws with, including text inside
+form XObjects and annotation appearances. `PdfFontAuditor.auditAll(doc)` also reports font
+dictionaries that no page draws with, such as unused page resources and AcroForm `/DR` fonts.
+The audit report distinguishes them by `FontInfo.pages()`: a resource-only font has an empty
+set. Type 3 fonts count as embedded because their glyph procedures are part of the document.
+
+`PdfFontEmbedder.embedMissing(pdf)` embeds every non-embedded font resource, including the
+resource-only ones. It resolves names against a bundled fallback set first, then the system
+font directories, or the directories passed as arguments. The bundled set is deterministic:
+Liberation Sans/Serif/Mono for Arial, Helvetica, Times and Courier; Carlito for Calibri;
+Caladea for Cambria; DejaVu for Verdana and Tahoma; Noto Sans Arabic; and Noto Sans SC for the
+common CJK family names and their legacy GBK byte spellings. A signed document is refused
+because the rewrite invalidates its signature. Fonts that have no program and no usable
+substitute stay in `Result.unresolved()`, and every requested name has a `FontStatus` with its
+source, OS/2 `fsType` and the reason it was not used. A font whose `fsType` forbids embedding
+is reported rather than embedded.
+
+`PdfFontEmbedder.diagnose(name)` performs the same resolution without rewriting a document,
+which is useful for reporting why a font would or would not be substituted.
+
 ## Save semantics
 
 `save()` writes a complete new file rather than appending a revision.
