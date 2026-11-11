@@ -86,7 +86,7 @@ public final class PdfFontEmbedder {
     /** Outcome of the file-backed embedding pass. */
     public record FileResult(List<String> embedded, List<String> unresolved) {}
 
-    private record Face(
+    record Face(
             Path path,
             String resource,
             int offset,
