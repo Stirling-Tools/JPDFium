@@ -43,7 +43,7 @@ constexpr uint16_t kWinAnsiHigh[32] = {
     0x2039, 0x152,  0x2022, 0x17D,  0x2022, 0x2022, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022,
     0x2013, 0x2014, 0x2DC,  0x2122, 0x161,  0x203A, 0x153,  0x2022, 0x17E,  0x178};
 
-enum class BaseEncoding { Standard, WinAnsi, MacRoman };
+enum class BaseEncoding : uint8_t { Standard, WinAnsi, MacRoman };
 
 inline uint32_t baseEncodingUnicode(BaseEncoding enc, int code) {
     if (code < 0x20 || code > 0xFF) return 0;
@@ -149,6 +149,17 @@ inline std::vector<uint32_t> unicodeSequenceForGlyphName(std::string const& raw_
     uint32_t value = unicodeForGlyphName(name);
     if (!value) return {};
     return {value};
+}
+
+inline const char* adobeGlyphNameForUnicode(uint32_t unicode) {
+    if (!unicode) return nullptr;
+    auto const* first = std::begin(kAdobeGlyphByUnicode);
+    auto const* last = std::end(kAdobeGlyphByUnicode);
+    auto it = std::lower_bound(
+        first, last, unicode,
+        [](AdobeGlyphName const& entry, uint32_t value) { return entry.unicode < value; });
+    if (it != last && it->unicode == unicode) return it->name;
+    return nullptr;
 }
 
 }  // namespace jpdfium_font_encoding

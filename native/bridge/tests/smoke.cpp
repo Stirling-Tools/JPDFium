@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "jpdfium.h"
+#include "jpdfium_font_encoding.h"
 
 namespace {
 
@@ -277,12 +278,24 @@ void runBoundaryChecks() {
     CHECK(jpdfium_doc_page_count(0, nullptr) != JPDFIUM_OK, "doc_page_count null args");
 }
 
+static void runFontEncodingChecks() {
+    using namespace jpdfium_font_encoding;
+    CHECK(std::strcmp(adobeGlyphNameForUnicode(0x41), "A") == 0, "AGL A");
+    CHECK(std::strcmp(adobeGlyphNameForUnicode(0x20AC), "Euro") == 0, "AGL Euro");
+    CHECK(adobeGlyphNameForUnicode(0) == nullptr, "AGL null");
+    CHECK(unicodeForGlyphName("A") == 0x41, "unicode A");
+    CHECK(unicodeForGlyphName("Euro") == 0x20AC, "unicode Euro");
+    CHECK(unicodeForGlyphName("nonexistent_glyph_xyz") == 0, "unicode unknown");
+}
+
 }  // namespace
 
 int main() {
     // PDFium contract: FPDF_InitLibrary must run before any other FPDF_*
     // call (the bridge relies on this from the JVM side too).
     CHECK(jpdfium_init() == JPDFIUM_OK, "jpdfium_init");
+
+    runFontEncodingChecks();
 
     if (isRealBridge()) {
         std::puts("native_smoke: real bridge detected, running boundary checks too");
