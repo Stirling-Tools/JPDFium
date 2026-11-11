@@ -1270,11 +1270,13 @@ SimpleEncoding parseEncoding(QPDFObjectHandle const& font) {
     int code = 0;
     for (auto& item :
          differences.isArray() ? differences.getArrayAsVector() : std::vector<QPDFObjectHandle>{}) {
-        if (item.isInteger())
+        if (item.isInteger()) {
             code = item.getIntValueAsInt();
-        else if (item.isName()) {
+        } else if (item.isName()) {
             if (code >= 0 && code <= 255) enc.differences[code] = item.getName().substr(1);
-            ++code;
+            // A code beyond the single-byte range is already unusable; advancing it
+            // further can overflow when a malformed producer writes INT_MAX.
+            if (code < 256) ++code;
         }
     }
     return enc;
@@ -1315,14 +1317,15 @@ void addWidths(QPDFObjectHandle font, FT_Face face, bool symbolic) {
 }
 
 bool reachesSameGlyphs(FT_Library lib, std::string const& subset, FT_Face original,
-                       SimpleEncoding const& enc) {
+                       SimpleEncoding const& enc, bool symbolic = false) {
     FT_Face face = nullptr;
     if (subset.empty() || FT_New_Memory_Face(lib, reinterpret_cast<const FT_Byte*>(subset.data()),
                                              FT_Long(subset.size()), 0, &face))
         return false;
     bool same = true;
     for (int code = 0; same && code < 256; ++code)
-        same = glyphForCode(face, code, false, enc) == glyphForCode(original, code, false, enc);
+        same =
+            glyphForCode(face, code, symbolic, enc) == glyphForCode(original, code, symbolic, enc);
     FT_Done_Face(face);
     return same;
 }
@@ -2168,6 +2171,8 @@ CidScanResult usedCidsForFont(QPDF& qpdf, QPDFObjectHandle const& target, bool t
                 }
             };
             std::string pageContent;
+            size_t pageContentBytes = 0;
+            constexpr size_t kMaxPageContent = 64u * 1024u * 1024u;
             bool contentsComplete = true;
             for (auto& stream : streams) {
                 if (!stream.isStream()) {
@@ -2177,9 +2182,18 @@ CidScanResult usedCidsForFont(QPDF& qpdf, QPDFObjectHandle const& target, bool t
                 try {
                     auto data = stream.getStreamData(qpdf_dl_generalized);
                     if (data && data->getSize()) {
-                        if (!pageContent.empty()) pageContent.push_back('\n');
+                        size_t separator = pageContent.empty() ? 0 : 1;
+                        if (data->getSize() > kMaxPageContent - pageContentBytes - separator) {
+                            // Joining is only an optimization for scanners that need
+                            // tokens to span stream boundaries. Past the cap, stop
+                            // accumulating and let the /W fallback handle the font.
+                            contentsComplete = false;
+                            break;
+                        }
+                        if (separator) pageContent.push_back('\n');
                         pageContent.append(reinterpret_cast<char const*>(data->getBuffer()),
                                            data->getSize());
+                        pageContentBytes += data->getSize() + separator;
                     }
                 } catch (...) {
                     contentsComplete = false;
@@ -2591,9 +2605,12 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
                     if (!cff.empty()) glyphs.clear();
                 }
                 if (!cff.empty()) {
-                    kind = ProgramKind::BareCff;
-                    subset = std::move(cff);
-                    pinTrueTypeMapping(*qpdf, target, program.face, symbolic);
+                    auto enc = parseEncoding(target);
+                    if (reachesSameGlyphs(lib, cff, program.face, enc, symbolic)) {
+                        kind = ProgramKind::BareCff;
+                        subset = std::move(cff);
+                        pinTrueTypeMapping(*qpdf, target, program.face, symbolic);
+                    }
                 }
             }
             std::map<uint32_t, FT_UInt> remappedGlyph;
@@ -2632,6 +2649,12 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
                     } else {
                         subset.clear();
                         glyphs.clear();
+                        // The fallback installs the full program and retains the
+                        // mapping actually written below. Keeping the subset's
+                        // remap here would make CIDSet describe CIDs that the
+                        // installed mapping does not contain.
+                        remappedGlyph.clear();
+                        targetGlyphs.clear();
                         if (cidRemap) {
                             writeCidToGidMap(cidGlyph);
                         } else if (target.getKey("/CIDToGIDMap").isNull()) {
@@ -2663,6 +2686,7 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
                                   stream);
             if (cid) {
                 std::set<uint32_t> activeCids{0};
+                bool cidSetComplete = true;
                 if (!remappedGlyph.empty()) {
                     for (auto const& [c, gid] : remappedGlyph) {
                         (void)gid;
@@ -2673,12 +2697,41 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
                         (void)gid;
                         activeCids.insert(c);
                     }
-                } else {
+                } else if (identityCidMap) {
                     long maxGlyph = std::min<long>(program.face->num_glyphs - 1, kMaxCid);
                     for (long g = 0; g <= maxGlyph; ++g)
                         activeCids.insert(static_cast<uint32_t>(g));
+                } else {
+                    // A non-Identity /CIDToGIDMap names CIDs directly. Glyph
+                    // indices are not CIDs, so enumerate the retained map.
+                    cidSetComplete = false;
+                    auto retained = target.getKey("/CIDToGIDMap");
+                    if (retained.isStream()) {
+                        try {
+                            auto map = retained.getStreamData(qpdf_dl_generalized);
+                            if (map && (map->getSize() % 2) == 0) {
+                                auto const* bytes =
+                                    reinterpret_cast<unsigned char const*>(map->getBuffer());
+                                for (size_t cid = 0; cid < map->getSize() / 2 && cid <= kMaxCid;
+                                     ++cid) {
+                                    uint32_t gid =
+                                        (uint32_t(bytes[2 * cid]) << 8) | bytes[2 * cid + 1];
+                                    if (gid < static_cast<uint32_t>(program.face->num_glyphs))
+                                        activeCids.insert(static_cast<uint32_t>(cid));
+                                }
+                                cidSetComplete = true;
+                            }
+                        } catch (...) {
+                        }
+                    }
                 }
-                updateCidSet(*qpdf, descriptor, activeCids);
+                if (cidSetComplete) {
+                    updateCidSet(*qpdf, descriptor, activeCids);
+                } else {
+                    // A wrong CIDSet is worse than a missing one: validators
+                    // would see a bitmap that contradicts the installed program.
+                    descriptor.removeKey("/CIDSet");
+                }
             }
             openType |= kind == ProgramKind::OpenType;
             ++embedded;
