@@ -129,6 +129,39 @@ public final class QpdfLib {
         return EMBED_FONTS_HANDLE != null;
     }
 
+    /** True when this native build can inventory every font resource. */
+    public static boolean isFontInventorySupported() {
+        return INSPECT_FONTS_HANDLE != null;
+    }
+
+    /**
+     * Every font dictionary in the document as a JSON array, including fonts that only appear
+     * in unused resource dictionaries or AcroForm {@code /DR}. Returns {@code null} when the
+     * native build cannot inventory fonts or the document cannot be parsed.
+     */
+    public static String inspectFonts(byte[] input) {
+        if (INSPECT_FONTS_HANDLE == null || input == null || input.length == 0) return null;
+        Semaphore held = acquireSlotOrThrow("font inspection");
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment jsonPtr = arena.allocate(ADDRESS);
+            int rc = (int) INSPECT_FONTS_HANDLE.invokeExact(
+                    arena.allocateFrom(JAVA_BYTE, input), (long) input.length, jsonPtr);
+            if (rc != 0) return null;
+            MemorySegment json = jsonPtr.get(ADDRESS, 0);
+            if (json.equals(MemorySegment.NULL)) return null;
+            try {
+                return FfmHelper.readNativeString(json);
+            } finally {
+                JpdfiumH.jpdfium_free_string(json);
+            }
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw new JPDFiumException("qpdf font inspection failed", t);
+        } finally {
+            releaseSlot(held);
+        }
+    }
+
     /** Single-font form of {@link #embedFonts}, embedding into every font named {@code baseFont}. */
     public static byte[] replaceFontStream(byte[] input, String baseFont, byte[] fontData) {
         if (input == null || input.length == 0 || baseFont == null || baseFont.isBlank()
