@@ -287,7 +287,9 @@ static void runFontEncodingChecks() {
     CHECK(unicodeForGlyphName("Euro") == 0x20AC, "unicode Euro");
     CHECK(unicodeForGlyphName("nonexistent_glyph_xyz") == 0, "unicode unknown");
     CHECK(unicodeForGlyphName("uFACE") == 0xFACE, "unicode uFACE");
-    CHECK(unicodeForGlyphName("uface") == 0, "unicode uface is not a hex name");
+    CHECK(unicodeForGlyphName("uface") == 0, "unicode uface is a name, not a hex escape");
+    CHECK(unicodeForGlyphName("u00e9") == 0xE9, "unicode lowercase u00e9");
+    CHECK(unicodeForGlyphName("uABCD") == 0xABCD, "unicode uABCD");
     CHECK(unicodeForGlyphName("uni0041") == 0x41, "unicode uni0041");
 
     auto dalet = unicodeSequenceForGlyphName("dalethatafpatah");

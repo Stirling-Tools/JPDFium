@@ -81,14 +81,22 @@ inline bool allHex(std::string const& value, size_t start, size_t end) {
     return true;
 }
 
-// AGL uXXXX/uniXXXX names require uppercase hex. Accepting lowercase makes
-// ordinary names such as "uface" collide with U+FACE.
+// AGL uXXXX/uniXXXX names require uppercase hex, but older producers emitted
+// lowercase names such as u00e9. Accept a lowercase escape only when it
+// contains a decimal digit; that keeps u00e9 working while leaving ordinary
+// all-letter names such as "uface" alone.
 inline bool allUpperHex(std::string const& value, size_t start, size_t end) {
     for (size_t i = start; i < end; ++i) {
         char c = value[i];
         if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F'))) return false;
     }
     return true;
+}
+
+inline bool hasDecimalDigit(std::string const& value, size_t start, size_t end) {
+    for (size_t i = start; i < end; ++i)
+        if (value[i] >= '0' && value[i] <= '9') return true;
+    return false;
 }
 
 inline bool isSurrogate(uint32_t value) {
@@ -102,11 +110,13 @@ inline bool isSurrogate(uint32_t value) {
 inline uint32_t unicodeForGlyphName(std::string const& raw_name) {
     std::string name = detail::stripGlyphVariant(raw_name);
     if (name.size() == 1) return static_cast<uint8_t>(name[0]);
-    if (name.size() >= 5 && name.size() <= 7 && name[0] == 'u') {
-        if (detail::allUpperHex(name, 1, name.size())) {
-            uint32_t value = static_cast<uint32_t>(std::strtoul(name.c_str() + 1, nullptr, 16));
-            if (value <= 0x10FFFF && !detail::isSurrogate(value)) return value;
-        }
+    if (name.size() >= 5 && name.size() <= 7 && name[0] == 'u' &&
+        detail::allHex(name, 1, name.size())) {
+        const uint32_t value =
+            static_cast<uint32_t>(std::strtoul(name.c_str() + 1, nullptr, 16));
+        const bool unambiguous = detail::allUpperHex(name, 1, name.size()) ||
+                                 detail::hasDecimalDigit(name, 1, name.size());
+        if (unambiguous && value <= 0x10FFFF && !detail::isSurrogate(value)) return value;
     }
     if (name.size() == 7 && name.compare(0, 3, "uni") == 0) {
         if (detail::allHex(name, 3, 7)) {
