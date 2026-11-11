@@ -1662,6 +1662,7 @@ struct ContentLexer {
     std::string const& data;
     size_t pos = 0;
     bool malformed = false;
+    int array_depth = 0;
 
     void skipSpace() {
         while (pos < data.size()) {
@@ -1799,16 +1800,28 @@ struct ContentLexer {
     bool array(ContentOperand& out) {
         if (pos >= data.size() || data[pos] != '[') return false;
         ++pos;
+        if (++array_depth > 32) {
+            malformed = true;
+            --array_depth;
+            return false;
+        }
         out.kind = ContentOperand::Kind::Array;
         while (pos < data.size()) {
             skipSpace();
-            if (pos >= data.size()) return false;
+            if (pos >= data.size()) {
+                --array_depth;
+                return false;
+            }
             if (data[pos] == ']') {
                 ++pos;
+                --array_depth;
                 return true;
             }
             ContentToken token;
-            if (!next(token)) return false;
+            if (!next(token)) {
+                --array_depth;
+                return false;
+            }
             if (!token.word) {
                 if (token.operand.kind == ContentOperand::Kind::String) {
                     out.strings.push_back(token.operand.text);
@@ -1818,6 +1831,7 @@ struct ContentLexer {
                 }
             }
         }
+        --array_depth;
         return false;
     }
 
@@ -2086,6 +2100,21 @@ void scanResourceStreams(QPDFObjectHandle const& resources, QPDFObjectHandle con
     auto patterns = resources.getKey("/Pattern");
     if (patterns.isDictionary()) {
         for (auto const& entry : patterns.getDictAsMap()) scanStream(entry.second, resources);
+    }
+
+    auto extGStates = resources.getKey("/ExtGState");
+    if (extGStates.isDictionary()) {
+        for (auto const& entry : extGStates.getDictAsMap()) {
+            auto gs = entry.second;
+            if (!gs.isDictionary()) continue;
+            auto smask = gs.getKey("/SMask");
+            if (!smask.isDictionary()) continue;
+            auto g = smask.getKey("/G");
+            if (!g.isStream()) continue;
+            auto gResources = g.getDict().getKey("/Resources");
+            if (!gResources.isDictionary()) gResources = resources;
+            scanStream(g, gResources);
+        }
     }
 
     auto fonts = resources.getKey("/Font");
