@@ -4,6 +4,7 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.StringReader;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.Charset;
@@ -32,7 +33,6 @@ import java.util.stream.Stream;
 
 import org.tukaani.xz.XZInputStream;
 
-import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.panama.QpdfLib;
 
@@ -85,7 +85,7 @@ public final class PdfFontEmbedder {
     /** Outcome of the file-backed embedding pass. */
     public record FileResult(List<String> embedded, List<String> unresolved) {}
 
-    private record Face(
+    record Face(
             Path path,
             String resource,
             int offset,
@@ -242,7 +242,7 @@ public final class PdfFontEmbedder {
         for (String name : missing) {
             if (!substitutable.getOrDefault(name, true)) {
                 statuses.add(new FontStatus(name, "", -1, false,
-                        "CID encoding cannot be rewritten safely"));
+                        "CID encoding or glyph order cannot be verified safely"));
                 continue;
             }
             String key = key(name);
@@ -349,6 +349,8 @@ public final class PdfFontEmbedder {
         List<Path> dirs = fontDirs.length == 0 ? List.of() : List.of(fontDirs);
         Map<String, Face> index = INDEXES.computeIfAbsent(dirs, PdfFontEmbedder::index);
         if (fontDirs.length == 0) return index;
+        // Caller-supplied directories are authoritative; the bundled pack is only
+        // a fallback when no directories were given.
         Map<String, Face> isolated = new HashMap<>(index);
         isolated.entrySet().removeIf(entry -> entry.getValue().resource() != null);
         return isolated;
@@ -361,9 +363,12 @@ public final class PdfFontEmbedder {
     /** File-backed variant that lets native qpdf read the input and write the output. */
     public static FileResult embedMissingTo(Path input, Path output, Path... fontDirs)
             throws IOException {
-        List<PdfFontAuditor.FontResource> resources = resources(input);
+        List<PdfFontAuditor.FontResource> resources =
+                PdfFontAuditor.unembeddedResources(input);
+        Set<String> names = new LinkedHashSet<>();
         Map<String, Boolean> substitutable = new HashMap<>();
         for (PdfFontAuditor.FontResource resource : resources) {
+            names.add(resource.baseName());
             substitutable.merge(resource.baseName(), safeToSubstitute(resource), Boolean::logicalAnd);
         }
         List<String> allMissing = resources.stream()
@@ -373,7 +378,7 @@ public final class PdfFontEmbedder {
         List<String> missing = allMissing.stream()
                 .filter(name -> substitutable.getOrDefault(name, true))
                 .toList();
-        Map<String, byte[]> found = programsFor(missing, fontDirs);
+        Map<String, byte[]> found = programsFor(missing, substitutable, fontDirs);
         if (found.isEmpty() || !QpdfLib.embedFontsToFile(input, output, found, true)) {
             Files.copy(input, output, StandardCopyOption.REPLACE_EXISTING);
             return new FileResult(List.of(), allMissing);
@@ -383,12 +388,14 @@ public final class PdfFontEmbedder {
                 allMissing.stream().filter(n -> !unresolved.contains(n)).toList(), unresolved);
     }
 
-    private static Map<String, byte[]> programsFor(List<String> missing, Path... fontDirs)
+    private static Map<String, byte[]> programsFor(
+            List<String> missing, Map<String, Boolean> substitutable, Path... fontDirs)
             throws IOException {
         Map<String, Face> index = indexFor(fontDirs);
         Map<String, byte[]> found = new LinkedHashMap<>();
         Map<Face, byte[]> programs = new HashMap<>();
         for (String name : missing) {
+            if (!substitutable.getOrDefault(name, true)) continue;
             Face face = resolve(index, key(name));
             if (face == null) continue;
             byte[] data = programs.get(face);
@@ -399,32 +406,8 @@ public final class PdfFontEmbedder {
     }
 
     private static List<String> nonEmbedded(Path pdf) {
-        return resources(pdf).stream()
-                .map(PdfFontAuditor.FontResource::baseName)
-                .distinct()
-                .toList();
-    }
-
-    private static List<PdfFontAuditor.FontResource> resources(Path pdf) {
-        try (PdfDocument doc = PdfDocument.open(pdf)) {
-            if (PdfFontAuditor.inventoryAvailable()) {
-                List<PdfFontAuditor.FontResource> all = PdfFontAuditor.inventory(doc);
-                if (!all.isEmpty()) {
-                    List<PdfFontAuditor.FontResource> resources = new ArrayList<>();
-                    for (PdfFontAuditor.FontResource resource : all) {
-                        if (!resource.baseName().isEmpty() && !resource.embedded()
-                                && !"Type3".equals(resource.subtype())) {
-                            resources.add(resource);
-                        }
-                    }
-                    return resources;
-                }
-            }
-            return PdfFontAuditor.audit(doc).nonEmbeddedFonts().stream()
-                    .map(font -> new PdfFontAuditor.FontResource(
-                            font.baseName(), "", "", false, false, false, false, "", Set.of(), ""))
-                    .toList();
-        }
+        return PdfFontAuditor.unembeddedResources(pdf).stream()
+                .map(PdfFontAuditor.FontResource::baseName).distinct().toList();
     }
 
     /** File-backed variant of {@link #embedMissing(byte[], Path...)}. */
@@ -571,40 +554,56 @@ public final class PdfFontEmbedder {
                     BUNDLED_FACES = Map.of();
                     return BUNDLED_FACES;
                 }
-                BufferedReader reader = new BufferedReader(new InputStreamReader(
-                        manifest, StandardCharsets.UTF_8));
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    if (line.isBlank() || line.startsWith("#")) continue;
-                    String[] columns = line.split("\t", 3);
-                    if (columns.length < 2) continue;
-                    String resource = columns[0].trim();
-                    String postScriptName = columns[1].trim();
-                    if (resource.isEmpty() || postScriptName.isEmpty()) continue;
-                    int fsType = -1;
-                    if (columns.length > 2) {
-                        try {
-                            fsType = Integer.parseInt(columns[2].trim());
-                        } catch (NumberFormatException malformed) {
-                            // Unknown durability is safer than failing the whole pack.
-                        }
-                    }
-                    Face face = new Face(null, "/fonts/" + resource, -1, 0, true, fsType);
-                    String faceKey = key(postScriptName);
-                    index.putIfAbsent(faceKey, face);
-                    for (List<String> group : METRIC_COMPATIBLE) {
-                        String family = group.stream().filter(faceKey::startsWith)
-                                .max((a, b) -> a.length() - b.length()).orElse(null);
-                        if (family == null) continue;
-                        String style = styleOf(faceKey.substring(family.length()));
-                        for (String member : group) index.putIfAbsent(member + style, face);
-                    }
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(
+                        manifest, StandardCharsets.UTF_8))) {
+                    parseBundledManifest(reader, index);
                 }
             } catch (IOException ignored) {
                 // No bundled pack means the system directories are the only source.
             }
             BUNDLED_FACES = Map.copyOf(index);
             return BUNDLED_FACES;
+        }
+    }
+
+    static Map<String, Face> parseBundledManifest(String manifest) {
+        Map<String, Face> index = new HashMap<>();
+        try (BufferedReader reader = new BufferedReader(new StringReader(manifest))) {
+            parseBundledManifest(reader, index);
+        } catch (IOException impossible) {
+            throw new AssertionError(impossible);
+        }
+        return index;
+    }
+
+    private static void parseBundledManifest(BufferedReader reader, Map<String, Face> index)
+            throws IOException {
+        String line;
+        while ((line = reader.readLine()) != null) {
+            if (line.isBlank() || line.startsWith("#")) continue;
+            String[] columns = line.split("\t", 3);
+            if (columns.length < 2) continue;
+            String resource = columns[0].trim();
+            String postScriptName = columns[1].trim();
+            if (resource.isEmpty() || postScriptName.isEmpty()) continue;
+            int fsType = -1;
+            if (columns.length > 2) {
+                try {
+                    fsType = Integer.parseInt(columns[2].trim());
+                } catch (NumberFormatException malformed) {
+                    // A malformed durability hint means "unknown", not a broken pack.
+                }
+            }
+            Face face = new Face(null, "/fonts/" + resource, -1, 0, true, fsType);
+            String faceKey = key(postScriptName);
+            index.putIfAbsent(faceKey, face);
+            for (List<String> group : METRIC_COMPATIBLE) {
+                String family = group.stream().filter(faceKey::startsWith)
+                        .max((a, b) -> a.length() - b.length()).orElse(null);
+                if (family == null) continue;
+                String style = styleOf(faceKey.substring(family.length()));
+                for (String member : group) index.putIfAbsent(member + style, face);
+            }
         }
     }
 
