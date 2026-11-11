@@ -15,7 +15,7 @@ This file records what was **verified**, not what a previous tracker claimed.
 | `./gradlew buildRealBridge` | PASS |
 | `native/build-real/native_smoke` | PASS |
 | `PdfCompressorTest` | 6 tests, 0 failures |
-| `PdfFontEmbedderTest` | 45 tests, 0 failures |
+| `PdfFontEmbedderTest` | 46 tests, 0 failures |
 | `FontNormalizerTest` | 28 tests, 0 failures |
 | `PdfFontInventoryTest` | 7 tests, 0 failures |
 | `PdfFontEmbedderRoundTripTest` local corpus | 368 tests, 0 failures, 201 assumption skips |
@@ -78,6 +78,22 @@ The previous tracker marked several items resolved that were still present in
 | Native pattern clamp | `XStep`/`YStep` bound check no longer uses floating-point equality (CodeQL warning removed). |
 | `CompressOptions` | Javadoc now matches the opt-in default (`subsetFonts=false`). |
 | Tests | Added PFB embedding, truncated TTC, symbolic-font refusal, plausible-width preservation, retained-subset CIDSet, two-page normalization, simple-font compression, and strict text/style round-trip checks. |
+
+## Stack review findings
+
+| Finding | Status |
+|---|---|
+| AGL table incomplete (4,200 vs 4,281 names) | Fixed. Multi-codepoint AGL sequences are stored and resolved; single-scalar table covers 4,200 and sequence entries cover the remaining 81. `native_smoke` checks `dalethatafpatah`, `lamedholamdagesh`, and `rehyehaleflamarabic`. |
+| `uface` accepted as U+FACE | Fixed. Only uppercase `uXXXX` is treated as a hex escape; `uface` returns 0 and `uFACE` returns U+FACE. |
+| CIDSet only written after re-subset | Fixed. `repair_cidset_stream` enumerates all CIDs present in the embedded program when no re-subset occurs, and writes retained CIDs after a re-subset. The repaired `issue20065.pdf` passes the veraPDF CIDSet font rule. |
+| Existing `/W` never corrected | Fixed. `repair_cid_font_widths` now compares existing entries for drawn CIDs against FreeType advances and repairs inconsistent entries; absent `/W` still covers drawn plus zero-advance CIDs. |
+| CJK predefined CMaps unresolved | Deliberately fail-closed. The resource stays in `unresolved`; `embedMissingStrict` throws. No unverified CMap decoding is attempted. |
+| Default compression mutates fonts without a gate | Fixed. `subsetFonts` defaults to false; when enabled, the compressor adopts a subset only if page count, extracted text, and a zero-MAD preview render all match, otherwise it rolls back. |
+| Already subset-tagged fonts skipped | Kept intentionally. Re-subsetting producer subsets is not enabled by default; doing so needs an opt-in with mapping verification and the same text/render gate. |
+| Simple subset output larger than service output | Improved: simple non-symbolic subsets drop `RETAIN_GIDS` and verify glyph names/advances. `GLYPH_NAMES` remains for viewer compatibility, so service parity is not claimed. |
+| Intentional producer widths overwritten | Fixed. Only missing, non-numeric, or non-positive simple widths are repaired; positive widths are preserved. |
+| Scanner budget and nested resources untested | Added a repeated-distinct-form test that drives the 2,048-stream scan budget and asserts fail-closed. Nested Type3/pattern traversal remains covered by corpus round-trips rather than a dedicated synthetic test. |
+| #250 fixture is standalone | Accepted; it is regression coverage, not a repair feature. |
 
 ## Cross-project corpus mapping
 

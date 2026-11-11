@@ -13,6 +13,7 @@ import org.apache.pdfbox.cos.COSInteger;
 import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.cos.COSStream;
 import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.graphics.form.PDFormXObject;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
@@ -90,6 +91,44 @@ class PdfFontEmbedderTest {
         assertTrue(result.embedded().isEmpty());
         assertEquals(List.of("Helvetica"), result.unresolved());
         assertArrayEquals(Files.readAllBytes(input), Files.readAllBytes(output));
+    }
+
+    @Test
+    void repeatedDistinctFormsExhaustTheScanBudgetAndFailClosed(@TempDir Path temp) throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
+        Path input = manyFormPage(temp.resolve("many-forms.pdf"), 2_100);
+
+        PdfFontEmbedder.Result result =
+                PdfFontEmbedder.embedMissing(Files.readAllBytes(input), liberationSansDir(temp));
+
+        assertTrue(result.unresolved().contains("Helvetica"),
+                "a scan that exhausts its stream budget must not claim success");
+    }
+
+    private static Path manyFormPage(Path target, int forms) throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage();
+            doc.addPage(page);
+            PDResources resources = new PDResources();
+            resources.put(COSName.getPDFName("F1"),
+                    new PDType1Font(Standard14Fonts.FontName.HELVETICA));
+            page.setResources(resources);
+            PDFormXObject[] xobjects = new PDFormXObject[forms];
+            for (int i = 0; i < forms; i++) {
+                PDStream stream = new PDStream(doc);
+                try (OutputStream out = stream.createOutputStream()) {
+                    out.write("q Q\n".getBytes(StandardCharsets.ISO_8859_1));
+                }
+                PDFormXObject form = new PDFormXObject(stream);
+                form.setBBox(new PDRectangle(0, 0, 10, 10));
+                xobjects[i] = form;
+            }
+            try (PDPageContentStream content = new PDPageContentStream(doc, page)) {
+                for (PDFormXObject form : xobjects) content.drawForm(form);
+            }
+            doc.save(target.toFile());
+        }
+        return target;
     }
 
     private static Path helveticaPage(Path target) throws IOException {
