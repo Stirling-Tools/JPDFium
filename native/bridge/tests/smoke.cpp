@@ -296,12 +296,11 @@ static void runFontEncodingChecks() {
     CHECK(dalet.size() == 2 && dalet[0] == 0x5D3 && dalet[1] == 0x5B2,
           "AGL dalethatafpatah sequence");
     auto lamed = unicodeSequenceForGlyphName("lamedholamdagesh");
-    CHECK(lamed.size() == 3 && lamed[0] == 0x5DC && lamed[1] == 0x5B9 &&
-              lamed[2] == 0x5BC,
+    CHECK(lamed.size() == 3 && lamed[0] == 0x5DC && lamed[1] == 0x5B9 && lamed[2] == 0x5BC,
           "AGL lamedholamdagesh sequence");
     auto rehyeh = unicodeSequenceForGlyphName("rehyehaleflamarabic");
-    CHECK(rehyeh.size() == 4 && rehyeh[0] == 0x631 && rehyeh[1] == 0xFEF3 &&
-              rehyeh[2] == 0xFE8E && rehyeh[3] == 0x644,
+    CHECK(rehyeh.size() == 4 && rehyeh[0] == 0x631 && rehyeh[1] == 0xFEF3 && rehyeh[2] == 0xFE8E &&
+              rehyeh[3] == 0x644,
           "AGL rehyehaleflamarabic sequence");
 }
 

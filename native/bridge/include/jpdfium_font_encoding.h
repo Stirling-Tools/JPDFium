@@ -112,8 +112,7 @@ inline uint32_t unicodeForGlyphName(std::string const& raw_name) {
     if (name.size() == 1) return static_cast<uint8_t>(name[0]);
     if (name.size() >= 5 && name.size() <= 7 && name[0] == 'u' &&
         detail::allHex(name, 1, name.size())) {
-        const uint32_t value =
-            static_cast<uint32_t>(std::strtoul(name.c_str() + 1, nullptr, 16));
+        const uint32_t value = static_cast<uint32_t>(std::strtoul(name.c_str() + 1, nullptr, 16));
         const bool unambiguous = detail::allUpperHex(name, 1, name.size()) ||
                                  detail::hasDecimalDigit(name, 1, name.size());
         if (unambiguous && value <= 0x10FFFF && !detail::isSurrogate(value)) return value;
@@ -154,11 +153,10 @@ inline std::vector<uint32_t> unicodeSequenceForGlyphName(std::string const& raw_
     // AGL sequence names such as dalethatafpatah.
     auto const* seq_first = std::begin(kAdobeGlyphSequences);
     auto const* seq_last = std::end(kAdobeGlyphSequences);
-    auto seq_it = std::lower_bound(
-        seq_first, seq_last, name,
-        [](AdobeGlyphSequence const& entry, std::string const& value) {
-            return std::strcmp(entry.name, value.c_str()) < 0;
-        });
+    auto seq_it = std::lower_bound(seq_first, seq_last, name,
+                                   [](AdobeGlyphSequence const& entry, std::string const& value) {
+                                       return std::strcmp(entry.name, value.c_str()) < 0;
+                                   });
     if (seq_it != seq_last && name == seq_it->name) {
         return std::vector<uint32_t>(seq_it->unicode.begin(),
                                      seq_it->unicode.begin() + seq_it->length);
