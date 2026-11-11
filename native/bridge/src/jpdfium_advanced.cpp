@@ -2514,8 +2514,7 @@ static void repair_cidset_stream(QPDF& pdf, QPDFObjectHandle& descriptor, FT_Fac
                                  QPDFObjectHandle& cid_to_gid, bool cid_identity,
                                  std::map<uint32_t, uint32_t> const& gid_to_cid,
                                  FontNormalizeState& state) {
-    std::set<uint32_t> cids =
-        cids_present_in_program(face, cid_to_gid, cid_identity, gid_to_cid);
+    std::set<uint32_t> cids = cids_present_in_program(face, cid_to_gid, cid_identity, gid_to_cid);
     if (cids.empty()) return;
     cids.insert(0);
 
