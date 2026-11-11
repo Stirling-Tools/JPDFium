@@ -100,16 +100,24 @@ class PdfFontInventoryTest {
     @Test
     void inventoryUsesCurrentDocumentAfterInMemoryEdit() throws Exception {
         assumeTrue(PdfFontAuditor.inventoryAvailable(), "font inventory not in this native build");
-        try (PdfDocument doc = PdfDocument.createEmpty()) {
+        byte[] emptyDocBytes;
+        try (PdfDocument empty = PdfDocument.createEmpty()) {
+            emptyDocBytes = empty.saveBytes();
+        }
+        try (PdfDocument doc = PdfDocument.open(emptyDocBytes)) {
+            assertEquals(0, PdfFontAuditor.inventory(doc).size(), "initial document has no fonts");
             MemorySegment rawPage = PdfPageEditor.newPage(doc.rawHandle(), 0, 612, 792);
-            MemorySegment text = PdfPageEditor.createTextObject(doc.rawHandle(), "Helvetica", 12);
-            assertTrue(PdfPageEditor.setText(text, "inventory current state"));
-            PdfPageEditor.insertObject(rawPage, text);
-            assertTrue(PdfPageEditor.generateContent(rawPage));
             try {
-                PageEditBindings.FPDF_ClosePage.invokeExact(rawPage);
-            } catch (Throwable t) {
-                throw new AssertionError("FPDF_ClosePage failed", t);
+                MemorySegment text = PdfPageEditor.createTextObject(doc.rawHandle(), "Helvetica", 12);
+                assertTrue(PdfPageEditor.setText(text, "inventory current state"));
+                PdfPageEditor.insertObject(rawPage, text);
+                assertTrue(PdfPageEditor.generateContent(rawPage));
+            } finally {
+                try {
+                    PageEditBindings.FPDF_ClosePage.invokeExact(rawPage);
+                } catch (Throwable t) {
+                    throw new AssertionError("FPDF_ClosePage failed", t);
+                }
             }
 
             Map<String, PdfFontAuditor.FontResource> fonts =
