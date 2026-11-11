@@ -6,6 +6,8 @@ import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.panama.AnnotationBindings;
 import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.PageEditBindings;
+import stirling.software.jpdfium.panama.QpdfLib;
+import stirling.software.jpdfium.util.NativeJsonParser;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
@@ -17,6 +19,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -85,6 +88,41 @@ public final class PdfFontAuditor {
             int embeddedCount,
             int nonEmbeddedCount
     ) {}
+
+    /**
+     * One font dictionary as stored in the PDF, independent of whether any page draws with it.
+     *
+     * @param baseName      {@code /BaseFont} without the leading slash
+     * @param subtype       {@code /Subtype} without the leading slash, e.g. {@code Type1}
+     * @param encoding      named encoding, {@code custom} for an encoding dictionary without
+     *                      {@code /BaseEncoding}, or empty
+     * @param embedded      the font descriptor or its CID descendant carries a readable font
+     *                      program
+     * @param hasDescriptor the font or its CID descendant has a {@code /FontDescriptor}
+     * @param cid           the font is a Type 0 font with a CID descendant
+     * @param hasToUnicode  the font has a readable {@code /ToUnicode} stream
+     * @param cidToGidMap   {@code Identity}, {@code stream}, or empty
+     * @param pages         page indices whose resource dictionaries reach this font; empty for
+     *                      fonts that only exist in unused resources or AcroForm {@code /DR}
+     * @param object        {@code "obj gen"} for an indirect font, empty for a direct one
+     */
+    public record FontResource(
+            String baseName,
+            String subtype,
+            String encoding,
+            boolean embedded,
+            boolean hasDescriptor,
+            boolean cid,
+            boolean hasToUnicode,
+            String cidToGidMap,
+            Set<Integer> pages,
+            String object
+    ) {
+        /** True when no page resource dictionary reaches this font. */
+        public boolean resourceOnly() {
+            return pages.isEmpty();
+        }
+    }
 
     /**
      * Check whether font auditing is supported by the loaded native library.
@@ -209,10 +247,190 @@ public final class PdfFontAuditor {
     }
 
     /**
-     * Check if any non-embedded fonts are used.
+     * Audit every font resource in the document, not only fonts drawn by page objects.
+     *
+     * <p>Resource-only fonts are reported with an empty {@link FontInfo#pages()} set, no family
+     * name, weight {@code -1}, flags {@code 0} and size {@code 0}. Type 3 fonts count as
+     * embedded because their glyph procedures live in the document.
+     *
+     * <p>When the native build cannot inventory resources, this falls back to
+     * {@link #audit(PdfDocument)}.
+     *
+     * @param doc open PDF document
+     * @return page and resource font audit
+     */
+    public static AuditReport auditAll(PdfDocument doc) {
+        AuditReport pageReport = audit(doc);
+        List<FontResource> resources = inventory(doc);
+        if (resources.isEmpty()) return pageReport;
+
+        Map<String, FontInfo> pageByName = new LinkedHashMap<>();
+        for (FontInfo font : pageReport.fonts()) pageByName.putIfAbsent(font.baseName(), font);
+
+        Map<String, ResourceAggregate> aggregate = new LinkedHashMap<>();
+        for (FontResource resource : resources) {
+            if (resource.baseName().isEmpty()) continue;
+            ResourceAggregate existing = aggregate.get(resource.baseName());
+            if (existing == null) {
+                aggregate.put(resource.baseName(), new ResourceAggregate(resource));
+            } else {
+                existing.add(resource);
+            }
+        }
+
+        // Page-audit names missing from the resource inventory are PDFium fallback objects, not
+        // font dictionaries the embedder can address; reporting them as unresolved would be
+        // noise. Inventory names remain authoritative for what actually exists in the file.
+        List<FontInfo> fonts = new ArrayList<>(aggregate.size());
+        List<FontInfo> nonEmbedded = new ArrayList<>();
+        for (ResourceAggregate agg : aggregate.values()) {
+            FontInfo page = pageByName.get(agg.baseName);
+            FontInfo font = agg.build(page);
+            fonts.add(font);
+            if (!font.embedded()) nonEmbedded.add(font);
+        }
+        return new AuditReport(
+                Collections.unmodifiableList(fonts),
+                Collections.unmodifiableList(nonEmbedded),
+                fonts.size(),
+                fonts.size() - nonEmbedded.size(),
+                nonEmbedded.size());
+    }
+
+    /**
+     * Check if any non-embedded font resources remain, including unused resource dictionaries
+     * and AcroForm {@code /DR}.
      */
     public static boolean hasNonEmbeddedFonts(PdfDocument doc) {
-        return !audit(doc).nonEmbeddedFonts().isEmpty();
+        return !auditAll(doc).nonEmbeddedFonts().isEmpty();
+    }
+
+    /** True when this native build can report document-wide font resources. */
+    public static boolean inventoryAvailable() {
+        return QpdfLib.isFontInventorySupported();
+    }
+
+    /**
+     * Inventory every font dictionary, including fonts that no page draws with.
+     *
+     * @param doc open PDF document
+     * @return fonts in file order, or an empty list when the native build cannot inventory
+     */
+    public static List<FontResource> inventory(PdfDocument doc) {
+        // sourceBytes() is the open-time snapshot. After an in-memory edit it no longer
+        // describes the document, so inventory the serialized current state instead.
+        byte[] source = doc.sourceBytes();
+        if (doc.isContentModified() || source == null) source = doc.saveBytes();
+        return source == null ? List.of() : inventoryBytes(source);
+    }
+
+    /**
+     * Names of every non-embedded font resource, including unused resource dictionaries and
+     * AcroForm {@code /DR}. Falls back to the page audit when resource inventory is unavailable.
+     */
+    static List<String> unembeddedNames(byte[] pdf) {
+        if (QpdfLib.isFontInventorySupported()) {
+            String json = QpdfLib.inspectFonts(pdf);
+            if (json != null) {
+                Set<String> names = new LinkedHashSet<>();
+                for (FontResource resource : parseInventory(json)) {
+                    if (resource.baseName().isEmpty() || resource.embedded()
+                            || "Type3".equals(resource.subtype())) continue;
+                    names.add(resource.baseName());
+                }
+                return List.copyOf(names);
+            }
+        }
+        try (PdfDocument doc = PdfDocument.open(pdf)) {
+            return audit(doc).nonEmbeddedFonts().stream()
+                    .map(FontInfo::baseName).distinct().toList();
+        } catch (Exception e) {
+            throw e instanceof JPDFiumException jpe ? jpe : new JPDFiumException(e);
+        }
+    }
+
+    static List<FontResource> inventoryBytes(byte[] pdf) {
+        String json = QpdfLib.inspectFonts(pdf);
+        return json == null ? List.of() : parseInventory(json);
+    }
+
+    private static List<FontResource> parseInventory(String json) {
+        if (json.length() <= 2) return List.of();
+        List<Map<String, String>> parsed = NativeJsonParser.parseArray(json);
+        List<FontResource> resources = new ArrayList<>(parsed.size());
+        for (Map<String, String> field : parsed) {
+            String baseName = field.getOrDefault("baseFont", "");
+            if (baseName.isEmpty()) continue;
+            resources.add(new FontResource(
+                    baseName,
+                    field.getOrDefault("subtype", ""),
+                    field.getOrDefault("encoding", ""),
+                    "true".equals(field.get("program")),
+                    "true".equals(field.get("descriptor")),
+                    "true".equals(field.get("cid")),
+                    "true".equals(field.get("toUnicode")),
+                    field.getOrDefault("cidToGid", ""),
+                    parsePages(field.get("pages")),
+                    field.getOrDefault("object", "")));
+        }
+        return resources;
+    }
+
+    private static Set<Integer> parsePages(String pages) {
+        if (pages == null || pages.isEmpty()) return Set.of();
+        Set<Integer> result = new TreeSet<>();
+        for (String token : pages.split(",")) {
+            int dash = token.indexOf('-');
+            try {
+                if (dash < 0) {
+                    result.add(Integer.parseInt(token));
+                } else {
+                    int start = Integer.parseInt(token.substring(0, dash));
+                    int end = Integer.parseInt(token.substring(dash + 1));
+                    for (int page = start; page <= end; page++) result.add(page);
+                }
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return Collections.unmodifiableSet(result);
+    }
+
+    private static final class ResourceAggregate {
+        private final String baseName;
+        private boolean embedded = true;
+        private boolean type3;
+        private final Set<Integer> pages = new TreeSet<>();
+
+        ResourceAggregate(FontResource first) {
+            baseName = first.baseName();
+            add(first);
+        }
+
+        void add(FontResource resource) {
+            embedded &= resource.embedded();
+            type3 |= "Type3".equals(resource.subtype());
+            pages.addAll(resource.pages());
+        }
+
+        FontInfo build(FontInfo page) {
+            boolean effectiveEmbedded = this.embedded || type3;
+            if (page == null) {
+                // Resource-only fonts have no descriptor to read flags from. Zero is
+                // "no flags", not "unknown", so bit tests cannot see every bit set.
+                return new FontInfo(baseName, "", effectiveEmbedded, -1, 0, 0, 0,
+                        Collections.unmodifiableSet(pages));
+            }
+            Set<Integer> usedPages = page.pages().isEmpty() ? pages : page.pages();
+            return new FontInfo(
+                    page.baseName(),
+                    page.familyName(),
+                    effectiveEmbedded,
+                    page.weight(),
+                    page.flags(),
+                    page.italicAngle(),
+                    page.fontDataSize(),
+                    usedPages);
+        }
     }
 
     private static void scanObject(
