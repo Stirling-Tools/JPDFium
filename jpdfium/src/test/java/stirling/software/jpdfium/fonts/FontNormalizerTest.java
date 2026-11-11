@@ -236,6 +236,17 @@ class FontNormalizerTest {
     }
 
     @Test
+    void fixToUnicodeKeepsMappingAfterEmptyCmapSection() throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real native library");
+        byte[] pdf = withMultiSectionToUnicode(embeddedTrueTypePdf(false, false));
+
+        try (PdfDocument doc = PdfDocument.open(pdf)) {
+            assertEquals(0, FontNormalizer.fixToUnicode(doc, 0),
+                    "an empty first bfchar section must not hide a later mapping");
+        }
+    }
+
+    @Test
     void repairWidthsPreservesProducerWidthForUnresolvedCode() throws Exception {
         assumeTrue(NativeRuntime.isFull(), "needs real native library");
         byte[] pdf = unresolvedWidthPdf();
@@ -390,8 +401,8 @@ class FontNormalizerTest {
     @Test
     void normalizePageInvalidatesOpenPageWhenRepairRewritesDocument() throws Exception {
         assumeTrue(NativeRuntime.isFull(), "needs real native library");
-        try (PdfDocument doc = PdfDocument.open(embeddedTrueTypePdf(false, true))) {
-            PdfPage page = doc.page(0);
+        try (PdfDocument doc = PdfDocument.open(embeddedTrueTypePdf(false, true));
+                PdfPage page = doc.page(0)) {
             FontNormalizer.Result result = FontNormalizer.normalizePage(doc, 0);
             assertTrue(result.widthsRepaired() >= 1, "fixture must repair widths");
             assertThrows(IllegalStateException.class, page::rotation,
@@ -489,6 +500,40 @@ class FontNormalizerTest {
      * broken producer emits when it never wrote any {@code beginbfchar} or
      * {@code beginbfrange} section.
      */
+    private static byte[] withMultiSectionToUnicode(byte[] pdf) throws IOException {
+        try (PDDocument doc = Loader.loadPDF(pdf)) {
+            COSDictionary font = firstFontDictionary(doc);
+            assertNotNull(font, "fixture must contain a font");
+            COSStream toUnicode = new COSStream();
+            try (OutputStream out = toUnicode.createOutputStream()) {
+                out.write("""
+                        /CIDInit /ProcSet findresource begin
+                        12 dict begin
+                        begincmap
+                        /CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def
+                        /CMapName /Adobe-Identity-UCS def
+                        /CMapType 2 def
+                        1 begincodespacerange
+                        <00> <FF>
+                        endcodespacerange
+                        0 beginbfchar
+                        endbfchar
+                        1 beginbfrange
+                        <20> <7E> <0020>
+                        endbfrange
+                        endcmap
+                        CMapName currentdict /CMap defineresource pop
+                        end
+                        end
+                        """.getBytes(StandardCharsets.US_ASCII));
+            }
+            font.setItem(COSName.TO_UNICODE, toUnicode);
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            doc.save(out);
+            return out.toByteArray();
+        }
+    }
+
     private static byte[] withBoilerplateToUnicode(byte[] pdf) throws IOException {
         try (PDDocument doc = Loader.loadPDF(pdf)) {
             COSDictionary font = firstFontDictionary(doc);
