@@ -351,10 +351,18 @@ public final class PdfFontEmbedder {
     /** File-backed variant that lets native qpdf read the input and write the output. */
     public static FileResult embedMissingTo(Path input, Path output, Path... fontDirs)
             throws IOException {
-        List<String> missing = nonEmbedded(input);
+        List<PdfFontAuditor.FontResource> resources =
+                PdfFontAuditor.unembeddedResources(input);
+        Set<String> names = new LinkedHashSet<>();
         Map<String, Boolean> substitutable = new HashMap<>();
-        for (PdfFontAuditor.FontResource resource : PdfFontAuditor.unembeddedResources(Files.readAllBytes(input))) {
+        for (PdfFontAuditor.FontResource resource : resources) {
+            names.add(resource.baseName());
             substitutable.merge(resource.baseName(), safeToSubstitute(resource), Boolean::logicalAnd);
+        }
+        List<String> missing = List.copyOf(names);
+        if (missing.isEmpty()) {
+            Files.copy(input, output, StandardCopyOption.REPLACE_EXISTING);
+            return new FileResult(List.of(), List.of());
         }
         Map<String, byte[]> found = programsFor(missing, substitutable, fontDirs);
         if (found.isEmpty() || !QpdfLib.embedFontsToFile(input, output, found, true)) {
