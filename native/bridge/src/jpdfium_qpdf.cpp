@@ -1437,9 +1437,9 @@ void ensureMicrosoftUnicodeCmap(std::string& sfnt) {
 }
 
 QPDFObjectHandle makeProgramStream(QPDF& qpdf, FontProgram const& p, ProgramKind kind, bool cid,
-                                   std::string const& subset) {
+                                   std::string const& subset, bool normalizeCmap = false) {
     std::string bytes = subset.empty() ? p.bytes : subset;
-    if (kind == ProgramKind::TrueType) ensureMicrosoftUnicodeCmap(bytes);
+    if (normalizeCmap && kind == ProgramKind::TrueType) ensureMicrosoftUnicodeCmap(bytes);
     auto stream = QPDFObjectHandle::newStream(&qpdf, bytes);
     auto dict = stream.getDict();
     if (kind == ProgramKind::TrueType)
@@ -1494,6 +1494,20 @@ SimpleEncoding parseEncoding(QPDFObjectHandle const& font) {
         }
     }
     return enc;
+}
+
+bool hasKnownSimpleEncoding(QPDFObjectHandle const& font) {
+    auto encoding = font.getKey("/Encoding");
+    if (encoding.isNull()) return true;
+    auto known = [](QPDFObjectHandle const& name) {
+        return name.isNameAndEquals("/WinAnsiEncoding") ||
+               name.isNameAndEquals("/MacRomanEncoding") ||
+               name.isNameAndEquals("/StandardEncoding");
+    };
+    if (encoding.isName()) return known(encoding);
+    if (!encoding.isDictionary()) return false;
+    auto base = encoding.getKey("/BaseEncoding");
+    return base.isNull() || known(base);
 }
 
 FT_UInt glyphForCode(FT_Face face, int code, bool symbolic, SimpleEncoding const& enc) {
@@ -2869,6 +2883,10 @@ bool subsetEmbeddedSimpleFont(QPDF& qpdf, FT_Library lib, QPDFObjectHandle& font
     auto scan = usedCidsForFont(qpdf, font, false);
     if (!scan.complete || scan.cids.empty()) return false;
 
+    // An unknown named /Encoding cannot be resolved to glyph names. Subsetting
+    // from the wrong code map would drop the glyphs the renderer actually uses.
+    if (!hasKnownSimpleEncoding(target)) return false;
+
     auto flags = descriptor.getKey("/Flags");
     bool symbolic = flags.isInteger() ? (flags.getIntValue() & 4) != 0
                                       : baseName == "Symbol" || baseName == "ZapfDingbats";
@@ -3328,6 +3346,23 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
                                  targetName.find("Dingbats") != std::string::npos);
             bool symbolic = !hasEncoding &&
                             (isSymbolName || (flags.isInteger() && (flags.getIntValue() & 4) != 0));
+            if (!cid && !hasProgram && onlyMissing) {
+                // A substitute must cover every character the content actually
+                // draws. Installing a program with missing glyphs silently
+                // turns text into .notdef and can truncate extraction.
+                auto scan = usedCidsForFont(*qpdf, font, false);
+                if (!scan.complete) continue;
+                auto enc = parseEncoding(target);
+                bool covered = true;
+                for (uint32_t code : scan.cids) {
+                    if (code >= 256) continue;
+                    if (glyphForCode(program.face, static_cast<int>(code), symbolic, enc) == 0) {
+                        covered = false;
+                        break;
+                    }
+                }
+                if (!covered) continue;
+            }
             if (!cid && !target.getKey("/Widths").isArray() &&
                 !addWidths(target, program.face, symbolic)) {
                 continue;
@@ -3338,7 +3373,7 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
                 descriptor = newDescriptor(*qpdf, target, program.face, symbolic);
                 target.replaceKey("/FontDescriptor", descriptor);
             }
-            if (descriptor.isDictionary() && descriptor.hasKey("/Flags") &&
+            if (onlyMissing && descriptor.isDictionary() && descriptor.hasKey("/Flags") &&
                 descriptor.getKey("/Flags").isInteger()) {
                 long long f = descriptor.getKey("/Flags").getIntValue();
                 if (symbolic) {
@@ -3350,25 +3385,12 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
             }
             std::set<FT_UInt> glyphs;
             std::string subset;
-            if (!hasProgram && !cid && !symbolic && !program.noSubsetting &&
-                program.kind != ProgramKind::BareCff && program.kind != ProgramKind::Type1) {
-                auto enc = parseEncoding(target);
-                bool resolvable = std::ranges::all_of(enc.differences, [&](auto const& entry) {
-                    return entry.second == ".notdef" || glyphForName(program.face, entry.second);
-                });
-                for (int code = 0; resolvable && code < 256; ++code) {
-                    glyphs.insert(glyphForCode(program.face, code, false, enc));
-                    glyphs.insert(glyphForCode(program.face, code, true, enc));
-                    if (FT_Select_Charmap(program.face, FT_ENCODING_UNICODE)) continue;
-                    for (auto base :
-                         {BaseEncoding::Standard, BaseEncoding::WinAnsi, BaseEncoding::MacRoman})
-                        glyphs.insert(
-                            FT_Get_Char_Index(program.face, baseEncodingUnicode(base, code)));
-                }
-                if (resolvable) subset = subsetProgram(program, glyphs);
-                if (!reachesSameGlyphs(lib, subset, program.face, enc)) subset.clear();
-                if (subset.empty()) glyphs.clear();
-            }
+            // Missing simple fonts are embedded whole. Subsetting a
+            // replacement is an optimization, not part of the repair contract:
+            // a scanner that misses one code would drop a glyph and truncate
+            // text extraction (sample_fonts_solidconvertor.pdf). Compression
+            // has its own opt-in compact subsetter for fonts that are already
+            // embedded and whose encoding is known.
             std::string current = subtype.isName() ? subtype.getName() : "";
             auto wrapper = descriptor.getKey("/FontFile3");
             bool wrapped = wrapper.isStream() &&
@@ -3465,7 +3487,7 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
             }
             auto& stream = program.streams[{kind, cid, glyphs}];
             if (!stream.isInitialized())
-                stream = makeProgramStream(*qpdf, program, kind, cid, subset);
+                stream = makeProgramStream(*qpdf, program, kind, cid, subset, onlyMissing);
             if (!glyphs.empty() && !(targetName.size() > 7 && targetName[6] == '+')) {
                 size_t hash = std::hash<std::string>{}(targetName);
                 for (FT_UInt g : glyphs) hash = hash * 31 + g;

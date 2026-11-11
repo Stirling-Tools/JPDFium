@@ -345,6 +345,14 @@ public final class PdfFontEmbedder {
             return "legacy non-ASCII /BaseFont without /ToUnicode cannot be mapped safely";
         }
         if (!resource.cid()) {
+            String encoding = resource.encoding();
+            if (!encoding.isEmpty() && !"custom".equals(encoding)
+                    && !"WinAnsiEncoding".equals(encoding)
+                    && !"MacRomanEncoding".equals(encoding)
+                    && !"StandardEncoding".equals(encoding)) {
+                return "unknown simple-font encoding " + encoding
+                        + " cannot be mapped without the original glyph names";
+            }
             String normalized = key(resource.baseName());
             boolean symbolicFamily = normalized.startsWith("symbol")
                     || normalized.startsWith("standardsymbol")

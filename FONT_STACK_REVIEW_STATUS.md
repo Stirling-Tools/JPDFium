@@ -18,7 +18,10 @@ This file records what was **verified**, not what a previous tracker claimed.
 | `PdfFontEmbedderTest` | 45 tests, 0 failures |
 | `FontNormalizerTest` | 28 tests, 0 failures |
 | `PdfFontInventoryTest` | 7 tests, 0 failures |
-| `PdfFontEmbedderRoundTripTest` | 368 tests, 0 failures, 201 assumption skips |
+| `PdfFontEmbedderRoundTripTest` local corpus | 368 tests, 0 failures, 201 assumption skips |
+| `PdfFontEmbedderRoundTripTest` PDF.js corpus | 184 tests, 0 failures, 125 assumption skips |
+| `PdfFontEmbedderRoundTripTest` veraPDF font corpus | 520 tests, 0 failures, 271 assumption skips |
+| `PdfFontEmbedderRoundTripTest` PDFBox corpus | 352 tests, 0 failures, 184 assumption skips |
 | `compileJava` / `compileTestJava` | PASS |
 | `clang-format --dry-run --Werror` | PASS |
 | AGL table vs official `glyphlist.txt` | 4,200 single-scalar + 81 sequences, 0 missing |
@@ -59,6 +62,7 @@ The previous tracker marked several items resolved that were still present in
 | `PdfFontEmbedder` | Added Type 1 PFB/PFA detection before the SFNT fsType probe. Type 1 programs have no OS/2 table and are now embeddable. |
 | `PdfFontEmbedder` | Bounded TTC face loops in both `singleFace` and the file index; corrupt collections are rejected with `IllegalArgumentException` instead of `IndexOutOfBoundsException`. |
 | `PdfFontEmbedder` | Reuses oversized programs within one operation without retaining them in the global cache. |
+| `PdfFontEmbedder` / native | Unknown named simple-font encodings (for example `/Custom`) are not remapped or subset; missing fonts with such encodings stay unresolved with a diagnostic. |
 | `PdfFontEmbedder` | Built-in Symbol/ZapfDingbats masks are left unresolved instead of substituting a different glyph order. Reports now name the blocker (predefined CMap, CIDToGIDMap, legacy non-ASCII name, symbolic encoding). |
 | `PdfFontAuditor` | File-backed inventory uses the native file reader and no longer serializes the document to the Java heap. |
 | `FontNormalizer` / native | Simple `/Widths` repair preserves positive producer widths; only missing, non-numeric, or non-positive entries are repaired. |
@@ -68,6 +72,9 @@ The previous tracker marked several items resolved that were still present in
 | Native lexer | Both content lexers treat NUL as PDF whitespace. |
 | Native lexer | Inline-image `EI` detection requires a token boundary on both sides and fails closed when the stream is malformed. |
 | Native subsetter | Simple non-symbolic fonts subset without `RETAIN_GIDS`; verification compares glyph names and advances, not renumbered indices. Symbolic fonts keep GIDs. |
+| Native embedder | Missing simple fonts are embedded whole, not subset, so a scanner miss cannot drop a glyph and truncate extraction. CID replacements still remap. |
+| Native embedder | Explicit re-embedding preserves `/Flags`, `/Encoding`, and the original cmap; `(3,1)` cmap normalization is applied only when substituting a missing font. This fixed `survey.pdf` and `sample_fonts_solidconvertor.pdf`. |
+| Native embedder | Before substituting a missing simple font, every drawn code must resolve to a glyph in the replacement; otherwise the font is left unresolved. |
 | Native pattern clamp | `XStep`/`YStep` bound check no longer uses floating-point equality (CodeQL warning removed). |
 | `CompressOptions` | Javadoc now matches the opt-in default (`subsetFonts=false`). |
 | Tests | Added PFB embedding, truncated TTC, symbolic-font refusal, plausible-width preservation, retained-subset CIDSet, two-page normalization, simple-font compression, and strict text/style round-trip checks. |
@@ -102,7 +109,7 @@ The previous tracker marked several items resolved that were still present in
    cache avoids repeats within one font, but a document with many fonts still
    decodes page content once per font. Correctness is unaffected; this is the
    remaining performance item.
-4. **The corpus round-trip suite** skips 201 cases through assumptions (no
+4. **The corpus round-trip suite** skips cases through assumptions (no
    unambiguous embedded program, signed/encrypted, unreadable input). Skips are
    reported, not hidden.
 5. **veraPDF on `issue20065`** still fails unrelated rules `6.6.4-1` and
