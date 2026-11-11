@@ -390,7 +390,7 @@ public final class PdfFontEmbedder {
         return found;
     }
 
-    private static List<String> nonEmbedded(Path pdf) {
+    private static List<String> nonEmbedded(Path pdf) throws IOException {
         return PdfFontAuditor.unembeddedResources(pdf).stream()
                 .map(PdfFontAuditor.FontResource::baseName).distinct().toList();
     }

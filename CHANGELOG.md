@@ -48,6 +48,9 @@ publishing workflows, not library releases, so they are not listed here.
   `PdfFontEmbedder.embedMissing(...)` now embeds those resource-only fonts and
   resolves unresolved names from the same inventory, so a font that no page
   draws with can no longer fail a PDF/A font check.
+- qpdf font embedding writes an EOL before `endstream`, so a valid PDF/A-2u
+  document stays conformant after a font is embedded. qpdf's default omitted it
+  on generated streams and triggered PDF/A `6.1.7.1-2`.
 - CID width coverage now uses the CIDs actually drawn by page and form
   content streams. Unused `/W` entries no longer block a safe remap, while a
   used CID missing from `/ToUnicode` still leaves the font unresolved.

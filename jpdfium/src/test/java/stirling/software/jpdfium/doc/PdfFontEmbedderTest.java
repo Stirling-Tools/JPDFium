@@ -31,6 +31,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
@@ -1067,6 +1068,267 @@ class PdfFontEmbedderTest {
         assumeTrue(result.embedded().contains("Times-Roman"), "no Times substitute installed");
         assertFalse(result.unresolved().contains("Times-Roman"),
                 "inherited Times-Roman must be embedded");
+    }
+
+    @Test
+    void restrictedFsTypeFontIsRejected(@TempDir Path temp) throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
+        Path dir = Files.createDirectories(temp.resolve("restricted"));
+        Path font = dir.resolve("LiberationSans-Regular.ttf");
+        try (InputStream in = liberationSansStream()) {
+            Files.write(font, withFsType(in.readAllBytes(), 2));
+        }
+
+        PdfFontEmbedder.FontStatus status = PdfFontEmbedder.diagnose("LiberationSans", dir);
+        assertFalse(status.resolved(), "an fsType 2 font must not be embeddable");
+        assertTrue(status.reason().contains("fsType"), status.reason());
+        assertTrue(status.reason().contains("2"), status.reason());
+
+        Path input = helveticaPage(temp.resolve("input.pdf"));
+        PdfFontEmbedder.Result inMemory =
+                PdfFontEmbedder.embedMissing(Files.readAllBytes(input), dir);
+        assertTrue(inMemory.embedded().isEmpty(), inMemory.embedded().toString());
+        assertTrue(inMemory.statuses().stream().anyMatch(s ->
+                        s.baseName().equals("Helvetica") && !s.resolved()
+                                && s.reason().contains("fsType")),
+                "embedMissing must report the restricted match: " + inMemory.statuses());
+
+        Path output = temp.resolve("output.pdf");
+        PdfFontEmbedder.FileResult result = PdfFontEmbedder.embedMissingTo(input, output, dir);
+        assertArrayEquals(Files.readAllBytes(input), Files.readAllBytes(output));
+        assertTrue(result.embedded().isEmpty(), result.embedded().toString());
+        assertTrue(result.unresolved().contains("Helvetica"), result.unresolved().toString());
+    }
+
+    @Test
+    void fileBackedEmbeddingEmbedsResourceOnlyFonts(@TempDir Path temp) throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
+        assumeTrue(PdfFontAuditor.inventoryAvailable(), "native font inventory unavailable");
+        Path input = temp.resolve("input.pdf");
+        Files.write(input, acroFormResourceOnlyPdf());
+        Path output = temp.resolve("output.pdf");
+
+        PdfFontEmbedder.FileResult result = PdfFontEmbedder.embedMissingTo(input, output);
+
+        assertTrue(result.embedded().contains("Times-Roman"),
+                "resource-only Times-Roman must be embedded: " + result);
+        assertTrue(result.unresolved().isEmpty(), "nothing should remain unresolved: " + result);
+        try (PdfDocument doc = PdfDocument.open(output)) {
+            assertTrue(PdfFontAuditor.auditAll(doc).nonEmbeddedFonts().isEmpty(),
+                    "every font resource must carry a program after embedding");
+        }
+    }
+
+    @Test
+    void fileBackedEmbeddingRefusesUnsafeCidFonts(@TempDir Path temp) throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
+        byte[] input = Files.readAllBytes(Path.of(PdfFontEmbedderTest.class
+                .getResource("/pdfs/general/90ms_rksj_h_sample.pdf").toURI()));
+        Path source = temp.resolve("input.pdf");
+        Files.write(source, input);
+        Path output = temp.resolve("output.pdf");
+
+        PdfFontEmbedder.FileResult result = PdfFontEmbedder.embedMissingTo(source, output);
+
+        assertFalse(result.embedded().contains("HeiseiMin-W3"),
+                "predefined-CMap CID fonts must not be substituted: " + result);
+        assertTrue(result.unresolved().contains("HeiseiMin-W3"),
+                "the unsafe CID font must stay unresolved: " + result);
+        try (PdfDocument doc = PdfDocument.open(output)) {
+            assertTrue(PdfFontAuditor.inventory(doc).stream().anyMatch(font ->
+                            font.baseName().equals("HeiseiMin-W3") && !font.embedded()),
+                    "the unsafe CID font must remain unembedded");
+        }
+    }
+
+    @Test
+    void cidGlyphsFromAnnotationAppearanceSurviveSubsetting(@TempDir Path temp) throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
+        FontProgram source = findEmbeddedFont(
+                Files.readAllBytes(Path.of(PdfFontEmbedderTest.class
+                        .getResource("/pdfs/general/basic-text.pdf").toURI())), "ArialMT");
+        assertNotNull(source, "fixture must contain ArialMT");
+        Path dir = Files.createDirectories(temp.resolve("fonts"));
+        Files.write(dir.resolve(source.baseName() + ".ttf"), source.data());
+        String toUnicode = """
+                2 beginbfchar
+                <0001> <0041>
+                <0002> <0053>
+                endbfchar
+                """;
+        byte[] input = annotationCidPdf(source.baseName(), toUnicode, 1, 2);
+
+        PdfFontEmbedder.Result result = PdfFontEmbedder.embedMissing(input, dir);
+
+        assertTrue(result.embedded().contains(source.baseName()),
+                "CID substitute must be embedded: embedded=" + result.embedded()
+                        + " unresolved=" + result.unresolved() + " statuses=" + result.statuses());
+        try (PDDocument pdf = Loader.loadPDF(result.pdf())) {
+            COSDictionary descendant = identityCidDescendant(pdf);
+            COSBase mapping = descendant.getDictionaryObject(COSName.CID_TO_GID_MAP);
+            assertTrue(mapping instanceof COSStream,
+                    "subsetting must leave an explicit /CIDToGIDMap stream");
+            byte[] bytes;
+            try (var in = ((COSStream) mapping).createInputStream()) {
+                bytes = in.readAllBytes();
+            }
+            assertEquals(6, bytes.length,
+                    "CIDs 1 and 2 from the page and annotation need glyph entries");
+            int pageGlyph = ((bytes[2] & 0xFF) << 8) | (bytes[3] & 0xFF);
+            int annotationGlyph = ((bytes[4] & 0xFF) << 8) | (bytes[5] & 0xFF);
+            assertEquals(36, pageGlyph, "CID 1 must select A in ArialMT");
+            assertTrue(annotationGlyph > 0 && annotationGlyph != pageGlyph,
+                    "CID 2 from the annotation must retain its own glyph: " + annotationGlyph);
+        }
+    }
+
+    @Test
+    void toUnicodeCommentsDoNotBreakCidSubstitution(@TempDir Path temp) throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
+        FontProgram source = findEmbeddedFont(
+                Files.readAllBytes(Path.of(PdfFontEmbedderTest.class
+                        .getResource("/pdfs/general/basic-text.pdf").toURI())), "ArialMT");
+        assertNotNull(source, "fixture must contain ArialMT");
+        Path dir = Files.createDirectories(temp.resolve("fonts"));
+        Files.write(dir.resolve(source.baseName() + ".ttf"), source.data());
+        String toUnicode = """
+                % beginbfchar endbfchar belong to this comment
+                1 beginbfchar
+                <0001> <0041>
+                endbfchar
+                % trailing comment with endbfchar
+                """;
+        byte[] input = identityCidPdf(source.baseName(), toUnicode);
+
+        PdfFontEmbedder.Result result = PdfFontEmbedder.embedMissing(input, dir);
+
+        assertTrue(result.embedded().contains(source.baseName()),
+                "a commented CMap must still embed: " + result.unresolved());
+        try (PdfDocument doc = PdfDocument.open(result.pdf())) {
+            assertTrue(doc.page(0).extractText().contains("A"),
+                    "the commented CMap must keep extraction working");
+        }
+    }
+
+    private static InputStream liberationSansStream() {
+        InputStream font = PDDocument.class.getResourceAsStream(
+                "/org/apache/pdfbox/resources/ttf/LiberationSans-Regular.ttf");
+        assertNotNull(font, "PDFBox no longer bundles LiberationSans");
+        return font;
+    }
+
+    private static byte[] withFsType(byte[] font, int fsType) {
+        byte[] copy = font.clone();
+        ByteBuffer buffer = ByteBuffer.wrap(copy).order(ByteOrder.BIG_ENDIAN);
+        int tables = buffer.getShort(4) & 0xFFFF;
+        for (int i = 0; i < tables; i++) {
+            int record = 12 + 16 * i;
+            if (buffer.getInt(record) == 0x4F532F32) {
+                buffer.putShort(buffer.getInt(record + 8) + 8, (short) fsType);
+                return copy;
+            }
+        }
+        throw new IllegalArgumentException("font has no OS/2 table");
+    }
+
+    private static byte[] acroFormResourceOnlyPdf() throws IOException {
+        try (PDDocument pdf = new PDDocument()) {
+            PDPage page = new PDPage();
+            pdf.addPage(page);
+            PDResources resources = new PDResources();
+            resources.put(COSName.getPDFName("Used"),
+                    new PDType1Font(Standard14Fonts.FontName.HELVETICA));
+            page.setResources(resources);
+            PDAcroForm acroForm = new PDAcroForm(pdf);
+            PDResources defaultResources = new PDResources();
+            defaultResources.put(COSName.getPDFName("Unused"),
+                    new PDType1Font(Standard14Fonts.FontName.TIMES_ROMAN));
+            acroForm.setDefaultResources(defaultResources);
+            pdf.getDocumentCatalog().setAcroForm(acroForm);
+            try (var content = new PDPageContentStream(pdf, page)) {
+                content.beginText();
+                content.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 12);
+                content.showText("used");
+                content.endText();
+            }
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            pdf.save(out);
+            return out.toByteArray();
+        }
+    }
+
+    private static byte[] annotationCidPdf(
+            String baseFont, String toUnicodeEntries, int pageCid, int annotationCid)
+            throws Exception {
+        try (PDDocument pdf = new PDDocument()) {
+            PDPage page = new PDPage(PDRectangle.LETTER);
+            pdf.addPage(page);
+            COSDictionary font = identityCidFont(baseFont);
+            COSDictionary descendant = (COSDictionary) ((COSArray) font.getDictionaryObject(
+                    COSName.DESCENDANT_FONTS)).getObject(0);
+            COSArray widths = new COSArray();
+            for (int cid : new int[] {pageCid, annotationCid}) {
+                widths.add(COSInteger.get(cid));
+                COSArray range = new COSArray();
+                range.add(COSInteger.get(500));
+                widths.add(range);
+            }
+            descendant.setItem(COSName.W, widths);
+            String entries = toUnicodeEntries.strip();
+            String body = entries.contains("beginbfchar") || entries.contains("beginbfrange")
+                    ? entries
+                    : ("%d beginbfchar\n%s\nendbfchar")
+                            .formatted(entries.split("\\s*\n\\s*").length, entries);
+            COSStream toUnicode = new COSStream();
+            try (OutputStream out = toUnicode.createOutputStream()) {
+                out.write(("""
+                        /CIDInit /ProcSet findresource begin
+                        12 dict begin
+                        begincmap
+                        /CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def
+                        /CMapName /Adobe-Identity-UCS def
+                        /CMapType 2 def
+                        1 begincodespacerange
+                        <0000> <FFFF>
+                        endcodespacerange
+                        %s
+                        endcmap
+                        CMapName currentdict /CMap defineresource pop
+                        end
+                        end
+                        """.formatted(body)).getBytes(StandardCharsets.US_ASCII));
+            }
+            font.setItem(COSName.TO_UNICODE, toUnicode);
+            COSDictionary fonts = new COSDictionary();
+            fonts.setItem("F1", font);
+            COSDictionary resources = new COSDictionary();
+            resources.setItem(COSName.FONT, fonts);
+            page.setResources(new PDResources(resources));
+            page.setContents(new PDStream(pdf, new ByteArrayInputStream(
+                    ("BT /F1 12 Tf 72 700 Td <" + String.format("%04X", pageCid) + "> Tj ET")
+                            .getBytes(StandardCharsets.US_ASCII))));
+
+            COSStream appearance = new COSStream();
+            try (OutputStream out = appearance.createOutputStream()) {
+                out.write(("BT /F1 12 Tf 72 100 Td <"
+                        + String.format("%04X", annotationCid) + "> Tj ET")
+                        .getBytes(StandardCharsets.US_ASCII));
+            }
+            appearance.setItem(COSName.RESOURCES, resources);
+            COSDictionary ap = new COSDictionary();
+            ap.setItem(COSName.getPDFName("N"), appearance);
+            COSDictionary annot = new COSDictionary();
+            annot.setItem(COSName.TYPE, COSName.getPDFName("Annot"));
+            annot.setItem(COSName.SUBTYPE, COSName.getPDFName("Square"));
+            annot.setItem(COSName.RECT, new PDRectangle(72, 72, 200, 200).getCOSObject());
+            annot.setItem(COSName.getPDFName("AP"), ap);
+            COSArray annots = new COSArray();
+            annots.add(annot);
+            page.getCOSObject().setItem(COSName.ANNOTS, annots);
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            pdf.save(out);
+            return out.toByteArray();
+        }
     }
 
     private static Map<String, byte[]> findAllEmbeddedFonts(byte[] input) throws Exception {
