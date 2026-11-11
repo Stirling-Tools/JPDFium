@@ -4,8 +4,11 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.SyntheticPdfFactory;
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.QpdfLib;
 
+import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -14,6 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 class QpdfIntegrationTest {
 
@@ -190,5 +194,80 @@ class QpdfIntegrationTest {
             PdfStreamOptimizer.compact(in, outCompact);
             assertTrue(Files.exists(outCompact));
         }
+    }
+
+    /**
+     * Hand-built one-page PDF whose content stream ends flush against the
+     * endstream keyword with no EOL, so the input itself violates PDF/A
+     * 6.1.7.1-2. The optimize route must write every endstream preceded by
+     * an EOL marker even after recompressing streams.
+     */
+    private static byte[] pdfWithFlushEndstream() {
+        byte[] content = "BT /F1 12 Tf 72 700 Td (x) Tj ET".getBytes(StandardCharsets.US_ASCII);
+        String[] objects = {
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        };
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.writeBytes("%PDF-1.4\n".getBytes(StandardCharsets.US_ASCII));
+        int[] offsets = new int[objects.length + 2];
+        for (int i = 0; i < objects.length; i++) {
+            offsets[i + 1] = out.size();
+            out.writeBytes(((i + 1) + " 0 obj\n" + objects[i] + "\nendobj\n")
+                    .getBytes(StandardCharsets.US_ASCII));
+        }
+        offsets[objects.length + 1] = out.size();  // stream object offset
+        out.writeBytes(((objects.length + 1) + " 0 obj\n<< /Length " + content.length
+                + " >>\nstream\n").getBytes(StandardCharsets.US_ASCII));
+        out.writeBytes(content);
+        out.writeBytes("endstream\nendobj\n".getBytes(StandardCharsets.US_ASCII));
+        int xrefPos = out.size();
+        out.writeBytes(("xref\n0 " + offsets.length + "\n0000000000 65535 f \n")
+                .getBytes(StandardCharsets.US_ASCII));
+        for (int i = 1; i < offsets.length; i++) {
+            out.writeBytes(String.format("%010d 00000 n \n", offsets[i])
+                    .getBytes(StandardCharsets.US_ASCII));
+        }
+        out.writeBytes(("trailer\n<< /Size " + offsets.length + " /Root 1 0 R >>\nstartxref\n"
+                + xrefPos + "\n%%EOF\n").getBytes(StandardCharsets.US_ASCII));
+        return out.toByteArray();
+    }
+
+    /** Counts endstream keywords not preceded by an EOL marker. */
+    private static int bareEndstreamCount(byte[] pdf) {
+        int bare = 0;
+        for (int i = 0; (i = indexOf(pdf, "endstream".getBytes(java.nio.charset.StandardCharsets.US_ASCII), i)) >= 0; i += 9) {
+            if (i == 0 || (pdf[i - 1] != 0x0A && pdf[i - 1] != 0x0D)) bare++;
+        }
+        return bare;
+    }
+
+    private static int indexOf(byte[] haystack, byte[] needle, int from) {
+        outer:
+        for (int i = Math.max(0, from); i <= haystack.length - needle.length; i++) {
+            for (int j = 0; j < needle.length; j++) {
+                if (haystack[i + j] != needle[j]) continue outer;
+            }
+            return i;
+        }
+        return -1;
+    }
+
+    @Test
+    void testStreamOptimizerWritesEolBeforeEndstream(@TempDir Path tempDir) throws Exception {
+        assumeTrue(PdfStreamOptimizer.isSupported(), "native qpdf optimize unavailable");
+        assumeTrue(NativeRuntime.isFull(), "needs real native qpdf");
+        Path in = tempDir.resolve("flush.pdf");
+        Path out = tempDir.resolve("flush_opt.pdf");
+        Files.write(in, pdfWithFlushEndstream());
+        assertTrue(bareEndstreamCount(Files.readAllBytes(in)) > 0,
+                "fixture must start nonconformant");
+
+        PdfStreamOptimizer.optimize(in, out);
+
+        assertEquals(0, bareEndstreamCount(Files.readAllBytes(out)),
+                "every endstream must be preceded by an EOL marker (PDF/A 6.1.7.1-2)");
     }
 }
