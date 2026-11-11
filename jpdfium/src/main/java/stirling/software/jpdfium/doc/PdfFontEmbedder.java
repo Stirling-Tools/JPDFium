@@ -15,6 +15,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -59,13 +60,10 @@ public final class PdfFontEmbedder {
      */
     public record Result(byte[] pdf, List<String> embedded, List<String> unresolved) {}
 
-    /**
-     * Outcome of the file-backed embedding pass. The target always holds the document afterwards:
-     * rewritten when a font was embedded, otherwise a copy of the input.
-     */
+    /** Outcome of the file-backed embedding pass. */
     public record FileResult(List<String> embedded, List<String> unresolved) {}
 
-    private record Face(Path path, int offset) {}
+    private record Face(Path path, int offset, long size, long mtime) {}
 
     private static final int TTCF = 0x74746366;
     private static final Pattern TYPE1_NAME = Pattern.compile("/FontName\\s*/(\\S+)");
@@ -100,6 +98,11 @@ public final class PdfFontEmbedder {
                             return size() > MAX_INDEXES;
                         }
                     });
+    private static final int MAX_PROGRAMS = 32;
+    private static final long MAX_PROGRAM_BYTES = 64L * 1024 * 1024;
+    private static long programBytes;
+    /** Extracted face data, reused across documents instead of re-reading a TTC per call. */
+    private static final Map<Face, byte[]> PROGRAMS = new LinkedHashMap<>(MAX_PROGRAMS, 0.75f, true);
 
     private PdfFontEmbedder() {}
 
@@ -161,19 +164,25 @@ public final class PdfFontEmbedder {
      * indexed once per distinct list; the system font directories when none are given.
      */
     public static Result embedMissing(byte[] pdf, Path... fontDirs) throws IOException {
-        List<String> missing = nonEmbedded(pdf);
-        Map<String, byte[]> found = programsFor(missing, fontDirs);
+        List<String> missing = PdfFontAuditor.unembeddedNames(pdf);
+        Map<String, Face> index = INDEXES.computeIfAbsent(
+                fontDirs.length == 0 ? SYSTEM_FONT_DIRS : List.of(fontDirs), PdfFontEmbedder::index);
+        Map<String, byte[]> found = new LinkedHashMap<>();
+        Map<Face, byte[]> programs = new HashMap<>();
+        for (String name : missing) {
+            Face face = resolve(index, key(name));
+            if (face == null) continue;
+            byte[] data = programs.get(face);
+            if (data == null) programs.put(face, data = program(face));
+            found.put(name, data);
+        }
         byte[] out = found.isEmpty() ? null : QpdfLib.embedFonts(pdf, found, true);
         if (out == null) return new Result(pdf, List.of(), missing);
-        List<String> unresolved = nonEmbedded(out);
+        List<String> unresolved = PdfFontAuditor.unembeddedNames(out);
         return new Result(out, missing.stream().filter(n -> !unresolved.contains(n)).toList(), unresolved);
     }
 
-    /**
-     * File-backed variant of {@link #embedMissing(byte[], Path...)}: resolves the same fonts, then
-     * lets native qpdf read {@code input} and write {@code output} without loading the document
-     * into the Java heap.
-     */
+    /** File-backed variant that lets native qpdf read the input and write the output. */
     public static FileResult embedMissingTo(Path input, Path output, Path... fontDirs)
             throws IOException {
         List<String> missing = nonEmbedded(input);
@@ -203,15 +212,22 @@ public final class PdfFontEmbedder {
         return found;
     }
 
-    private static List<String> nonEmbedded(byte[] pdf) {
-        try (PdfDocument doc = PdfDocument.open(pdf)) {
-            return PdfFontAuditor.audit(doc).nonEmbeddedFonts().stream()
-                    .map(PdfFontAuditor.FontInfo::baseName).distinct().toList();
-        }
-    }
-
     private static List<String> nonEmbedded(Path pdf) {
         try (PdfDocument doc = PdfDocument.open(pdf)) {
+            if (PdfFontAuditor.inventoryAvailable()) {
+                List<PdfFontAuditor.FontResource> all = PdfFontAuditor.inventory(doc);
+                if (!all.isEmpty()) {
+                    List<String> names = new ArrayList<>();
+                    for (PdfFontAuditor.FontResource resource : all) {
+                        if (resource.baseName().isEmpty() || resource.embedded()
+                                || "Type3".equals(resource.subtype())) {
+                            continue;
+                        }
+                        names.add(resource.baseName());
+                    }
+                    return names.stream().distinct().toList();
+                }
+            }
             return PdfFontAuditor.audit(doc).nonEmbeddedFonts().stream()
                     .map(PdfFontAuditor.FontInfo::baseName).distinct().toList();
         }
@@ -223,10 +239,42 @@ public final class PdfFontEmbedder {
     }
 
     static String key(String name) {
-        return name.replaceFirst("^[A-Z]{6}\\+", "")
-                .replaceAll("[-,](Regular|Roman|Book|Normal)$", "")
-                .replaceAll("PS(?=-|MT$|$)|MT$", "")
-                .replaceAll("[^\\p{L}\\p{N}]", "").toLowerCase(Locale.ROOT).replace("oblique", "italic");
+        int start = 0;
+        if (name.length() > 7 && name.charAt(6) == '+') {
+            boolean subset = true;
+            for (int i = 0; i < 6; i++) {
+                if (name.charAt(i) < 'A' || name.charAt(i) > 'Z') {
+                    subset = false;
+                    break;
+                }
+            }
+            if (subset) start = 7;
+        }
+        int end = name.length();
+        for (String suffix : new String[] {"Regular", "Roman", "Book", "Normal"}) {
+            int separator = end - suffix.length() - 1;
+            if (separator >= start && (name.charAt(separator) == '-' || name.charAt(separator) == ',')
+                    && name.regionMatches(separator + 1, suffix, 0, suffix.length())) {
+                end = separator;
+                break;
+            }
+        }
+        StringBuilder normalized = new StringBuilder(end - start);
+        for (int i = start; i < end; ) {
+            char c = name.charAt(i);
+            if (c == 'P' && i + 1 < end && name.charAt(i + 1) == 'S'
+                    && (i + 2 == end || name.charAt(i + 2) == '-'
+                            || (i + 4 == end && name.startsWith("MT", i + 2)))) {
+                i += 2;
+                continue;
+            }
+            if (c == 'M' && i + 2 == end && name.charAt(i + 1) == 'T') break;
+            int codePoint = name.codePointAt(i);
+            if (Character.isLetterOrDigit(codePoint)) normalized.appendCodePoint(codePoint);
+            i += Character.charCount(codePoint);
+        }
+        String key = normalized.toString().toLowerCase(Locale.ROOT);
+        return key.contains("oblique") ? key.replace("oblique", "italic") : key;
     }
 
     private static Face resolve(Map<String, Face> index, String key) {
@@ -285,12 +333,14 @@ public final class PdfFontEmbedder {
 
     private static void indexFile(Path path, Map<String, Face> index) {
         try (FileChannel channel = FileChannel.open(path)) {
+            BasicFileAttributes attrs = Files.readAttributes(path, BasicFileAttributes.class);
+            long size = attrs.size(), mtime = attrs.lastModifiedTime().toMillis();
             ByteBuffer b = channel.map(FileChannel.MapMode.READ_ONLY, 0, channel.size());
             if (b.getShort(0) == (short) 0x8001 || b.get(0) == '%') {
                 byte[] head = new byte[Math.min(b.capacity(), 8192)];
                 b.get(0, head);
                 Matcher m = TYPE1_NAME.matcher(new String(head, StandardCharsets.ISO_8859_1));
-                if (m.find()) index.putIfAbsent(key(m.group(1)), new Face(path, -1));
+                if (m.find()) index.putIfAbsent(key(m.group(1)), new Face(path, -1, size, mtime));
                 return;
             }
             boolean collection = b.getInt(0) == TTCF;
@@ -298,7 +348,8 @@ public final class PdfFontEmbedder {
                 int offset = collection ? b.getInt(12 + 4 * f) : 0;
                 if (restricted(b, offset)) continue;
                 for (String name : names(b, offset)) {
-                    index.putIfAbsent(key(name), new Face(path, collection ? offset : -1));
+                    index.putIfAbsent(
+                            key(name), new Face(path, collection ? offset : -1, size, mtime));
                 }
             }
         } catch (IOException | RuntimeException ignored) {
@@ -343,8 +394,36 @@ public final class PdfFontEmbedder {
     }
 
     private static byte[] program(Face face) throws IOException {
+        synchronized (PROGRAMS) {
+            byte[] cached = PROGRAMS.get(face);
+            if (cached != null) return cached;
+        }
+        long size = Files.size(face.path());
+        long mtime = Files.getLastModifiedTime(face.path()).toMillis();
+        // A replaced font file invalidates the cached face even when the path and
+        // TTC offset are unchanged.
+        Face key = size == face.size() && mtime == face.mtime()
+                ? face
+                : new Face(face.path(), face.offset(), size, mtime);
         byte[] all = Files.readAllBytes(face.path());
-        return face.offset() < 0 ? all : extractFace(all, face.offset());
+        byte[] data = face.offset() < 0 ? all : extractFace(all, face.offset());
+        if (data.length > MAX_PROGRAM_BYTES) {
+            return data;
+        }
+        synchronized (PROGRAMS) {
+            byte[] raced = PROGRAMS.get(key);
+            if (raced != null) return raced;
+            PROGRAMS.put(key, data);
+            programBytes += data.length;
+            Iterator<Map.Entry<Face, byte[]>> it = PROGRAMS.entrySet().iterator();
+            while (it.hasNext()
+                    && (PROGRAMS.size() > MAX_PROGRAMS || programBytes > MAX_PROGRAM_BYTES)) {
+                Map.Entry<Face, byte[]> eldest = it.next();
+                programBytes -= eldest.getValue().length;
+                it.remove();
+            }
+        }
+        return data;
     }
 
     private static byte[] singleFace(byte[] data, String name) {
