@@ -2019,6 +2019,22 @@ std::string inspectFonts(QPDF& qpdf) {
 
 extern "C" {
 
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_inspect_fonts(const uint8_t* input, int64_t inputLen,
+                                                  char** json) {
+    if (!input || inputLen <= 0 || !json) return -1;
+    *json = nullptr;
+    try {
+        auto qpdf = QPDF::create();
+        qpdf->processMemoryFile("font-in", reinterpret_cast<const char*>(input),
+                                static_cast<size_t>(inputLen));
+        auto result = inspectFonts(*qpdf);
+        *json = strdup(result.c_str());
+        return *json ? 0 : -1;
+    } catch (...) {
+        return -1;
+    }
+}
+
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_optimize_ex(const uint8_t* input, int64_t inputLen,
                                                 uint8_t** output, int64_t* outputLen, int32_t flags,
                                                 int32_t compressionLevel, int32_t objectStreamMode,
