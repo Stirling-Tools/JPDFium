@@ -1204,6 +1204,11 @@ static FT_Face load_font_face(FT_Library lib, std::string const& bytes, FT_Long 
 
 // Minimal content-stream scanner: track the selected font across Tf/q/Q and
 // collect the character codes or CIDs drawn by text operators.
+static bool fn_is_pdf_delimiter(unsigned char c) {
+    return c == '(' || c == ')' || c == '<' || c == '>' || c == '[' || c == ']' || c == '{' ||
+           c == '}' || c == '/' || c == '%';
+}
+
 struct FnContentOperand {
     enum class Kind { Name, String, Array, Other };
     Kind kind = Kind::Other;
@@ -1483,19 +1488,22 @@ struct FnContentLexer {
     }
 
     void skipInlineImage() {
+        // Image data may abut EI with no separating whitespace, and EI may be
+        // followed by a delimiter instead of whitespace, so validate only the
+        // trailing boundary.
         FnContentToken token;
         while (next(token)) {
             if (token.word && token.text == "ID") {
                 if (pos < data.size() && std::isspace(static_cast<unsigned char>(data[pos]))) ++pos;
                 while (pos + 1 < data.size()) {
-                    if (std::isspace(static_cast<unsigned char>(data[pos])) &&
-                        data[pos + 1] == 'E' && pos + 2 < data.size() && data[pos + 2] == 'I' &&
-                        (pos + 3 >= data.size() ||
-                         std::isspace(static_cast<unsigned char>(data[pos + 3])) ||
-                         data[pos + 3] == '/' || data[pos + 3] == '(' || data[pos + 3] == '<' ||
-                         data[pos + 3] == '[' || data[pos + 3] == '{' || data[pos + 3] == '%')) {
-                        pos += 3;
-                        return;
+                    if (data[pos] == 'E' && data[pos + 1] == 'I') {
+                        const size_t after = pos + 2;
+                        if (after >= data.size() ||
+                            std::isspace(static_cast<unsigned char>(data[after])) ||
+                            fn_is_pdf_delimiter(static_cast<unsigned char>(data[after]))) {
+                            pos = after;
+                            return;
+                        }
                     }
                     ++pos;
                 }
@@ -2942,10 +2950,11 @@ int32_t jpdfium_font_subset(const uint8_t* font_data, int64_t font_len, const ui
             hb_set_add(unicode_set, codepoints[i]);
         }
 
-        // Set flags
-        if (retain_gids) {
-            hb_subset_input_set_flags(input, HB_SUBSET_FLAGS_RETAIN_GIDS);
-        }
+        // Keep glyph names and the .notdef outline so Java AWT and PDFBox can
+        // parse and render the subset (PDFBOX-490).
+        unsigned int flags = HB_SUBSET_FLAGS_GLYPH_NAMES | HB_SUBSET_FLAGS_NOTDEF_OUTLINE;
+        if (retain_gids) flags |= HB_SUBSET_FLAGS_RETAIN_GIDS;
+        hb_subset_input_set_flags(input, flags);
 
         // Perform subsetting
         hb_face_t* subset_face = hb_subset_or_fail(face, input);

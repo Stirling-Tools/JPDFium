@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -218,7 +219,99 @@ void optimizeImages(QPDF& pdf, int32_t jpegQuality) {
 // and that is not already subset-tagged. Defined below with the font helpers.
 int subsetEmbeddedFonts(QPDF& qpdf);
 
+// Chromium 445740322: a non-finite or unbounded tiling-pattern step overflows
+// the renderer's tile raster dimensions. Clamp to the positive range that PDF
+// rasterisers accept.
+void clampTilingPatternStep(QPDFObjectHandle pattern) {
+    if (!pattern.isDictionary()) return;
+    QPDFObjectHandle type = pattern.getKey("/PatternType");
+    if (!type.isInteger() || type.getIntValueAsInt() != 1) return;
+    for (char const* key : {"/XStep", "/YStep"}) {
+        QPDFObjectHandle value = pattern.getKey(key);
+        double step = value.isNumber() ? value.getNumericValue() : 1.0;
+        if (!std::isfinite(step) || step <= 0.0) {
+            step = 1.0;
+        } else if (step > 32767.0) {
+            step = 32767.0;
+        }
+        if (!value.isNumber() || value.getNumericValue() != step) {
+            pattern.replaceKey(key, QPDFObjectHandle::newReal(step, 4));
+        }
+    }
+}
+
+void clampPatternsInResources(QPDFObjectHandle const& resources, std::set<QPDFObjGen>& seen,
+                              int depth) {
+    if (!resources.isDictionary() || depth > 32) return;
+    if (resources.isIndirect() && !seen.insert(resources.getObjGen()).second) return;
+    try {
+        QPDFObjectHandle patterns = resources.getKey("/Pattern");
+        if (patterns.isDictionary()) {
+            for (auto const& entry : patterns.getDictAsMap()) {
+                QPDFObjectHandle pattern = entry.second;
+                clampTilingPatternStep(pattern);
+                if (pattern.isStream())
+                    clampPatternsInResources(pattern.getDict().getKey("/Resources"), seen,
+                                             depth + 1);
+            }
+        }
+        QPDFObjectHandle xobjects = resources.getKey("/XObject");
+        if (xobjects.isDictionary()) {
+            for (auto const& entry : xobjects.getDictAsMap()) {
+                QPDFObjectHandle xobject = entry.second;
+                if (!xobject.isStream()) continue;
+                if (xobject.isIndirect() && !seen.insert(xobject.getObjGen()).second) continue;
+                clampPatternsInResources(xobject.getDict().getKey("/Resources"), seen, depth + 1);
+            }
+        }
+        QPDFObjectHandle fonts = resources.getKey("/Font");
+        if (fonts.isDictionary()) {
+            for (auto const& entry : fonts.getDictAsMap()) {
+                QPDFObjectHandle font = entry.second;
+                if (!font.isDictionary() || !font.getKey("/Subtype").isNameAndEquals("/Type3"))
+                    continue;
+                clampPatternsInResources(font.getKey("/Resources"), seen, depth + 1);
+            }
+        }
+    } catch (...) {
+        // A malformed resource tree must not abort optimization.
+    }
+}
+
+void clampPatternSteps(QPDF& pdf) {
+    std::set<QPDFObjGen> seen;
+    try {
+        QPDFPageDocumentHelper helper{pdf};
+        for (auto& page : helper.getAllPages()) {
+            clampPatternsInResources(page.getAttribute("/Resources", false), seen, 0);
+            QPDFObjectHandle annots = page.getObjectHandle().getKey("/Annots");
+            if (!annots.isArray()) continue;
+            for (auto& annot : annots.getArrayAsVector()) {
+                if (!annot.isDictionary()) continue;
+                QPDFObjectHandle ap = annot.getKey("/AP");
+                if (!ap.isDictionary()) continue;
+                for (char const* key : {"/N", "/R", "/D"}) {
+                    QPDFObjectHandle appearance = ap.getKey(key);
+                    if (appearance.isStream()) {
+                        clampPatternsInResources(appearance.getDict().getKey("/Resources"), seen,
+                                                 0);
+                    } else if (appearance.isDictionary()) {
+                        for (auto const& state : appearance.getDictAsMap()) {
+                            if (state.second.isStream())
+                                clampPatternsInResources(
+                                    state.second.getDict().getKey("/Resources"), seen, 0);
+                        }
+                    }
+                }
+            }
+        }
+    } catch (...) {
+        // Pattern repair is best-effort; the writer still emits the document.
+    }
+}
+
 void applyDocumentOptions(QPDF& pdf, const OptimizeOptions& options) {
+    clampPatternSteps(pdf);
     if (options.flags & JPDFIUM_QPDF_QDF) {
         if (options.flags & JPDFIUM_QPDF_LINEARIZE) {
             throw std::runtime_error("QDF mode cannot be combined with linearization");
@@ -2062,22 +2155,23 @@ struct ContentLexer {
     }
 
     void skipInlineImage() {
-        // BI ... ID <binary> EI
+        // BI ... ID <binary> EI. Image data may abut EI with no separating
+        // whitespace, and EI may be followed by a delimiter instead of
+        // whitespace, so validate only the trailing boundary.
         ContentToken token;
         while (next(token)) {
             if (token.word && token.text == "ID") {
                 if (pos < data.size() && isPdfWhitespace(static_cast<unsigned char>(data[pos])))
                     ++pos;
-                while (pos + 2 < data.size()) {
-                    // The EI marker is a token of its own: whitespace on both sides.
-                    // Accepting \" EI[\" would end the image at bytes that are still
-                    // image data and desynchronize the rest of the stream.
-                    if (isPdfWhitespace(static_cast<unsigned char>(data[pos])) &&
-                        data[pos + 1] == 'E' && data[pos + 2] == 'I' &&
-                        (pos + 3 >= data.size() ||
-                         isPdfWhitespace(static_cast<unsigned char>(data[pos + 3])))) {
-                        pos += 3;
-                        return;
+                while (pos + 1 < data.size()) {
+                    if (data[pos] == 'E' && data[pos + 1] == 'I') {
+                        const size_t after = pos + 2;
+                        if (after >= data.size() ||
+                            isPdfWhitespace(static_cast<unsigned char>(data[after])) ||
+                            isPdfDelimiter(static_cast<unsigned char>(data[after]))) {
+                            pos = after;
+                            return;
+                        }
                     }
                     ++pos;
                 }
