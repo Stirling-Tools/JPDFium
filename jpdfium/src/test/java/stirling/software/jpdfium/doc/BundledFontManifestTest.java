@@ -9,6 +9,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import org.apache.fontbox.ttf.CmapTable;
@@ -19,6 +20,15 @@ import org.junit.jupiter.api.Test;
 import org.tukaani.xz.XZInputStream;
 
 class BundledFontManifestTest {
+
+    @Test
+    void malformedManifestFsTypeFallsBackToUnknown() {
+        Map<String, PdfFontEmbedder.Face> index = PdfFontEmbedder.parseBundledManifest(
+                "A.ttf\tA\t0\nB.ttf\tB\tnot-a-number\nC.ttf\tC\t8\n");
+        assertEquals(0, index.get("a").fsType());
+        assertEquals(-1, index.get("b").fsType());
+        assertEquals(8, index.get("c").fsType());
+    }
 
     @Test
     void everyManifestRowMatchesItsFontProgram() throws Exception {
