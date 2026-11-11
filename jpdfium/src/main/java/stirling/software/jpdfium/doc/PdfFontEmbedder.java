@@ -33,7 +33,6 @@ import java.util.stream.Stream;
 
 import org.tukaani.xz.XZInputStream;
 
-import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.panama.QpdfLib;
 
@@ -392,24 +391,8 @@ public final class PdfFontEmbedder {
     }
 
     private static List<String> nonEmbedded(Path pdf) {
-        try (PdfDocument doc = PdfDocument.open(pdf)) {
-            if (PdfFontAuditor.inventoryAvailable()) {
-                List<PdfFontAuditor.FontResource> all = PdfFontAuditor.inventory(doc);
-                if (!all.isEmpty()) {
-                    List<String> names = new ArrayList<>();
-                    for (PdfFontAuditor.FontResource resource : all) {
-                        if (resource.baseName().isEmpty() || resource.embedded()
-                                || "Type3".equals(resource.subtype())) {
-                            continue;
-                        }
-                        names.add(resource.baseName());
-                    }
-                    return names.stream().distinct().toList();
-                }
-            }
-            return PdfFontAuditor.audit(doc).nonEmbeddedFonts().stream()
-                    .map(PdfFontAuditor.FontInfo::baseName).distinct().toList();
-        }
+        return PdfFontAuditor.unembeddedResources(pdf).stream()
+                .map(PdfFontAuditor.FontResource::baseName).distinct().toList();
     }
 
     /** File-backed variant of {@link #embedMissing(byte[], Path...)}. */
