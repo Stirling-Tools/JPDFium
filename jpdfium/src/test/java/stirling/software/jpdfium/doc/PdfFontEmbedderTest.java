@@ -1278,6 +1278,31 @@ class PdfFontEmbedderTest {
     }
 
     @Test
+    void replacedFontFileRechecksEmbeddingPermission(@TempDir Path temp) throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
+        Path dir = Files.createDirectories(temp.resolve("fonts"));
+        Path font = dir.resolve("LiberationSans-Regular.ttf");
+        try (InputStream in = liberationSansStream()) {
+            Files.write(font, in.readAllBytes());
+        }
+        Path input = helveticaPage(temp.resolve("input.pdf"));
+        PdfFontEmbedder.Result allowed =
+                PdfFontEmbedder.embedMissing(Files.readAllBytes(input), dir);
+        assertTrue(allowed.embedded().contains("Helvetica"), allowed.statuses().toString());
+
+        try (InputStream in = liberationSansStream()) {
+            Files.write(font, withFsType(in.readAllBytes(), 2));
+        }
+        PdfFontEmbedder.Result restricted =
+                PdfFontEmbedder.embedMissing(Files.readAllBytes(input), dir);
+        assertTrue(restricted.embedded().isEmpty(),
+                "the replacement font's fsType must be rechecked: " + restricted.embedded());
+        assertTrue(restricted.statuses().stream().anyMatch(s ->
+                        !s.resolved() && s.reason().contains("fsType")),
+                restricted.statuses().toString());
+    }
+
+    @Test
     void fileBackedEmbeddingEmbedsResourceOnlyFonts(@TempDir Path temp) throws Exception {
         assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
         assumeTrue(PdfFontAuditor.inventoryAvailable(), "native font inventory unavailable");

@@ -237,7 +237,6 @@ public final class PdfFontEmbedder {
         Map<String, Face> bundled = fontDirs.length == 0 ? bundledFaces() : null;
         Map<String, Face> index = null;
         Map<String, byte[]> found = new LinkedHashMap<>();
-        Map<Face, byte[]> programs = new HashMap<>();
         List<FontStatus> statuses = new ArrayList<>(missing.size());
         for (String name : missing) {
             if (!substitutable.getOrDefault(name, true)) {
@@ -260,10 +259,15 @@ public final class PdfFontEmbedder {
                                 "embedding restricted by fsType " + restricted.fsType()));
                 continue;
             }
-            byte[] data = programs.get(face);
-            if (data == null) programs.put(face, data = program(face));
+            byte[] data = program(face);
+            int fsType = programFsType(face, data);
+            if (!embeddableProgram(fsType)) {
+                statuses.add(new FontStatus(name, source(face), fsType, false,
+                        "embedding restricted by fsType " + fsType));
+                continue;
+            }
             found.put(name, data);
-            statuses.add(new FontStatus(name, source(face), face.fsType(), true, "embedded"));
+            statuses.add(new FontStatus(name, source(face), fsType, true, "embedded"));
         }
         byte[] out = found.isEmpty() ? null : QpdfLib.embedFonts(pdf, found, true);
         if (out == null) {
@@ -387,13 +391,12 @@ public final class PdfFontEmbedder {
             throws IOException {
         Map<String, Face> index = indexFor(fontDirs);
         Map<String, byte[]> found = new LinkedHashMap<>();
-        Map<Face, byte[]> programs = new HashMap<>();
         for (String name : missing) {
             if (!substitutable.getOrDefault(name, true)) continue;
             Face face = resolve(index, key(name));
             if (face == null) continue;
-            byte[] data = programs.get(face);
-            if (data == null) programs.put(face, data = program(face));
+            byte[] data = program(face);
+            if (!embeddableProgram(programFsType(face, data))) continue;
             found.put(name, data);
         }
         return found;
@@ -666,6 +669,20 @@ public final class PdfFontEmbedder {
             }
         }
         return names;
+    }
+
+    /** fsType of the bytes actually selected for embedding, not the cached index entry. */
+    private static int programFsType(Face face, byte[] data) {
+        if (face.resource() != null) return face.fsType();
+        try {
+            return data.length < 12 ? -1 : fsType(ByteBuffer.wrap(data), 0);
+        } catch (RuntimeException malformed) {
+            return -1;
+        }
+    }
+
+    private static boolean embeddableProgram(int fsType) {
+        return fsType >= 0 && (fsType & 0xF) != 2 && (fsType & 0x0200) == 0;
     }
 
     private static byte[] program(Face face) throws IOException {
