@@ -15,7 +15,7 @@ This file records what was **verified**, not what a previous tracker claimed.
 | `./gradlew buildRealBridge` | PASS |
 | `native/build-real/native_smoke` | PASS |
 | `PdfCompressorTest` | 6 tests, 0 failures |
-| `PdfFontEmbedderTest` | 46 tests, 0 failures |
+| `PdfFontEmbedderTest` | 47 tests, 0 failures |
 | `FontNormalizerTest` | 28 tests, 0 failures |
 | `PdfFontInventoryTest` | 7 tests, 0 failures |
 | `PdfFontEmbedderRoundTripTest` local corpus | 368 tests, 0 failures, 201 assumption skips |
@@ -87,9 +87,9 @@ The previous tracker marked several items resolved that were still present in
 | `uface` accepted as U+FACE | Fixed. Only uppercase `uXXXX` is treated as a hex escape; `uface` returns 0 and `uFACE` returns U+FACE. |
 | CIDSet only written after re-subset | Fixed. `repair_cidset_stream` enumerates all CIDs present in the embedded program when no re-subset occurs, and writes retained CIDs after a re-subset. The repaired `issue20065.pdf` passes the veraPDF CIDSet font rule. |
 | Existing `/W` never corrected | Fixed. `repair_cid_font_widths` now compares existing entries for drawn CIDs against FreeType advances and repairs inconsistent entries; absent `/W` still covers drawn plus zero-advance CIDs. |
-| CJK predefined CMaps unresolved | Deliberately fail-closed. The resource stays in `unresolved`; `embedMissingStrict` throws. No unverified CMap decoding is attempted. |
+| CJK predefined CMaps unresolved | Fixed for Adobe-Japan1 `90ms-RKSJ-H`. Bundled code-to-CID and CID-to-Unicode tables drive a verified `/CIDToGIDMap`, `/W`, and `/ToUnicode`; the fixture now embeds Noto Sans SC and keeps `日本語テスト` extractable. Other predefined CMaps still fail closed. |
 | Default compression mutates fonts without a gate | Fixed. `subsetFonts` defaults to false; when enabled, the compressor adopts a subset only if page count, extracted text, and a zero-MAD preview render all match, otherwise it rolls back. |
-| Already subset-tagged fonts skipped | Kept intentionally. Re-subsetting producer subsets is not enabled by default; doing so needs an opt-in with mapping verification and the same text/render gate. |
+| Already subset-tagged fonts skipped | Fixed as an opt-in. `CompressOptions.subsetTaggedFonts(true)` re-subsets producer `ABCDEF+` fonts under the same text/render gate; the default remains off. |
 | Simple subset output larger than service output | Improved: simple non-symbolic subsets drop `RETAIN_GIDS` and verify glyph names/advances. `GLYPH_NAMES` remains for viewer compatibility, so service parity is not claimed. |
 | Intentional producer widths overwritten | Fixed. Only missing, non-numeric, or non-positive simple widths are repaired; positive widths are preserved. |
 | Scanner budget and nested resources untested | Added a repeated-distinct-form test that drives the 2,048-stream scan budget and asserts fail-closed. Nested Type3/pattern traversal remains covered by corpus round-trips rather than a dedicated synthetic test. |
@@ -114,10 +114,10 @@ The previous tracker marked several items resolved that were still present in
 
 ## Remaining limits
 
-1. **Predefined-CMap CJK CID fonts are still fail-closed.** `90ms-RKSJ-H` with
-   `HeiseiMin-W3` remains unresolved. The API reports it; `embedMissingStrict`
-   throws. A full code-to-Unicode-to-GID rewrite for every predefined CMap is
-   not implemented.
+1. **Predefined-CMap CJK support is limited to Adobe-Japan1 `90ms-RKSJ-H`.**
+   The fixture embeds Noto Sans SC and passes the veraPDF font rule. Other
+   predefined CMaps (`90pv`, `EUC`, `GBK`, `Big5`) remain fail-closed until
+   their code-to-CID and CID-to-Unicode tables are bundled and verified.
 2. **Type3 inline CCITT rendering** remains an upstream PDFium parser bug. Our
    scanners do not trust an ambiguous boundary, so subsetting fails closed, but
    PDFium can still render fewer glyphs than Acrobat/Poppler/MuPDF.
