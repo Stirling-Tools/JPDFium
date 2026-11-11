@@ -605,6 +605,12 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_inspect(const uint8_t* input, int64_t inputL
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_inspect_file(const char* in_path, const char* password,
                                                  char** json);
 
+// Report every font dictionary in the document, including fonts that only
+// exist in unused resource dictionaries or AcroForm /DR. Returns a JSON array;
+// caller frees *json with jpdfium_free_string.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_inspect_fonts(const uint8_t* input, int64_t inputLen,
+                                                  char** json);
+
 // Update/remove /Info entries; NULL value removes a key. Caller frees *output.
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_set_docinfo(const uint8_t* input, int64_t inputLen,
                                                 const char* const* keys, const char* const* values,
