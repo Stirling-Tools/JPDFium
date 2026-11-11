@@ -1420,21 +1420,26 @@ FT_UInt glyphForCode(FT_Face face, int code, bool symbolic, SimpleEncoding const
     return 0;
 }
 
-void addWidths(QPDFObjectHandle font, FT_Face face, bool symbolic) {
+bool addWidths(QPDFObjectHandle font, FT_Face face, bool symbolic) {
     auto enc = parseEncoding(font);
     auto widths = QPDFObjectHandle::newArray();
     bool any_positive = false;
     for (int code = 0; code < 256; ++code) {
-        FT_Fixed advance = 0;
-        FT_Get_Advance(face, glyphForCode(face, code, symbolic, enc), FT_LOAD_NO_SCALE, &advance);
-        long w = advance * 1000 / (face->units_per_EM ? face->units_per_EM : 1000);
+        const FT_UInt gid = glyphForCode(face, code, symbolic, enc);
+        long w = 0;
+        if (gid != 0 && face->units_per_EM != 0) {
+            FT_Fixed advance = 0;
+            FT_Get_Advance(face, gid, FT_LOAD_NO_SCALE, &advance);
+            w = advance * 1000 / face->units_per_EM;
+        }
         if (w > 0) any_positive = true;
         widths.appendItem(QPDFObjectHandle::newInteger(w));
     }
-    if (!any_positive) return;
+    if (!any_positive) return false;
     font.replaceKey("/FirstChar", QPDFObjectHandle::newInteger(0));
     font.replaceKey("/LastChar", QPDFObjectHandle::newInteger(255));
     font.replaceKey("/Widths", widths);
+    return true;
 }
 
 bool reachesSameGlyphs(FT_Library lib, std::string const& subset, FT_Face original,
@@ -3159,6 +3164,10 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
                                  targetName.find("Dingbats") != std::string::npos);
             bool symbolic = !hasEncoding &&
                             (isSymbolName || (flags.isInteger() && (flags.getIntValue() & 4) != 0));
+            if (!cid && !target.getKey("/Widths").isArray() &&
+                !addWidths(target, program.face, symbolic)) {
+                continue;
+            }
             target.replaceKey("/Type", QPDFObjectHandle::newName("/Font"));
             if (cid) font.replaceKey("/Type", QPDFObjectHandle::newName("/Font"));
             if (!descriptor.isDictionary()) {
@@ -3212,8 +3221,6 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
                     target.replaceKey("/CIDToGIDMap", QPDFObjectHandle::newName("/Identity"));
                 if (!cid && glyf) pinTrueTypeMapping(*qpdf, target, program.face, symbolic);
             }
-            if (!cid && !target.getKey("/Widths").isArray())
-                addWidths(target, program.face, symbolic);
             // OTTO/CFF can be carried by a pre-1.6 PDF as /FontFile3
             // /Subtype /Type1C or /CIDFontType0C instead of requiring /Subtype /OpenType
             // and a PDF 1.6 bump (which would violate PDF/A-1).

@@ -126,8 +126,9 @@ publishing workflows, not library releases, so they are not listed here.
   PDF/A font-embedding checks.
 
 - The Adobe Glyph List table covers all 4,281 names, including the 81
-  multi-scalar Arabic/Hebrew sequences, and `uXXXX` names require uppercase
-  hex so ordinary names such as `uface` no longer resolve to U+FACE.
+  multi-scalar Arabic/Hebrew sequences, and `uXXXX` escapes accept lowercase
+  only when they contain a decimal digit, so ordinary names such as `uface`
+  no longer resolve to U+FACE while `u00e9` still works.
 
 - PDF/X-1a and PDF/X-3 no longer accept images with soft masks, which the page
   transparency probe missed, and drop transparency groups from pages that have
