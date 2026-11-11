@@ -59,6 +59,7 @@ using namespace jpdfium_font_encoding;
 
 #include "jpdfium_qpdf_writer_lock.h"
 #include FT_FREETYPE_H
+#include FT_CID_H
 #include FT_ADVANCES_H
 #include FT_FONT_FORMATS_H
 #include FT_TRUETYPE_TABLES_H
@@ -2548,6 +2549,40 @@ void updateCidSet(QPDF& qpdf, QPDFObjectHandle descriptor, std::set<uint32_t> co
     descriptor.replaceKey("/CIDSet", QPDFObjectHandle::newStream(&qpdf, bits));
 }
 
+// CIDs that exist in the embedded CID font program. PDF/A-2 6.2.11.4 test 4
+// requires the CIDSet to describe every one, including CIDs mapped to GID 0;
+// describing only the CIDs drawn by content leaves the bitmap too short.
+std::set<uint32_t> cidsPresentInProgram(QPDFObjectHandle const& target, FT_Face face) {
+    std::set<uint32_t> cids;
+    auto map = target.getKey("/CIDToGIDMap");
+    if (map.isStream()) {
+        try {
+            std::shared_ptr<Buffer> data = map.getStreamData(qpdf_dl_generalized);
+            if (data) {
+                const size_t entries = data->getSize() / 2;
+                for (size_t i = 0; i < entries && i <= kMaxCid; ++i)
+                    cids.insert(static_cast<uint32_t>(i));
+            }
+        } catch (...) {
+            cids.clear();
+        }
+        return cids;
+    }
+    if (face && FT_IS_CID_KEYED(face)) {
+        for (FT_UInt gid = 0; gid < static_cast<FT_UInt>(face->num_glyphs); ++gid) {
+            FT_UInt cid = 0;
+            if (FT_Get_CID_From_Glyph_Index(face, gid, &cid) == 0 && cid <= kMaxCid)
+                cids.insert(static_cast<uint32_t>(cid));
+        }
+        return cids;
+    }
+    if (face && face->num_glyphs > 0) {
+        const long max_gid = std::min<long>(face->num_glyphs - 1, kMaxCid);
+        for (long gid = 0; gid <= max_gid; ++gid) cids.insert(static_cast<uint32_t>(gid));
+    }
+    return cids;
+}
+
 bool hasSubsetTag(std::string const& name) {
     if (name.size() <= 7 || name[6] != '+') return false;
     return std::all_of(name.begin(), name.begin() + 6,
@@ -3314,14 +3349,24 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
                             }
                         } catch (...) {
                         }
+                    } else if (!cidGlyph.empty()) {
+                        for (auto const& [c, gid] : cidGlyph) {
+                            (void)gid;
+                            activeCids.insert(c);
+                        }
+                    } else if (identityCidMap) {
+                        long maxGlyph = std::min<long>(program.face->num_glyphs - 1, kMaxCid);
+                        for (long g = 0; g <= maxGlyph; ++g)
+                            activeCids.insert(static_cast<uint32_t>(g));
+                    } else {
+                        cidSetComplete = false;
+                    }
+                    if (!cidSetComplete) {
+                        activeCids.clear();
+                        descriptor.removeKey("/CIDSet");
                     }
                 }
-                if (cidSetComplete) {
-                    updateCidSet(*qpdf, descriptor, activeCids);
-                } else {
-                    // A wrong CIDSet is worse than a missing one: validators
-                    // would see a bitmap that contradicts the installed program.
-                    descriptor.removeKey("/CIDSet");
+                if (!activeCids.empty()) updateCidSet(*qpdf, descriptor, activeCids);
                 }
             }
             openType |= kind == ProgramKind::OpenType;

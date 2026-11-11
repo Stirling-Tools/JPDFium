@@ -76,6 +76,21 @@ public final class PdfFontEmbedder {
         public Result(byte[] pdf, List<String> embedded, List<String> unresolved) {
             this(pdf, embedded, unresolved, List.of());
         }
+
+        /**
+         * Reject a result that still has unembedded fonts.
+         *
+         * <p>PDF/A work must not silently accept a document whose font program could not be
+         * supplied, especially for a predefined-CMap CID font whose code-to-glyph mapping cannot
+         * be preserved. Callers that only want the best-effort rewrite use {@link #pdf()}.
+         */
+        public Result requireAllEmbedded() {
+            if (!unresolved.isEmpty()) {
+                throw new JPDFiumException(
+                        "fonts still not embedded: " + String.join(", ", unresolved));
+            }
+            return this;
+        }
     }
 
     /** Diagnostic result for one requested font name. */
@@ -302,6 +317,16 @@ public final class PdfFontEmbedder {
         }
         return new Result(out, missing.stream().filter(n -> !unresolved.contains(n)).toList(),
                 unresolved, finalStatuses);
+    }
+
+    /**
+     * Embed missing fonts and reject any result that still has an unembedded font.
+     *
+     * @throws JPDFiumException when a font could not be embedded, including a CID font with a
+     *     predefined CMap whose code-to-glyph mapping cannot be preserved
+     */
+    public static Result embedMissingStrict(byte[] pdf, Path... fontDirs) throws IOException {
+        return embedMissing(pdf, fontDirs).requireAllEmbedded();
     }
 
     /**

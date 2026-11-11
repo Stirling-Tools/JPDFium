@@ -1129,6 +1129,16 @@ class PdfFontEmbedderTest {
     }
 
     @Test
+    void strictEmbeddingFailsOnPredefinedCmapFont() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
+        byte[] input = Files.readAllBytes(Path.of(
+                PdfFontEmbedderTest.class.getResource("/pdfs/general/90ms_rksj_h_sample.pdf").toURI()));
+        JPDFiumException error = assertThrows(JPDFiumException.class,
+                () -> PdfFontEmbedder.embedMissingStrict(input));
+        assertTrue(error.getMessage().contains("HeiseiMin-W3"), error.getMessage());
+    }
+
+    @Test
     void missingFontReportsNoCandidate() {
         PdfFontEmbedder.FontStatus status = PdfFontEmbedder.diagnose("DefinitelyNotAFontFamily");
         assertFalse(status.resolved());

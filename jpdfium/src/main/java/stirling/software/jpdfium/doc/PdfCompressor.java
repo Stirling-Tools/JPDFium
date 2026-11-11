@@ -14,6 +14,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 import java.util.function.BiFunction;
 import java.util.zip.DataFormatException;
 import java.util.zip.Inflater;
@@ -360,10 +361,20 @@ public final class PdfCompressor {
             try {
                 QpdfLib.FontSubsetResult sub = QpdfLib.subsetFonts(resultBytes);
                 if (sub != null && sub.fontsSubset() > 0 && sub.pdf() != null
-                        && sub.pdf().length < resultBytes.length
-                        && valid(sub.pdf(), expectedPages)) {
-                    resultBytes = sub.pdf();
-                    actions.add("Subsetted %d embedded font(s)".formatted(sub.fontsSubset()));
+                        && sub.pdf().length < resultBytes.length) {
+                    // A smaller file is not enough: the subset must keep the
+                    // same text and the same rendered page, otherwise the
+                    // caller's original bytes stay authoritative.
+                    boolean sameText = sameText(resultBytes, sub.pdf(), expectedPages);
+                    double mad = sameText
+                            ? maxPreviewMeanAbsDiff(resultBytes, sub.pdf(), expectedPages)
+                            : Double.POSITIVE_INFINITY;
+                    if (valid(sub.pdf(), expectedPages) && sameText && mad <= 0.0) {
+                        resultBytes = sub.pdf();
+                        actions.add("Subsetted %d embedded font(s)".formatted(sub.fontsSubset()));
+                    } else {
+                        warnings.add("font subsetting rolled back: text or render changed");
+                    }
                 }
             } catch (Exception e) {
                 warnings.add("font subsetting failed; kept original bytes: " + e.getMessage());
@@ -915,6 +926,22 @@ public final class PdfCompressor {
             }
         }
         return count == 0 ? 0.0 : (double) sum / count;
+    }
+
+    // Reopens both documents and requires identical extracted text on every page.
+    private static boolean sameText(byte[] before, byte[] after, int expectedPages) {
+        try (PdfDocument db = PdfDocument.open(before);
+             PdfDocument da = PdfDocument.open(after)) {
+            if (db.pageCount() != expectedPages || da.pageCount() != expectedPages) return false;
+            for (int i = 0; i < expectedPages; i++) {
+                if (!Objects.equals(db.page(i).extractText(), da.page(i).extractText()))
+                    return false;
+            }
+            return true;
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            return false;
+        }
     }
 
     // Reopens the candidate and checks it still parses with the expected page count.

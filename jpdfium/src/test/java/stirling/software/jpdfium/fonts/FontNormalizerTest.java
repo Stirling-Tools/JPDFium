@@ -25,6 +25,7 @@ import org.apache.pdfbox.text.PDFTextStripper;
 import org.junit.jupiter.api.Test;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
+import stirling.software.jpdfium.doc.PdfFontEmbedder;
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.model.FontType;
 import stirling.software.jpdfium.panama.NativeRuntime;
@@ -37,12 +38,15 @@ import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Base64;
 import java.util.zip.GZIPInputStream;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -576,14 +580,17 @@ class FontNormalizerTest {
     }
 
     @Test
-    void normalizeAllRepairsCidSetBitsetFromDrawnCids() throws Exception {
+    void normalizeAllSynthesizesCidSetFromProgramCoverage() throws Exception {
         assumeTrue(NativeRuntime.isFull(), "needs real native library");
-        // A valid /CIDSet that marks CID 0, the drawn CID 36, and the unreferenced
-        // CID 50. Subsetting is skipped for the already-tagged font, so the
-        // normalizer must preserve this stream instead of replacing it with the
-        // drawn-only CID set.
-        byte[] validCidSet = new byte[] {(byte) 0x80, 0, 0, 0, 0x08, 0, 0x20};
-        byte[] pdf = cidTrueTypePdf("ABCDEF+LiberationSans", validCidSet);
+        // The stale /CIDSet marks only CID 0, the drawn CID 36, and unreferenced
+        // CID 50. ISO 19005-2 6.2.11.4 test 4 requires every CID present in the
+        // program, so the normalizer must rebuild the full 0..numGlyphs-1 bitmap.
+        byte[] staleCidSet = new byte[] {(byte) 0x80, 0, 0, 0, 0x08, 0, 0x20};
+        byte[] pdf = cidTrueTypePdf("ABCDEF+LiberationSans", staleCidSet);
+        int numGlyphs = FontNormalizer.classify(liberationSansBytes()).numGlyphs();
+        byte[] expected = new byte[(numGlyphs + 7) / 8];
+        for (int cid = 0; cid < numGlyphs; cid++)
+            expected[cid / 8] |= (byte) (0x80 >> (cid % 8));
 
         try (PdfDocument doc = PdfDocument.open(pdf)) {
             FontNormalizer.Result first = FontNormalizer.normalizeAll(doc);
@@ -597,8 +604,8 @@ class FontNormalizerTest {
                 COSDictionary descriptor =
                         (COSDictionary) descendant.getDictionaryObject(COSName.FONT_DESC);
                 assertNotNull(descriptor);
-                assertArrayEquals(validCidSet, streamBytes(descriptor, COSName.CID_SET),
-                        "/CIDSet must be preserved and not overwritten with drawn-only CIDs");
+                assertArrayEquals(expected, streamBytes(descriptor, COSName.CID_SET),
+                        "/CIDSet must describe every CID present in the embedded program");
             }
 
             FontNormalizer.Result second = FontNormalizer.normalizeAll(doc);
@@ -606,6 +613,47 @@ class FontNormalizerTest {
             assertEquals(0, second.widthsRepaired());
             assertEquals(0, second.type1Converted());
             assertEquals(0, second.resubset());
+        }
+    }
+
+    @Test
+    void normalizeAllRepairsStaleCidSetAndInconsistentWidths() throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real native library");
+        byte[] input = Files.readAllBytes(Path.of(FontNormalizerTest.class
+                .getResource("/pdfs/general/issue20065.pdf").toURI()));
+        PdfFontEmbedder.Result embedded = PdfFontEmbedder.embedMissing(input);
+        assertTrue(embedded.unresolved().isEmpty(), "unresolved: " + embedded.unresolved());
+
+        try (PdfDocument doc = PdfDocument.open(embedded.pdf())) {
+            FontNormalizer.Result result = FontNormalizer.normalizeAll(doc);
+            assertEquals(1, result.widthsRepaired(),
+                    "the existing /W must be corrected against the embedded program");
+            assertEquals(0, result.resubset(), "the already-tagged font must not be re-subset");
+
+            byte[] repaired = doc.saveBytes();
+            try (PDDocument loaded = Loader.loadPDF(repaired)) {
+                COSDictionary descendant = cidDescendant(loaded);
+                assertNotNull(descendant);
+                COSDictionary descriptor =
+                        (COSDictionary) descendant.getDictionaryObject(COSName.FONT_DESC);
+                assertNotNull(descriptor);
+                COSStream map = (COSStream)
+                        descendant.getDictionaryObject(COSName.CID_TO_GID_MAP);
+                assertNotNull(map, "embedded CID font must carry a CIDToGIDMap");
+                int entries;
+                try (InputStream in = map.createInputStream()) {
+                    entries = in.readAllBytes().length / 2;
+                }
+                byte[] cidSet = streamBytes(descriptor, COSName.CID_SET);
+                assertEquals((entries + 7) / 8, cidSet.length,
+                        "CIDSet must cover every CID in the map");
+                for (int cid = 0; cid < entries; cid++) {
+                    assertTrue((cidSet[cid / 8] & (0x80 >> (cid % 8))) != 0,
+                            "CIDSet must mark CID " + cid);
+                }
+                assertEquals("Hello World", new PDFTextStripper().getText(loaded).strip(),
+                        "repairing widths and CIDSet must not change extracted text");
+            }
         }
     }
 

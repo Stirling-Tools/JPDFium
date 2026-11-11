@@ -135,6 +135,28 @@ class PdfCompressorTest {
     }
 
     @Test
+    void defaultAndWebPresetDoNotSubsetFonts(@TempDir Path temp) throws Exception {
+        assumeTrue(QpdfLib.isSubsetFontsSupported(), "native font subsetting unavailable");
+        assertFalse(CompressOptions.builder().build().subsetFonts(),
+                "font subsetting must be opt-in");
+        assertFalse(CompressPreset.WEB.subsetFonts(),
+                "WEB preserves the caller's fonts unless subsetting is requested");
+        Path src = fullFontPdf(temp);
+
+        for (CompressOptions options : new CompressOptions[] {
+                CompressOptions.builder().build(),
+                CompressOptions.builder().preset(CompressPreset.WEB).build()}) {
+            try (PdfDocument doc = PdfDocument.open(src)) {
+                PdfCompressor.CompressResultWithBytes out =
+                        PdfCompressor.compress(doc, options);
+                assertFalse(
+                        out.result().actions().stream().anyMatch(a -> a.contains("Subsetted")),
+                        "default compression must not rewrite fonts: " + out.result().actions());
+            }
+        }
+    }
+
+    @Test
     void explicitSubsetFontsFalseDisablesPass(@TempDir Path temp) throws Exception {
         assumeTrue(QpdfLib.isSubsetFontsSupported(), "native font subsetting unavailable");
         Path src = fullFontPdf(temp);
