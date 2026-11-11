@@ -792,9 +792,12 @@ public final class PdfFontEmbedder {
         if (data.length >= 16 && b.getInt(0) == TTCF) {
             String wanted = key(name);
             int foundFace = -1;
-            for (int f = 0; f < b.getInt(8); f++) {
-                if (names(b, b.getInt(12 + 4 * f)).stream().map(PdfFontEmbedder::key).anyMatch(wanted::equals)) {
-                    foundFace = b.getInt(12 + 4 * f);
+            int count = Math.min(b.getInt(8), (data.length - 12) / 4);
+            for (int f = 0; f < count; f++) {
+                int faceOffset = b.getInt(12 + 4 * f);
+                requireRange(b, faceOffset, 12);
+                if (names(b, faceOffset).stream().map(PdfFontEmbedder::key).anyMatch(wanted::equals)) {
+                    foundFace = faceOffset;
                     break;
                 }
             }
@@ -807,8 +810,9 @@ public final class PdfFontEmbedder {
     }
 
     private static boolean isSymbolicName(String name) {
-        String n = name.toLowerCase(java.util.Locale.ROOT).replaceFirst("^[a-z]{6}\\+", "");
-        return n.contains("symbol") || n.contains("dingbat");
+        String n = name.toLowerCase(Locale.ROOT).replaceFirst("^[a-z]{6}\\+", "");
+        return n.equals("symbol") || n.equals("zapfdingbats") || n.startsWith("symbol,")
+                || n.startsWith("zapfdingbats,") || n.equals("dingbats") || n.startsWith("dingbats,");
     }
 
     private static byte[] sanitizeSymbolicTrueType(byte[] fontData) {
@@ -829,7 +833,9 @@ public final class PdfFontEmbedder {
         if (cmapRecordOffset < 0) return fontData;
         int cmapOffset = buf.getInt(cmapRecordOffset + 8);
         int cmapLength = buf.getInt(cmapRecordOffset + 12);
-        if (cmapOffset < 0 || cmapLength < 4 || cmapOffset + cmapLength > fontData.length) return fontData;
+        if (cmapOffset < 0 || cmapLength < 12 || (long) cmapOffset + cmapLength > fontData.length) {
+            return fontData;
+        }
 
         int numSubtables = buf.getShort(cmapOffset + 2) & 0xFFFF;
         if (numSubtables <= 1) return fontData;

@@ -37,6 +37,7 @@ import java.util.Set;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeFalse;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -117,10 +118,9 @@ class PdfFontEmbedderRoundTripTest {
                     BufferedImage before = renderable(a);
                     if (before == null) continue;
                     long diff = differingPixels(before, b.renderImage(72));
-                    long total = (long) before.getWidth() * before.getHeight();
-                    assertTrue(diff == 0 || (total > 0 && (double) diff / total < 0.005),
+                    assertEquals(0L, diff,
                             pdf.getFileName() + " page " + i + " renders differently after re-embedding: "
-                                    + diff + " / " + total + " pixels");
+                                    + diff + " pixels");
                 }
             }
             for (var font : PdfFontAuditor.auditAll(actual).nonEmbeddedFonts()) {
@@ -165,6 +165,9 @@ class PdfFontEmbedderRoundTripTest {
                 try (a; PdfPage b = after.page(i)) {
                     if (!gainedToUnicode) {
                         assertSameOrResolvedText(a.extractText(), b.extractText(), pdf.getFileName() + " page " + i);
+                    } else {
+                        String txt = b.extractText();
+                        assertFalse(txt.contains("\uFFFD"), pdf.getFileName() + " page " + i + " text contains U+FFFD after gaining ToUnicode");
                     }
                     BufferedImage ia = renderable(a);
                     if (ia == null) continue;
@@ -256,18 +259,19 @@ class PdfFontEmbedderRoundTripTest {
         return usable;
     }
 
-    private static PDDocument load(Path pdf) {
+    private static PDDocument load(Path pdf) throws java.io.IOException {
+        PDDocument doc;
         try {
-            PDDocument doc = Loader.loadPDF(pdf.toFile());
-            if (doc.isEncrypted()) {
-                doc.close();
-                assumeTrue(false, "encrypted");
-            }
-            return doc;
-        } catch (Throwable e) {
+            doc = Loader.loadPDF(pdf.toFile());
+        } catch (java.io.IOException | RuntimeException e) {
             assumeTrue(false, "PDFBox cannot load: " + e.getMessage());
             return null;
         }
+        if (doc.isEncrypted()) {
+            doc.close();
+            assumeTrue(false, "encrypted");
+        }
+        return doc;
     }
 
     private static byte[] save(PDDocument doc) throws java.io.IOException {
@@ -317,7 +321,7 @@ class PdfFontEmbedderRoundTripTest {
     private static void assertSameOrResolvedText(String before, String after, String where) {
         String a = before.replaceAll("\\s", "");
         String b = after.replaceAll("\\s", "");
-        if (a.isEmpty() && !b.isEmpty()) {
+        if (a.isEmpty() && b.isEmpty()) {
             return;
         }
         boolean same = a.length() == b.length();
@@ -326,11 +330,8 @@ class PdfFontEmbedderRoundTripTest {
             same = c == b.charAt(i) || c == '?' || c == '\uFFFD' || Character.isISOControl(c);
         }
         if (!same) {
-            char[] ca = a.toCharArray();
-            char[] cb = b.toCharArray();
-            java.util.Arrays.sort(ca);
-            java.util.Arrays.sort(cb);
-            if (java.util.Arrays.equals(ca, cb)) {
+            boolean hasReplacement = a.contains("?") || a.contains("\uFFFD");
+            if (hasReplacement && !b.isEmpty()) {
                 return;
             }
             assertEquals(a, b, where + " text");

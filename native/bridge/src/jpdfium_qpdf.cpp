@@ -1271,11 +1271,14 @@ void ensureMicrosoftUnicodeCmap(std::string& sfnt) {
         }
     }
 
-    if (!cmapEntryOff || cmapOffset + 4 > sfnt.size() || cmapOffset + cmapLength > sfnt.size())
+    // Compare against remaining size instead of adding the (attacker-controlled)
+    // offsets, which would wrap around before the bounds check.
+    if (!cmapEntryOff || cmapOffset > sfnt.size() || sfnt.size() - cmapOffset < 4 ||
+        cmapLength > sfnt.size() - cmapOffset)
         return;
 
-    uint16_t numSubtables = read16(cmapOffset + 2);
-    if (cmapOffset + 4 + static_cast<size_t>(numSubtables) * 8 > sfnt.size()) return;
+    uint16_t numSubtables = read16(static_cast<size_t>(cmapOffset) + 2);
+    if (cmapLength < 4 || static_cast<size_t>(numSubtables) * 8 > cmapLength - 4) return;
 
     bool hasMsUnicode = false;
     size_t unicodeSubtableOff = 0;
@@ -1289,7 +1292,10 @@ void ensureMicrosoftUnicodeCmap(std::string& sfnt) {
             break;
         }
         if (plat == 0 && (enc == 3 || enc == 4 || enc == 0)) {
-            unicodeSubtableOff = subOff;
+            uint32_t subtableDataOffset = read32(subOff + 4);
+            if (static_cast<size_t>(cmapOffset) + subtableDataOffset + 2 <= sfnt.size() &&
+                read16(static_cast<size_t>(cmapOffset) + subtableDataOffset) == 4)
+                unicodeSubtableOff = subOff;
         }
     }
 
@@ -1314,7 +1320,7 @@ void ensureMicrosoftUnicodeCmap(std::string& sfnt) {
     write32(cmapEntryOff + 4, cmapSum);
 
     // Recalculate head checkSumAdjustment if head table is present
-    if (headOffset && headOffset + 12 <= sfnt.size()) {
+    if (headOffset && headOffset <= sfnt.size() && sfnt.size() - headOffset >= 12) {
         write32(headOffset + 8, 0);
         uint32_t fontSum = 0;
         for (size_t i = 0; i < sfnt.size(); i += 4) {
@@ -2494,16 +2500,14 @@ void pinTrueTypeMapping(QPDF& qpdf, QPDFObjectHandle font, FT_Face face, bool sy
         if ((code >= 0x20 || differs) &&
             (differs || (u != 0 && u != baseEncodingUnicode(BaseEncoding::WinAnsi, code)))) {
             char name[64] = "";
-            if (differs) {
-                if (const char* agl = adobeGlyphNameForUnicode(static_cast<uint32_t>(u))) {
-                    std::snprintf(name, sizeof name, "%s", agl);
-                } else if (unicodeForGlyphName(enc.differences.at(code))) {
-                    std::snprintf(name, sizeof name, "%s", enc.differences.at(code).c_str());
-                } else {
-                    std::snprintf(name, sizeof name, ".notdef");
-                }
-            } else if (const char* agl = adobeGlyphNameForUnicode(static_cast<uint32_t>(u))) {
+            if (const char* agl = adobeGlyphNameForUnicode(static_cast<uint32_t>(u))) {
                 std::snprintf(name, sizeof name, "%s", agl);
+            } else if (differs && unicodeForGlyphName(enc.differences.at(code))) {
+                std::snprintf(name, sizeof name, "%s", enc.differences.at(code).c_str());
+            } else if (u > 0 && u <= 0xFFFF) {
+                std::snprintf(name, sizeof name, "uni%04lX", u);
+            } else if (differs) {
+                std::snprintf(name, sizeof name, ".notdef");
             }
             if (name[0]) {
                 if (code != lastCode + 1) {
@@ -2821,13 +2825,48 @@ int subsetEmbeddedFonts(QPDF& qpdf) {
             for (auto& child : children.getArrayAsVector()) pendingFields.push_back(child);
         }
     }
-    if (acroForm.isDictionary()) collectFromResources(acroForm.getKey("/DR"));
+    // Fonts reachable from /AcroForm /DR may be used for interactive text entry
+    // in form fields that never reference them from a page /Resources. They are
+    // never subset candidates: collect them separately so their descriptors and
+    // programs can be marked as shared (see below) and excluded from uniqueFonts.
+    std::vector<QPDFObjectHandle> formFonts;
+    std::set<QPDFObjGen> visitedFormResources;
+    std::vector<QPDFObjectHandle> pendingFormResources{
+        acroForm.isDictionary() ? acroForm.getKey("/DR") : QPDFObjectHandle()};
+    while (!pendingFormResources.empty()) {
+        QPDFObjectHandle res = pendingFormResources.back();
+        pendingFormResources.pop_back();
+        if (!res.isDictionary()) continue;
+        if (res.isIndirect() && !visitedFormResources.insert(res.getObjGen()).second) continue;
+        auto fontDict = res.getKey("/Font");
+        if (fontDict.isDictionary()) {
+            for (auto const& [name, font] : fontDict.getDictAsMap()) {
+                if (!font.isDictionary()) continue;
+                formFonts.push_back(font);
+                auto descendants = font.getKey("/DescendantFonts");
+                if (!descendants.isArray()) continue;
+                for (auto& descendant : descendants.getArrayAsVector())
+                    if (descendant.isDictionary()) formFonts.push_back(descendant);
+            }
+        }
+        auto xobjects = res.getKey("/XObject");
+        if (xobjects.isDictionary()) {
+            for (auto const& [name, xobject] : xobjects.getDictAsMap()) {
+                if (!xobject.isStream()) continue;
+                pendingFormResources.push_back(xobject.getDict().getKey("/Resources"));
+            }
+        }
+    }
+    std::set<QPDFObjGen> formFontObjects;
+    for (auto const& font : formFonts)
+        if (font.isIndirect()) formFontObjects.insert(font.getObjGen());
 
     // Deduplicate indirect font dictionaries and count shared descriptors/streams.
     std::set<QPDFObjGen> seenFonts;
     std::vector<QPDFObjectHandle> uniqueFonts;
     for (auto const& font : fonts) {
         if (font.isIndirect() && !seenFonts.insert(font.getObjGen()).second) continue;
+        if (font.isIndirect() && formFontObjects.contains(font.getObjGen())) continue;
         uniqueFonts.push_back(font);
     }
 
@@ -2847,6 +2886,20 @@ int subsetEmbeddedFonts(QPDF& qpdf) {
                 stream = ff3;
         }
         if (stream.isIndirect()) ++streamUseCount[stream.getObjGen()];
+    }
+
+    // Sentinel counts keep AcroForm /DR fonts, descriptors and programs out of
+    // subsetting even when a page /Resources also references them. Subsetting
+    // form fonts would break interactive entry for characters not yet drawn.
+    for (auto const& font : formFonts) {
+        auto descriptor = font.getKey("/FontDescriptor");
+        if (!descriptor.isDictionary()) continue;
+        if (descriptor.isIndirect()) descriptorUseCount[descriptor.getObjGen()] = 999999;
+        for (char const* key : {"/FontFile", "/FontFile2", "/FontFile3"}) {
+            auto stream = descriptor.getKey(key);
+            if (stream.isStream() && stream.isIndirect())
+                streamUseCount[stream.getObjGen()] = 999999;
+        }
     }
 
     FT_Library lib = nullptr;
@@ -4559,14 +4612,6 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_decrypt_file(const char*, const char*, const
 
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_copy_encryption_file(const char*, const char*, const char*,
                                                          const char*) {
-    return -1;
-}
-
-JPDFIUM_EXPORT int32_t jpdfium_qpdf_subset_fonts(const uint8_t*, int64_t, uint8_t** output,
-                                                 int64_t* outputLen, int32_t* fontsSubset) {
-    if (output) *output = nullptr;
-    if (outputLen) *outputLen = 0;
-    if (fontsSubset) *fontsSubset = 0;
     return -1;
 }
 

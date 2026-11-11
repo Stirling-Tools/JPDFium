@@ -356,12 +356,17 @@ public final class PdfCompressor {
 
         // 5. Subset already-embedded TrueType/OpenType programs. Run before the
         //    structural pass so qpdf recompresses the smaller font streams.
-        if (!signed && !pdfA && opts.subsetFonts() && QpdfLib.isSubsetFontsSupported()) {
-            QpdfLib.FontSubsetResult sub = QpdfLib.subsetFonts(resultBytes);
-            if (sub != null && sub.fontsSubset() > 0 && sub.pdf() != null
-                    && sub.pdf().length < resultBytes.length) {
-                resultBytes = sub.pdf();
-                actions.add("Subsetted %d embedded font(s)".formatted(sub.fontsSubset()));
+        if (!preserve && opts.subsetFonts() && QpdfLib.isSubsetFontsSupported()) {
+            try {
+                QpdfLib.FontSubsetResult sub = QpdfLib.subsetFonts(resultBytes);
+                if (sub != null && sub.fontsSubset() > 0 && sub.pdf() != null
+                        && sub.pdf().length < resultBytes.length
+                        && valid(sub.pdf(), expectedPages)) {
+                    resultBytes = sub.pdf();
+                    actions.add("Subsetted %d embedded font(s)".formatted(sub.fontsSubset()));
+                }
+            } catch (Exception e) {
+                warnings.add("font subsetting failed; kept original bytes: " + e.getMessage());
             }
         }
 
