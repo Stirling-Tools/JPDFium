@@ -11,11 +11,12 @@ import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
-import org.apache.pdfbox.pdmodel.common.PDStream;
 import org.apache.pdfbox.pdmodel.PDResources;
+import org.apache.pdfbox.pdmodel.common.PDStream;
 import org.apache.pdfbox.pdmodel.font.PDFont;
 import org.apache.pdfbox.pdmodel.font.PDType1Font;
 import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
+import org.apache.pdfbox.pdmodel.interactive.form.PDAcroForm;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
@@ -425,6 +426,117 @@ class PdfFontEmbedderTest {
             }
         }
         assertTrue(verified2, "font replacement must be verified on PdfDocument overload");
+    }
+
+    @Test
+    void normalizedKeysKeepResolverSemantics() {
+        assertEquals("helvetica", PdfFontEmbedder.key("Helvetica"));
+        assertEquals("helvetica", PdfFontEmbedder.key("/Helvetica"));
+        assertEquals("helvetica", PdfFontEmbedder.key("ABCDEF+Helvetica"));
+        assertEquals("arialbold", PdfFontEmbedder.key("Arial-BoldMT"));
+        assertEquals("arialbolditalic", PdfFontEmbedder.key("Arial-BoldItalicPS"));
+        assertEquals("arialitalic", PdfFontEmbedder.key("Arial-Oblique"));
+        assertEquals("timesnewroman", PdfFontEmbedder.key("TimesNewRomanPSMT"));
+        assertEquals("liberationserif", PdfFontEmbedder.key("LiberationSerif-Regular"));
+        assertEquals("couriernew", PdfFontEmbedder.key("CourierNew,Roman"));
+    }
+
+    @Test
+    void auditAllReportsUnusedResourceFonts() throws Exception {
+        assumeTrue(PdfFontAuditor.inventoryAvailable(), "native font inventory unavailable");
+        Path source = Path.of(PdfFontEmbedderTest.class.getResource("/pdfs/general/irs_1099m.pdf")
+                .toURI());
+        byte[] input = Files.readAllBytes(source);
+        try (PdfDocument doc = PdfDocument.open(input)) {
+            List<PdfFontAuditor.FontResource> resources = PdfFontAuditor.inventory(doc);
+            assertTrue(resources.stream().anyMatch(resource ->
+                            resource.baseName().equals("Helvetica")
+                                    && resource.resourceOnly() && !resource.embedded()),
+                    "unused Helvetica resource must be inventoried");
+            assertTrue(resources.stream().anyMatch(resource ->
+                            resource.baseName().equals("ZapfDingbats") && !resource.embedded()),
+                    "ZapfDingbats must be inventoried even when only an appearance uses it");
+
+            PdfFontAuditor.AuditReport report = PdfFontAuditor.auditAll(doc);
+            assertTrue(report.nonEmbeddedFonts().stream().anyMatch(font ->
+                            font.baseName().equals("Helvetica") && font.pages().isEmpty()),
+                    "auditAll must report the resource-only font as non-embedded");
+        }
+    }
+
+    @Test
+    void embedMissingEmbedsResourceOnlyFonts() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
+        assumeTrue(PdfFontAuditor.inventoryAvailable(), "native font inventory unavailable");
+        byte[] input;
+        try (PDDocument pdf = new PDDocument()) {
+            PDPage page = new PDPage();
+            pdf.addPage(page);
+            PDResources resources = new PDResources();
+            resources.put(COSName.getPDFName("Used"), new PDType1Font(Standard14Fonts.FontName.HELVETICA));
+            page.setResources(resources);
+            PDAcroForm acroForm = new PDAcroForm(pdf);
+            PDResources defaultResources = new PDResources();
+            defaultResources.put(COSName.getPDFName("Unused"),
+                    new PDType1Font(Standard14Fonts.FontName.TIMES_ROMAN));
+            acroForm.setDefaultResources(defaultResources);
+            pdf.getDocumentCatalog().setAcroForm(acroForm);
+            try (var content = new PDPageContentStream(pdf, page)) {
+                content.beginText();
+                content.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 12);
+                content.showText("used");
+                content.endText();
+            }
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            pdf.save(out);
+            input = out.toByteArray();
+        }
+
+        try (PdfDocument doc = PdfDocument.open(input)) {
+            PdfFontAuditor.FontResource unused = PdfFontAuditor.inventory(doc).stream()
+                    .filter(resource -> resource.baseName().equals("Times-Roman"))
+                    .findFirst().orElseThrow();
+            assertTrue(unused.resourceOnly(), "Times-Roman must only exist in AcroForm /DR");
+            assertFalse(unused.embedded(), "the unused resource starts without a program");
+            assertTrue(PdfFontAuditor.auditAll(doc).nonEmbeddedFonts().stream()
+                            .anyMatch(font -> font.baseName().equals("Times-Roman")),
+                    "the unused resource must be audited even though no page draws with it");
+        }
+
+        PdfFontEmbedder.Result result = PdfFontEmbedder.embedMissing(input);
+        assumeTrue(result.embedded().contains("Helvetica"), "no Helvetica substitute installed");
+        assertTrue(result.embedded().contains("Times-Roman"),
+                "resource-only Times-Roman must be embedded: " + result);
+        assertTrue(result.unresolved().isEmpty(), "nothing should remain unresolved: " + result);
+        try (PdfDocument doc = PdfDocument.open(result.pdf())) {
+            assertTrue(PdfFontAuditor.auditAll(doc).nonEmbeddedFonts().isEmpty(),
+                    "every font resource must carry a program after embedding");
+        }
+    }
+
+    @Test
+    void pageResourcesReplacePdfiumFallbackFonts() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
+        assumeTrue(PdfFontAuditor.inventoryAvailable(), "native font inventory unavailable");
+        Path source = Path.of(PdfFontEmbedderTest.class
+                .getResource("/pdfs/general/basic_ResourceDictInheritanceDemo.pdf").toURI());
+        byte[] input = Files.readAllBytes(source);
+        try (PdfDocument doc = PdfDocument.open(input)) {
+            List<String> names = PdfFontAuditor.inventory(doc).stream()
+                    .map(PdfFontAuditor.FontResource::baseName).toList();
+            assertTrue(names.contains("Times-Roman"),
+                    "inventory must see the page resource font: " + names);
+            assertFalse(names.contains("Courier"),
+                    "shadowed page-tree resources are not reachable from the page: " + names);
+            List<String> missing = PdfFontAuditor.auditAll(doc).nonEmbeddedFonts().stream()
+                    .map(PdfFontAuditor.FontInfo::baseName).toList();
+            assertFalse(missing.contains("Helvetica"),
+                    "PDFium fallback font must not be reported as a real resource: " + missing);
+        }
+        PdfFontEmbedder.Result result = PdfFontEmbedder.embedMissing(input);
+        assumeTrue(result.embedded().contains("Times-Roman"), "no Times substitute installed");
+        assertFalse(result.unresolved().contains("Times-Roman"),
+                "inherited Times-Roman must be embedded");
     }
 
     private static Map<String, byte[]> findAllEmbeddedFonts(byte[] input) throws Exception {
