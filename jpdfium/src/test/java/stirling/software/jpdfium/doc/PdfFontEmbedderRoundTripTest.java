@@ -29,6 +29,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -182,11 +183,19 @@ class PdfFontEmbedderRoundTripTest {
                     continue;
                 }
                 try (a; PdfPage b = after.page(i)) {
-                    if (!gainedToUnicode) {
-                        assertSameOrResolvedText(a.extractText(), b.extractText(), pdf.getFileName() + " page " + i);
-                    } else {
-                        String txt = b.extractText();
-                        assertFalse(txt.contains("\uFFFD"), pdf.getFileName() + " page " + i + " text contains U+FFFD after gaining ToUnicode");
+                    String beforeText = a.extractText();
+                    String afterText = b.extractText();
+                    assertSameOrResolvedText(beforeText, afterText,
+                            pdf.getFileName() + " page " + i);
+                    if (gainedToUnicode) {
+                        if (!beforeText.isEmpty()) {
+                            assertFalse(afterText.isEmpty(),
+                                    pdf.getFileName() + " page " + i
+                                            + " lost text after gaining ToUnicode");
+                        }
+                        assertFalse(afterText.contains("\uFFFD"),
+                                pdf.getFileName() + " page " + i
+                                        + " text contains U+FFFD after gaining ToUnicode");
                     }
                     BufferedImage ia = renderable(a);
                     if (ia == null) continue;
@@ -278,11 +287,11 @@ class PdfFontEmbedderRoundTripTest {
         return usable;
     }
 
-    private static PDDocument load(Path pdf) throws java.io.IOException {
+    private static PDDocument load(Path pdf) throws IOException {
         PDDocument doc;
         try {
             doc = Loader.loadPDF(pdf.toFile());
-        } catch (java.io.IOException | RuntimeException e) {
+        } catch (IOException | RuntimeException e) {
             assumeTrue(false, "PDFBox cannot load: " + e.getMessage());
             return null;
         }
@@ -293,13 +302,13 @@ class PdfFontEmbedderRoundTripTest {
         return doc;
     }
 
-    private static byte[] save(PDDocument doc) throws java.io.IOException {
+    private static byte[] save(PDDocument doc) throws IOException {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         doc.save(out, org.apache.pdfbox.pdfwriter.compress.CompressParameters.NO_COMPRESSION);
         return out.toByteArray();
     }
 
-    private static void assertEmbeddedStylesMatch(byte[] pdf, java.util.Collection<String> embeddedNames) throws java.io.IOException {
+    private static void assertEmbeddedStylesMatch(byte[] pdf, Collection<String> embeddedNames) throws IOException {
         try (PDDocument doc = Loader.loadPDF(pdf)) {
             for (COSObject object : doc.getDocument().getObjectsByType(COSName.FONT)) {
                 if (!(object.getObject() instanceof COSDictionary font)) continue;
@@ -317,18 +326,15 @@ class PdfFontEmbedderRoundTripTest {
                     if (ttf.getName() != null) {
                         String expectedStyle = style(name);
                         String actualStyle = style(ttf.getName());
-                        if (!expectedStyle.isEmpty() && actualStyle.isEmpty()) {
-                            continue;
-                        }
                         assertEquals(expectedStyle, actualStyle, name + " embedded as " + ttf.getName());
                     }
-                } catch (java.io.IOException unparsableByPdfBox) {
+                } catch (IOException unparsableByPdfBox) {
                 }
             }
         }
     }
 
-    private static long fontsWithToUnicode(byte[] pdf) throws java.io.IOException {
+    private static long fontsWithToUnicode(byte[] pdf) throws IOException {
         try (PDDocument doc = Loader.loadPDF(pdf)) {
             return doc.getDocument().getObjectsByType(COSName.FONT).stream()
                     .map(COSObject::getObject)
