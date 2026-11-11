@@ -131,6 +131,11 @@ public final class QpdfLib {
             "jpdfium_qpdf_inspect_fonts",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS));
 
+    private static final MethodHandle INSPECT_FONTS_FILE_HANDLE =
+            Symbols.downcallOptionalUnguarded(
+                    "jpdfium_qpdf_inspect_fonts_file",
+                    FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
+
     /** True when this native build can embed font programs. */
     public static boolean isFontReplacementSupported() {
         return EMBED_FONTS_HANDLE != null;
@@ -139,6 +144,11 @@ public final class QpdfLib {
     /** True when this native build can inventory every font resource. */
     public static boolean isFontInventorySupported() {
         return INSPECT_FONTS_HANDLE != null;
+    }
+
+    /** True when this native build can inventory a file without reading it into the heap. */
+    public static boolean isFileFontInventorySupported() {
+        return INSPECT_FONTS_FILE_HANDLE != null;
     }
 
     /**
@@ -153,6 +163,33 @@ public final class QpdfLib {
             MemorySegment jsonPtr = arena.allocate(ADDRESS);
             int rc = (int) INSPECT_FONTS_HANDLE.invokeExact(
                     arena.allocateFrom(JAVA_BYTE, input), (long) input.length, jsonPtr);
+            if (rc != 0) return null;
+            MemorySegment json = jsonPtr.get(ADDRESS, 0);
+            if (json.equals(MemorySegment.NULL)) return null;
+            try {
+                return FfmHelper.readNativeString(json);
+            } finally {
+                JpdfiumH.jpdfium_free_string(json);
+            }
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw new JPDFiumException("qpdf font inspection failed", t);
+        } finally {
+            releaseSlot(held);
+        }
+    }
+
+    /**
+     * File-backed form of {@link #inspectFonts(byte[])}. Returns {@code null} when the native
+     * build cannot inventory fonts or the document cannot be parsed.
+     */
+    public static String inspectFonts(Path input) {
+        if (INSPECT_FONTS_FILE_HANDLE == null || input == null) return null;
+        Semaphore held = acquireSlotOrThrow("font inspection");
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment jsonPtr = arena.allocate(ADDRESS);
+            int rc = (int) INSPECT_FONTS_FILE_HANDLE.invokeExact(
+                    arena.allocateFrom(input.toAbsolutePath().toString()), jsonPtr);
             if (rc != 0) return null;
             MemorySegment json = jsonPtr.get(ADDRESS, 0);
             if (json.equals(MemorySegment.NULL)) return null;

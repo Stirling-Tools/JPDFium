@@ -1601,6 +1601,18 @@ struct ContentToken {
     ContentOperand operand;
 };
 
+// PDF whitespace includes NUL, which std::isspace does not recognize. Using
+// std::isspace here would split a token at NUL and can desynchronize the
+// content scan that decides whether a CID substitute is safe.
+inline bool isPdfWhitespace(unsigned char c) {
+    return c == 0x00 || c == 0x09 || c == 0x0A || c == 0x0C || c == 0x0D || c == 0x20;
+}
+
+inline bool isPdfDelimiter(unsigned char c) {
+    return c == '(' || c == ')' || c == '<' || c == '>' || c == '[' || c == ']' || c == '{' ||
+           c == '}' || c == '/' || c == '%';
+}
+
 struct ContentLexer {
     std::string const& data;
     size_t pos = 0;
@@ -1608,7 +1620,7 @@ struct ContentLexer {
     void skipSpace() {
         while (pos < data.size()) {
             unsigned char c = static_cast<unsigned char>(data[pos]);
-            if (std::isspace(c)) {
+            if (isPdfWhitespace(c)) {
                 ++pos;
             } else if (c == '%') {
                 while (pos < data.size() && data[pos] != '\n' && data[pos] != '\r') ++pos;
@@ -1680,7 +1692,7 @@ struct ContentLexer {
         std::string digits;
         while (pos < data.size() && data[pos] != '>') {
             unsigned char c = static_cast<unsigned char>(data[pos++]);
-            if (std::isspace(c)) continue;
+            if (isPdfWhitespace(c)) continue;
             if (!std::isxdigit(c)) return false;
             digits += static_cast<char>(c);
         }
@@ -1698,8 +1710,7 @@ struct ContentLexer {
         ++pos;
         while (pos < data.size()) {
             unsigned char c = static_cast<unsigned char>(data[pos]);
-            if (std::isspace(c) || c == '/' || c == '(' || c == ')' || c == '<' || c == '>' ||
-                c == '[' || c == ']' || c == '{' || c == '}' || c == '%') {
+            if (isPdfWhitespace(c) || isPdfDelimiter(c)) {
                 break;
             }
             if (c == '#' && pos + 2 < data.size() && std::isxdigit(data[pos + 1]) &&
@@ -1794,8 +1805,7 @@ struct ContentLexer {
         size_t start = pos;
         while (pos < data.size()) {
             unsigned char ch = static_cast<unsigned char>(data[pos]);
-            if (std::isspace(ch) || ch == '/' || ch == '(' || ch == ')' || ch == '<' || ch == '>' ||
-                ch == '[' || ch == ']' || ch == '{' || ch == '}' || ch == '%') {
+            if (isPdfWhitespace(ch) || isPdfDelimiter(ch)) {
                 break;
             }
             ++pos;
@@ -1819,10 +1829,15 @@ struct ContentLexer {
         ContentToken token;
         while (next(token)) {
             if (token.word && token.text == "ID") {
-                if (pos < data.size() && std::isspace(static_cast<unsigned char>(data[pos]))) ++pos;
-                while (pos + 1 < data.size()) {
-                    if (std::isspace(static_cast<unsigned char>(data[pos])) &&
-                        data[pos + 1] == 'E' && pos + 2 < data.size() && data[pos + 2] == 'I') {
+                if (pos < data.size() && isPdfWhitespace(static_cast<unsigned char>(data[pos]))) ++pos;
+                while (pos + 2 < data.size()) {
+                    // The EI marker is a token of its own: whitespace on both sides.
+                    // Accepting \" EI[\" would end the image at bytes that are still
+                    // image data and desynchronize the rest of the stream.
+                    if (isPdfWhitespace(static_cast<unsigned char>(data[pos])) &&
+                        data[pos + 1] == 'E' && data[pos + 2] == 'I' &&
+                        (pos + 3 >= data.size() ||
+                         isPdfWhitespace(static_cast<unsigned char>(data[pos + 3])))) {
                         pos += 3;
                         return;
                     }
@@ -2690,6 +2705,20 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_inspect_fonts(const uint8_t* input, int64_t 
         qpdf->processMemoryFile("font-in", reinterpret_cast<const char*>(input),
                                 static_cast<size_t>(inputLen));
         auto result = inspectFonts(*qpdf);
+        *json = strdup(result.c_str());
+        return *json ? 0 : -1;
+    } catch (...) {
+        return -1;
+    }
+}
+
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_inspect_fonts_file(const char* in_path, char** json) {
+    if (!in_path || !*in_path || !json) return -1;
+    *json = nullptr;
+    try {
+        QPDF qpdf;
+        qpdf.processFile(in_path);
+        auto result = inspectFonts(qpdf);
         *json = strdup(result.c_str());
         return *json ? 0 : -1;
     } catch (...) {

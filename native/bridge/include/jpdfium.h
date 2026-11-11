@@ -611,6 +611,9 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_inspect_file(const char* in_path, const char
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_inspect_fonts(const uint8_t* input, int64_t inputLen,
                                                   char** json);
 
+// File-backed font inventory; no document-sized buffer.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_inspect_fonts_file(const char* in_path, char** json);
+
 // Update/remove /Info entries; NULL value removes a key. Caller frees *output.
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_set_docinfo(const uint8_t* input, int64_t inputLen,
                                                 const char* const* keys, const char* const* values,
