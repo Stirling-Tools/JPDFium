@@ -217,7 +217,7 @@ void optimizeImages(QPDF& pdf, int32_t jpegQuality) {
 
 // Subset every embedded TrueType/OpenType program that the document references
 // and that is not already subset-tagged. Defined below with the font helpers.
-int subsetEmbeddedFonts(QPDF& qpdf);
+int subsetEmbeddedFonts(QPDF& qpdf, bool includeTagged);
 
 // Chromium 445740322: a non-finite or unbounded tiling-pattern step overflows
 // the renderer's tile raster dimensions. Clamp to the positive range that PDF
@@ -324,7 +324,7 @@ void applyDocumentOptions(QPDF& pdf, const OptimizeOptions& options) {
         optimizeImages(pdf, options.jpegQuality);
     }
     if (options.flags & JPDFIUM_QPDF_SUBSET_FONTS) {
-        subsetEmbeddedFonts(pdf);
+        subsetEmbeddedFonts(pdf, false);
     }
     if (options.flags & JPDFIUM_QPDF_REMOVE_UNREFERENCED_RESOURCES) {
         QPDFPageDocumentHelper{pdf}.removeUnreferencedResources();
@@ -2944,7 +2944,8 @@ bool subsetEmbeddedSimpleFont(QPDF& qpdf, FT_Library lib, QPDFObjectHandle& font
 // Inspect a single font resource and subset its embedded SFNT stream when safe.
 bool subsetEmbeddedFontResource(QPDF& qpdf, FT_Library lib, QPDFObjectHandle& font,
                                 std::map<QPDFObjGen, int> const& descriptorUseCount,
-                                std::map<QPDFObjGen, int> const& streamUseCount) {
+                                std::map<QPDFObjGen, int> const& streamUseCount,
+                                bool includeTagged) {
     auto descendants = font.getKey("/DescendantFonts");
     bool cid = descendants.isArray() && descendants.getArrayNItems() > 0 &&
                descendants.getArrayItem(0).isDictionary();
@@ -2960,7 +2961,7 @@ bool subsetEmbeddedFontResource(QPDF& qpdf, FT_Library lib, QPDFObjectHandle& fo
         baseFont.isName() ? stripPdfNamePrefix(baseFont.getName()) : std::string();
     std::string parentName =
         fontBaseFont.isName() ? stripPdfNamePrefix(fontBaseFont.getName()) : std::string();
-    if (hasSubsetTag(baseName) || hasSubsetTag(parentName)) return false;
+    if (!includeTagged && (hasSubsetTag(baseName) || hasSubsetTag(parentName))) return false;
     if (descriptor.isIndirect()) {
         auto it = descriptorUseCount.find(descriptor.getObjGen());
         if (it != descriptorUseCount.end() && it->second > 1) return false;
@@ -3007,7 +3008,7 @@ bool subsetEmbeddedFontResource(QPDF& qpdf, FT_Library lib, QPDFObjectHandle& fo
 
 // Subset every embedded TrueType/OpenType program that the document references
 // and that is not already subset-tagged. Returns the number of fonts rewritten.
-int subsetEmbeddedFonts(QPDF& qpdf) {
+int subsetEmbeddedFonts(QPDF& qpdf, bool includeTagged) {
     auto hasSignatureValue = [](QPDFObjectHandle const& field) {
         if (!field.isDictionary()) return false;
         auto value = field.getKey("/V");
@@ -3139,7 +3140,8 @@ int subsetEmbeddedFonts(QPDF& qpdf) {
     int subsetCount = 0;
     for (auto& font : uniqueFonts) {
         try {
-            if (subsetEmbeddedFontResource(qpdf, lib, font, descriptorUseCount, streamUseCount))
+            if (subsetEmbeddedFontResource(qpdf, lib, font, descriptorUseCount, streamUseCount,
+                                           includeTagged))
                 ++subsetCount;
         } catch (...) {
             // Isolate failure to this specific font and continue
@@ -4078,8 +4080,8 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_embed_fonts_file(const char* in_path, const 
 }
 
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_subset_fonts(const uint8_t* input, int64_t inputLen,
-                                                 uint8_t** output, int64_t* outputLen,
-                                                 int32_t* fontsSubset) {
+                                                 int32_t includeTagged, uint8_t** output,
+                                                 int64_t* outputLen, int32_t* fontsSubset) {
     if (!input || inputLen <= 0 || !output || !outputLen || !fontsSubset) return -1;
     *output = nullptr;
     *outputLen = 0;
@@ -4088,7 +4090,7 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_subset_fonts(const uint8_t* input, int64_t i
         auto qpdf = QPDF::create();
         qpdf->processMemoryFile("subset-in", reinterpret_cast<const char*>(input),
                                 static_cast<size_t>(inputLen));
-        int count = subsetEmbeddedFonts(*qpdf);
+        int count = subsetEmbeddedFonts(*qpdf, includeTagged != 0);
         *fontsSubset = count;
         if (count <= 0) return count == 0 ? 1 : -1;
 

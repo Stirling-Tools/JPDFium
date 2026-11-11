@@ -38,6 +38,30 @@ class PdfCompressorTest {
     }
 
     /** PDF with a fully embedded LiberationSans program and one text run. */
+    private static Path taggedSubsetPdf(Path temp) throws Exception {
+        Path src = temp.resolve("tagged-subset.pdf");
+        try (InputStream font = PdfCompressorTest.class.getResourceAsStream(
+                        "/org/apache/pdfbox/resources/ttf/LiberationSans-Regular.ttf");
+                PDDocument pdf = new PDDocument()) {
+            assertNotNull(font, "PDFBox no longer bundles LiberationSans");
+            PDPage page = new PDPage();
+            pdf.addPage(page);
+            PDType0Font typeface = PDType0Font.load(pdf, font, false);
+            typeface.getCOSObject()
+                    .setItem(org.apache.pdfbox.cos.COSName.BASE_FONT,
+                            org.apache.pdfbox.cos.COSName.getPDFName("ABCDEF+LiberationSans"));
+            try (PDPageContentStream content = new PDPageContentStream(pdf, page)) {
+                content.beginText();
+                content.setFont(typeface, 24);
+                content.newLineAtOffset(72, 700);
+                content.showText("Hello World");
+                content.endText();
+            }
+            pdf.save(src.toFile());
+        }
+        return src;
+    }
+
     private static Path fullFontPdf(Path temp) throws Exception {
         Path src = temp.resolve("full-font.pdf");
         try (InputStream font = PdfCompressorTest.class.getResourceAsStream(
@@ -167,6 +191,32 @@ class PdfCompressorTest {
             }
             assertEquals(0, differingPixels(before, render(out.bytes(), 0)),
                     "simple subsetting must render identically");
+        }
+    }
+
+    @Test
+    void taggedSubsetsAreOnlyReSubsetWhenRequested(@TempDir Path temp) throws Exception {
+        assumeTrue(QpdfLib.isSubsetFontsSupported(), "native font subsetting unavailable");
+        Path src = taggedSubsetPdf(temp);
+        BufferedImage before = render(Files.readAllBytes(src), 0);
+
+        try (PdfDocument doc = PdfDocument.open(src)) {
+            PdfCompressor.CompressResultWithBytes skipped = PdfCompressor.compress(doc,
+                    CompressOptions.builder().preset(CompressPreset.WEB).subsetFonts(true).build());
+            assertFalse(skipped.result().actions().toString().contains("Subsetted"),
+                    "tagged subsets must stay untouched by default");
+
+            PdfCompressor.CompressResultWithBytes out = PdfCompressor.compress(doc,
+                    CompressOptions.builder().preset(CompressPreset.WEB).subsetFonts(true)
+                            .subsetTaggedFonts(true).build());
+            assertTrue(out.result().actions().contains("Subsetted 1 embedded font(s)"),
+                    "opt-in tagged subsetting must run, actions=" + out.result().actions());
+            try (PDDocument reopened = Loader.loadPDF(out.bytes())) {
+                assertEquals("Hello World", new PDFTextStripper().getText(reopened).strip(),
+                        "tagged re-subsetting must keep text");
+            }
+            assertEquals(0, differingPixels(before, render(out.bytes(), 0)),
+                    "tagged re-subsetting must render identically");
         }
     }
 

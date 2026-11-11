@@ -359,7 +359,8 @@ public final class PdfCompressor {
         //    structural pass so qpdf recompresses the smaller font streams.
         if (!preserve && opts.subsetFonts() && QpdfLib.isSubsetFontsSupported()) {
             try {
-                QpdfLib.FontSubsetResult sub = QpdfLib.subsetFonts(resultBytes);
+                QpdfLib.FontSubsetResult sub = QpdfLib.subsetFonts(
+                        resultBytes, opts.subsetTaggedFonts());
                 if (sub != null && sub.fontsSubset() > 0 && sub.pdf() != null
                         && sub.pdf().length < resultBytes.length) {
                     // A smaller file is not enough: the subset must keep the

@@ -138,7 +138,8 @@ public final class QpdfLib {
 
     private static final MethodHandle SUBSET_FONTS_HANDLE = Symbols.downcallOptionalUnguarded(
             "jpdfium_qpdf_subset_fonts",
-            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS, ADDRESS, ADDRESS));
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, JAVA_INT, ADDRESS, ADDRESS,
+                    ADDRESS));
 
     /** Result of an in-place embedded-font subsetting pass. */
     public record FontSubsetResult(byte[] pdf, int fontsSubset) {}
@@ -155,6 +156,19 @@ public final class QpdfLib {
      *     {@code pdf == null} and {@code fontsSubset == 0} when nothing needed subsetting
      */
     public static FontSubsetResult subsetFonts(byte[] input) {
+        return subsetFonts(input, false);
+    }
+
+    /**
+     * Subset already-embedded TrueType/OpenType fonts in-place.
+     *
+     * @param input PDF bytes
+     * @param includeTagged also re-subset fonts that already carry an
+     *     {@code ABCDEF+} subset tag
+     * @return the rewritten PDF and the number of subsetted fonts, or a result with
+     *     {@code pdf == null} and {@code fontsSubset == 0} when nothing needed subsetting
+     */
+    public static FontSubsetResult subsetFonts(byte[] input, boolean includeTagged) {
         if (SUBSET_FONTS_HANDLE == null || input == null || input.length == 0) {
             return new FontSubsetResult(null, 0);
         }
@@ -162,7 +176,8 @@ public final class QpdfLib {
         try (QpdfCall call = new QpdfCall()) {
             MemorySegment count = call.arena.allocate(JAVA_INT);
             int rc = (int) SUBSET_FONTS_HANDLE.invokeExact(call.copyBytes(input),
-                    (long) input.length, call.outPtr, call.outLen, count);
+                    (long) input.length, includeTagged ? 1 : 0, call.outPtr, call.outLen,
+                    count);
             int fonts = count.get(JAVA_INT, 0);
             if (rc == 1) return new FontSubsetResult(null, 0);
             if (rc == 0) return new FontSubsetResult(call.copyAndFree("qpdfSubsetFonts"), fonts);
