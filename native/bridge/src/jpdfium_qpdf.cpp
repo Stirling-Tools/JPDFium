@@ -1829,7 +1829,8 @@ struct ContentLexer {
         ContentToken token;
         while (next(token)) {
             if (token.word && token.text == "ID") {
-                if (pos < data.size() && isPdfWhitespace(static_cast<unsigned char>(data[pos]))) ++pos;
+                if (pos < data.size() && isPdfWhitespace(static_cast<unsigned char>(data[pos])))
+                    ++pos;
                 while (pos + 2 < data.size()) {
                     // The EI marker is a token of its own: whitespace on both sides.
                     // Accepting \" EI[\" would end the image at bytes that are still
