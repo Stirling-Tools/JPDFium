@@ -1830,17 +1830,46 @@ std::string inspectFonts(QPDF& qpdf) {
     // Type 3 glyph procedures can reference their own resources, including
     // other Type 3 fonts. Repeat until the reachable set stops growing so
     // object order cannot hide a nested Type 3 font.
-    std::set<QPDFObjGen> scannedType3;
+    std::set<QPDFObjGen> scannedType3Indirect;
+    std::set<std::string> scannedType3Direct;
     for (;;) {
         size_t before = reachableIndirect.size() + reachableDirect.size();
         for (auto& object : qpdf.getAllObjects()) {
             if (!object.isIndirect() || !reachableIndirect.contains(object.getObjGen())) continue;
             auto subtype = object.getKey("/Subtype");
             if (!subtype.isName() || subtype.getName() != "/Type3") continue;
-            if (!scannedType3.insert(object.getObjGen()).second) continue;
+            if (!scannedType3Indirect.insert(object.getObjGen()).second) continue;
             seenForms.clear();
-            collectResourceFonts(object.getKey("/Resources"), -1, indirectUse, directUse,
-                                 reachableIndirect, reachableDirect, directFonts, seenForms, 0);
+            auto const& p = indirectUse[object.getObjGen()];
+            if (p.empty()) {
+                collectResourceFonts(object.getKey("/Resources"), -1, indirectUse, directUse,
+                                     reachableIndirect, reachableDirect, directFonts, seenForms, 0);
+            } else {
+                for (int page : p) {
+                    collectResourceFonts(object.getKey("/Resources"), page, indirectUse, directUse,
+                                         reachableIndirect, reachableDirect, directFonts, seenForms,
+                                         0);
+                }
+            }
+        }
+        for (auto& directFont : directFonts) {
+            std::string key = directFont.unparse();
+            if (!reachableDirect.contains(key)) continue;
+            auto subtype = directFont.getKey("/Subtype");
+            if (!subtype.isName() || subtype.getName() != "/Type3") continue;
+            if (!scannedType3Direct.insert(key).second) continue;
+            seenForms.clear();
+            auto const& p = directUse[key];
+            if (p.empty()) {
+                collectResourceFonts(directFont.getKey("/Resources"), -1, indirectUse, directUse,
+                                     reachableIndirect, reachableDirect, directFonts, seenForms, 0);
+            } else {
+                for (int page : p) {
+                    collectResourceFonts(directFont.getKey("/Resources"), page, indirectUse,
+                                         directUse, reachableIndirect, reachableDirect, directFonts,
+                                         seenForms, 0);
+                }
+            }
         }
         if (reachableIndirect.size() + reachableDirect.size() == before) break;
     }
