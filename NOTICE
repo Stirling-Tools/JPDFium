@@ -14,6 +14,8 @@ Native bridge deps (linked at build time):
 - QPDF - Apache-2.0 (native/licenses/QPDF-APACHE-2.0.txt)
 - pugixml - MIT
 - libunibreak - zlib
+- Adobe-Japan1 CMap tables (generated data) - BSD-3-Clause-style
+  (native/licenses/ADOBE-CMAPS.txt)
 
 Bundled ICC profile (jpdfium main jar):
 - JPDFiumCompactCmyk.icc - generated generic CMYK fallback, MIT; see
