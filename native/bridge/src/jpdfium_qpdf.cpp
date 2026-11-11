@@ -1422,12 +1422,15 @@ FT_UInt glyphForCode(FT_Face face, int code, bool symbolic, SimpleEncoding const
 void addWidths(QPDFObjectHandle font, FT_Face face, bool symbolic) {
     auto enc = parseEncoding(font);
     auto widths = QPDFObjectHandle::newArray();
+    bool any_positive = false;
     for (int code = 0; code < 256; ++code) {
         FT_Fixed advance = 0;
         FT_Get_Advance(face, glyphForCode(face, code, symbolic, enc), FT_LOAD_NO_SCALE, &advance);
-        widths.appendItem(QPDFObjectHandle::newInteger(
-            advance * 1000 / (face->units_per_EM ? face->units_per_EM : 1000)));
+        long w = advance * 1000 / (face->units_per_EM ? face->units_per_EM : 1000);
+        if (w > 0) any_positive = true;
+        widths.appendItem(QPDFObjectHandle::newInteger(w));
     }
+    if (!any_positive) return;
     font.replaceKey("/FirstChar", QPDFObjectHandle::newInteger(0));
     font.replaceKey("/LastChar", QPDFObjectHandle::newInteger(255));
     font.replaceKey("/Widths", widths);
@@ -2913,8 +2916,12 @@ int subsetEmbeddedFonts(QPDF& qpdf) {
 
     int subsetCount = 0;
     for (auto& font : uniqueFonts) {
-        if (subsetEmbeddedFontResource(qpdf, lib, font, descriptorUseCount, streamUseCount))
-            ++subsetCount;
+        try {
+            if (subsetEmbeddedFontResource(qpdf, lib, font, descriptorUseCount, streamUseCount))
+                ++subsetCount;
+        } catch (...) {
+            // Isolate failure to this specific font and continue
+        }
     }
     return subsetCount;
 }

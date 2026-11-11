@@ -321,20 +321,20 @@ class PdfFontEmbedderRoundTripTest {
     private static void assertSameOrResolvedText(String before, String after, String where) {
         String a = before.replaceAll("\\s", "");
         String b = after.replaceAll("\\s", "");
-        if (a.isEmpty() && b.isEmpty()) {
+        // Text PDFium could not resolve before embedding may become readable
+        // afterwards. Everything else must round-trip exactly, position by
+        // position; a replacement is only acceptable where the original text
+        // already carried the unresolved marker.
+        boolean unresolved = a.indexOf('?') >= 0 || a.indexOf('\uFFFD') >= 0;
+        if (!unresolved) {
+            assertEquals(a, b, where + " text");
             return;
         }
-        boolean same = a.length() == b.length();
-        for (int i = 0; same && i < a.length(); i++) {
+        assertEquals(a.length(), b.length(), where + " text length");
+        for (int i = 0; i < a.length(); i++) {
             char c = a.charAt(i);
-            same = c == b.charAt(i) || c == '?' || c == '\uFFFD' || Character.isISOControl(c);
-        }
-        if (!same) {
-            boolean hasReplacement = a.contains("?") || a.contains("\uFFFD");
-            if (hasReplacement && !b.isEmpty()) {
-                return;
-            }
-            assertEquals(a, b, where + " text");
+            assertTrue(c == b.charAt(i) || c == '?' || c == '\uFFFD',
+                    where + " text differs at " + i + ": " + a + " vs " + b);
         }
     }
 
