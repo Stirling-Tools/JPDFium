@@ -998,14 +998,16 @@ public final class PdfFontEmbedder {
         ByteBuffer view = ByteBuffer.wrap(font);
         view.putInt(adjustmentOffset, 0);
         int sum = 0;
-        for (int off = 0; off < font.length; off += 4) {
+        int full = font.length & ~3;
+        for (int off = 0; off < full; off += 4) {
+            sum += view.getInt(off);
+        }
+        if (full < font.length) {
             int word = 0;
-            for (int b = 0; b < 4 && off + b < font.length; b++) {
-                word = (word << 8) | (font[off + b] & 0xFF);
+            for (int i = full; i < font.length; i++) {
+                word = (word << 8) | (font[i] & 0xFF);
             }
-            if (font.length - off < 4) {
-                word <<= (4 - (font.length - off)) * 8;
-            }
+            word <<= (4 - (font.length - full)) * 8;
             sum += word;
         }
         view.putInt(adjustmentOffset, 0xB1B0AFBA - sum);
