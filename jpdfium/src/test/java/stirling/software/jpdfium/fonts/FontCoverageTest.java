@@ -1,6 +1,9 @@
 package stirling.software.jpdfium.fonts;
 
 import java.awt.Font;
+import java.awt.Graphics2D;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.nio.file.Files;
 
@@ -64,6 +67,30 @@ class FontCoverageTest {
         assertFalse(covered[1], "noncharacter must not be covered");
         assertFalse(covered[2], "above-range must not be covered");
         assertFalse(covered[3], "negative must not be covered");
+    }
+
+    @Test
+    void subsetFontCompatibleWithJavaAwt() throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real native library");
+        File ttf = systemFont();
+        assumeTrue(ttf != null, "no system TTF found");
+        byte[] bytes = Files.readAllBytes(ttf.toPath());
+
+        int[] codepoints = {'A', 'B', 'C', 'a', 'b', 'c'};
+        byte[] subset = FontLib.subset(bytes, codepoints, true);
+        assertTrue(subset.length > 0, "subset must produce a font program");
+
+        Font awt = Font.createFont(Font.TRUETYPE_FONT, new ByteArrayInputStream(subset));
+        assertTrue(awt.canDisplay('A'), "subset must retain requested glyphs");
+
+        BufferedImage image = new BufferedImage(64, 64, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D graphics = image.createGraphics();
+        try {
+            graphics.setFont(awt.deriveFont(32f));
+            graphics.drawString("ABC", 4, 40);
+        } finally {
+            graphics.dispose();
+        }
     }
 
     @Test

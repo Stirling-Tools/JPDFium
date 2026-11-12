@@ -119,7 +119,7 @@ public final class CompressOptions {
         private boolean useZopfliDeflate = false;
         private int zopfliIterations = 15;
         private int zopfliMaxInputBytes = 0;
-        private boolean subsetFonts = true;
+        private boolean subsetFonts = false;
 
         private Builder() {}
 
@@ -196,7 +196,10 @@ public final class CompressOptions {
             return this;
         }
 
-        /** Subset already-embedded TrueType/OpenType fonts. Default {@code true}. */
+        /**
+         * Subset already-embedded TrueType/OpenType fonts. Default {@code false}: the pass
+         * rewrites font programs, so callers opt in after their own text/render contract.
+         */
         public Builder subsetFonts(boolean v) {
             this.subsetFonts = v;
             return this;
