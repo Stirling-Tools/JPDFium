@@ -354,8 +354,12 @@ public final class PdfImageOptimizer {
                 int rowStride = ((ComponentSampleModel) gray.getRaster().getSampleModel())
                         .getScanlineStride();
                 MemorySegment dst = MemorySegment.ofArray(px);
-                for (int y = 0; y < height; y++) {
-                    MemorySegment.copy(buf, (long) y * width, dst, (long) y * rowStride, width);
+                if (rowStride == width) {
+                    MemorySegment.copy(buf, 0, dst, 0, (long) width * height);
+                } else {
+                    for (int y = 0; y < height; y++) {
+                        MemorySegment.copy(buf, (long) y * width, dst, (long) y * rowStride, width);
+                    }
                 }
                 return new ImageSource(gray, width, height);
             }
@@ -479,8 +483,12 @@ public final class PdfImageOptimizer {
             int[] px = ((DataBufferInt) img.getRaster().getDataBuffer()).getData();
             int rowStride = ((SinglePixelPackedSampleModel) img.getRaster().getSampleModel()).getScanlineStride();
             MemorySegment dst = MemorySegment.ofArray(px);
-            for (int y = 0; y < height; y++) {
-                MemorySegment.copy(buf, (long) y * stride, dst, (long) y * rowStride * 4, (long) width * 4);
+            if (stride == (long) width * 4 && rowStride == width) {
+                MemorySegment.copy(buf, 0, dst, 0, (long) width * height * 4);
+            } else {
+                for (int y = 0; y < height; y++) {
+                    MemorySegment.copy(buf, (long) y * stride, dst, (long) y * rowStride * 4, (long) width * 4);
+                }
             }
             return new ImageSource(img, width, height);
         }
@@ -491,15 +499,24 @@ public final class PdfImageOptimizer {
             byte[] px = ((DataBufferByte) img.getRaster().getDataBuffer()).getData();
             int rowStride = ((ComponentSampleModel) img.getRaster().getSampleModel()).getScanlineStride();
             MemorySegment dst = MemorySegment.ofArray(px);
-            for (int y = 0; y < height; y++) {
-                MemorySegment.copy(buf, (long) y * stride, dst, (long) y * rowStride, width);
+            if (stride == width && rowStride == width) {
+                MemorySegment.copy(buf, 0, dst, 0, (long) width * height);
+            } else {
+                for (int y = 0; y < height; y++) {
+                    MemorySegment.copy(buf, (long) y * stride, dst, (long) y * rowStride, width);
+                }
             }
             return new ImageSource(img, width, height);
         }
 
         // 3-byte packed BGR: the only format left, so unpack each pixel.
+        BufferedImage img = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+        if (!(img.getRaster().getDataBuffer() instanceof DataBufferInt dbi)
+                || dbi.getData().length < pixels) {
+            return null;
+        }
+        int[] raster = dbi.getData();
         byte[] raw = buf.toArray(JAVA_BYTE);
-        int[] px = new int[pixels];
         int idx = 0;
         for (int y = 0; y < height; y++) {
             int o = y * stride;
@@ -507,18 +524,10 @@ public final class PdfImageOptimizer {
                 int b = raw[o] & 0xFF;
                 int g = raw[o + 1] & 0xFF;
                 int r = raw[o + 2] & 0xFF;
-                px[idx] = 0xFF000000 | (r << 16) | (g << 8) | b;
+                raster[idx] = 0xFF000000 | (r << 16) | (g << 8) | b;
                 idx++;
                 o += 3;
             }
-        }
-        BufferedImage img = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
-        int[] raster = img.getRaster().getDataBuffer() instanceof DataBufferInt dbi
-                ? dbi.getData() : null;
-        if (raster != null && raster.length >= px.length) {
-            System.arraycopy(px, 0, raster, 0, px.length);
-        } else {
-            img.setRGB(0, 0, width, height, px, 0, width);
         }
         return new ImageSource(img, width, height);
     }
@@ -581,8 +590,12 @@ public final class PdfImageOptimizer {
                 // Opaque pad byte, as before.
                 for (int i = 0; i < n; i++) px[i] |= 0xFF000000;
                 MemorySegment src = MemorySegment.ofArray(px);
-                for (int y = 0; y < height; y++) {
-                    MemorySegment.copy(src, (long) y * width * 4, buf, (long) y * stride, (long) width * 4);
+                if (stride == (long) width * 4) {
+                    MemorySegment.copy(src, 0, buf, 0, (long) width * height * 4);
+                } else {
+                    for (int y = 0; y < height; y++) {
+                        MemorySegment.copy(src, (long) y * width * 4, buf, (long) y * stride, (long) width * 4);
+                    }
                 }
                 int ok = (int) PageEditBindings.FPDFImageObj_SetBitmap.invokeExact(
                         MemorySegment.NULL, 0, imgObj, bitmap);
@@ -652,8 +665,12 @@ public final class PdfImageOptimizer {
                     .getScanlineStride();
             MemorySegment buf = bufferSeg.reinterpret((long) stride * height);
             MemorySegment src = MemorySegment.ofArray(px);
-            for (int y = 0; y < height; y++) {
-                MemorySegment.copy(src, (long) y * rowStride, buf, (long) y * stride, width);
+            if (rowStride == width && stride == width) {
+                MemorySegment.copy(src, 0, buf, 0, (long) width * height);
+            } else {
+                for (int y = 0; y < height; y++) {
+                    MemorySegment.copy(src, (long) y * rowStride, buf, (long) y * stride, width);
+                }
             }
             int ok = (int) PageEditBindings.FPDFImageObj_SetBitmap.invokeExact(
                     MemorySegment.NULL, 0, imgObj, bitmap);
