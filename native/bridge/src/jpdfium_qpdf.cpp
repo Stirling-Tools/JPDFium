@@ -2483,7 +2483,7 @@ struct FontUsageIndex {
     void add(QPDFObjectHandle const& font, std::set<uint32_t> const& cids, bool ok) {
         if (!font.isDictionary()) return;
         CidScanResult& usage =
-            font.isIndirect() ? byFont[font.getObjGen()] : byDirect[fontKey(font)];
+            font.isIndirect() ? byFont[font.getObjGen()] : byDirect[objectKey(font)];
         usage.cids.insert(cids.begin(), cids.end());
         usage.complete = usage.complete && ok;
         complete = complete && ok;
@@ -2495,21 +2495,27 @@ struct FontUsageIndex {
             auto it = byFont.find(font.getObjGen());
             return it == byFont.end() ? nullptr : &it->second;
         }
-        auto it = byDirect.find(fontKey(font));
+        auto it = byDirect.find(objectKey(font));
         return it == byDirect.end() ? nullptr : &it->second;
     }
 
-    static std::string fontKey(QPDFObjectHandle const& font) {
-        if (!font.isDictionary()) return {};
-        if (font.isIndirect()) {
-            auto id = font.getObjGen();
+    static std::string objectKey(QPDFObjectHandle const& object) {
+        if (!object.isInitialized()) return {};
+        if (object.isIndirect()) {
+            auto id = object.getObjGen();
             return std::to_string(id.getObj()) + ":" + std::to_string(id.getGen());
         }
         try {
-            return font.unparse();
+            return object.unparse();
         } catch (...) {
             return {};
         }
+    }
+
+    static bool acceptsCodeWidth(QPDFObjectHandle const& font, CidEncoding encoding) {
+        if (!font.isDictionary()) return false;
+        bool composite = font.getKey("/Subtype").isNameAndEquals("/Type0");
+        return encoding == CidEncoding::SingleByte ? !composite : composite;
     }
 };
 
@@ -2570,27 +2576,33 @@ void scanContentStreamAll(std::string_view data, QPDFObjectHandle const& resourc
             }
         } else if (op == "Tj" && !operands.empty() &&
                    operands.back().kind == ContentOperand::Kind::String) {
-            std::set<uint32_t> cids;
-            bool ok = true;
-            collectStringCids(operands.back().text, cids, ok, encoding);
-            index.add(currentFont, cids, ok);
-            complete = complete && ok;
-        } else if (op == "TJ" && !operands.empty() &&
-                   operands.back().kind == ContentOperand::Kind::Array) {
-            for (auto const& text : operands.back().strings) {
+            if (FontUsageIndex::acceptsCodeWidth(currentFont, encoding)) {
                 std::set<uint32_t> cids;
                 bool ok = true;
-                collectStringCids(text, cids, ok, encoding);
+                collectStringCids(operands.back().text, cids, ok, encoding);
                 index.add(currentFont, cids, ok);
                 complete = complete && ok;
             }
+        } else if (op == "TJ" && !operands.empty() &&
+                   operands.back().kind == ContentOperand::Kind::Array) {
+            if (FontUsageIndex::acceptsCodeWidth(currentFont, encoding)) {
+                for (auto const& text : operands.back().strings) {
+                    std::set<uint32_t> cids;
+                    bool ok = true;
+                    collectStringCids(text, cids, ok, encoding);
+                    index.add(currentFont, cids, ok);
+                    complete = complete && ok;
+                }
+            }
         } else if ((op == "'" || op == "\"") && !operands.empty() &&
                    operands.back().kind == ContentOperand::Kind::String) {
-            std::set<uint32_t> cids;
-            bool ok = true;
-            collectStringCids(operands.back().text, cids, ok, encoding);
-            index.add(currentFont, cids, ok);
-            complete = complete && ok;
+            if (FontUsageIndex::acceptsCodeWidth(currentFont, encoding)) {
+                std::set<uint32_t> cids;
+                bool ok = true;
+                collectStringCids(operands.back().text, cids, ok, encoding);
+                index.add(currentFont, cids, ok);
+                complete = complete && ok;
+            }
         } else if (op == "Do" && !operands.empty() &&
                    operands.back().kind == ContentOperand::Kind::Name && resources.isDictionary()) {
             // Form XObjects inherit the caller's current font unless they set Tf.
@@ -2598,9 +2610,11 @@ void scanContentStreamAll(std::string_view data, QPDFObjectHandle const& resourc
             if (xobjects.isDictionary()) {
                 auto form = xobjects.getKey("/" + operands.back().text);
                 if (form.isStream() && form.getDict().getKey("/Subtype").isNameAndEquals("/Form")) {
-                    std::string key =
-                        FontUsageIndex::fontKey(currentFont) + "|" + FontUsageIndex::fontKey(form);
-                    if (seenStreams.insert(key).second) {
+                    std::string formKey = FontUsageIndex::objectKey(form);
+                    std::string key = FontUsageIndex::objectKey(currentFont) + "|" + formKey;
+                    if (formKey.empty()) {
+                        complete = false;
+                    } else if (seenStreams.insert(key).second) {
                         auto formResources = form.getDict().getKey("/Resources");
                         if (!formResources.isDictionary()) formResources = resources;
                         try {
@@ -2643,8 +2657,12 @@ void scanResourceStreamsAll(QPDFObjectHandle const& resources, QPDFObjectHandle 
             if (budget <= 0) complete = false;
             return;
         }
-        std::string key =
-            FontUsageIndex::fontKey(currentFont) + "|" + FontUsageIndex::fontKey(stream);
+        std::string streamKey = FontUsageIndex::objectKey(stream);
+        std::string key = FontUsageIndex::objectKey(currentFont) + "|" + streamKey;
+        if (streamKey.empty()) {
+            complete = false;
+            return;
+        }
         if (!seenStreams.insert(key).second) return;
         auto streamResources = stream.getDict().getKey("/Resources");
         if (!streamResources.isDictionary()) streamResources = fallback;
