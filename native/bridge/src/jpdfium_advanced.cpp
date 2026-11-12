@@ -2134,31 +2134,47 @@ static void repair_simple_font_widths(QPDFObjectHandle& target, FT_Face face,
 }
 
 // Synthesize a missing /W array on a horizontal CIDFont from FreeType glyph advances.
-static std::map<uint32_t, int> parse_cid_widths(QPDFObjectHandle const& w) {
+static std::map<uint32_t, int> parse_cid_widths(QPDFObjectHandle const& w, bool& complete) {
+    complete = true;
     std::map<uint32_t, int> widths;
     if (!w.isArray()) return widths;
     const auto items = w.getArrayAsVector();
     size_t i = 0;
     while (i < items.size()) {
-        if (!items[i].isInteger()) break;
+        if (!items[i].isInteger()) {
+            complete = false;
+            break;
+        }
         const uint32_t first = static_cast<uint32_t>(items[i].getIntValueAsInt());
         ++i;
-        if (i >= items.size()) break;
+        if (i >= items.size()) {
+            complete = false;
+            break;
+        }
         if (items[i].isArray()) {
             const auto run = items[i].getArrayAsVector();
             ++i;
             for (size_t j = 0; j < run.size() && first + j <= kFontMaxCid; ++j) {
-                if (run[j].isNumber())
+                if (run[j].isNumber()) {
                     widths[first + static_cast<uint32_t>(j)] =
                         static_cast<int>(std::lround(run[j].getNumericValue()));
+                } else {
+                    complete = false;
+                }
             }
             continue;
         }
-        if (i + 1 >= items.size() || !items[i].isInteger() || !items[i + 1].isNumber()) break;
+        if (i + 1 >= items.size() || !items[i].isInteger() || !items[i + 1].isNumber()) {
+            complete = false;
+            break;
+        }
         const uint32_t last = static_cast<uint32_t>(items[i].getIntValueAsInt());
         const int width = static_cast<int>(std::lround(items[i + 1].getNumericValue()));
         i += 2;
-        if (last < first || last > kFontMaxCid) continue;
+        if (last < first || last > kFontMaxCid) {
+            complete = false;
+            continue;
+        }
         for (uint32_t cid = first; cid <= last; ++cid) widths[cid] = width;
     }
     return widths;
@@ -2227,7 +2243,9 @@ static void repair_cid_font_widths(QPDF& pdf, QPDFObjectHandle& font, QPDFObject
     if (cid_gid.empty()) return;
 
     QPDFObjectHandle existing_w = target.getKey("/W");
-    std::map<uint32_t, int> widths = parse_cid_widths(existing_w);
+    bool widths_complete = true;
+    std::map<uint32_t, int> widths = parse_cid_widths(existing_w, widths_complete);
+    if (existing_w.isArray() && !widths_complete) return;
 
     // With no /W at all, synthesize entries for the CIDs that content draws.
     // An absent /W means every CID falls back to /DW; writing an entry for

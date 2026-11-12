@@ -3812,9 +3812,9 @@ void pinTrueTypeMapping(QPDF& qpdf, QPDFObjectHandle font, FT_Face face, bool sy
         font.removeKey("/Encoding");
         auto unicodeOf = unicodeByGlyph(face, symbolic);
         std::map<uint32_t, FT_ULong> codes;
+        SimpleEncoding none;
         for (int code = 0; code < 256; ++code) {
-            FT_UInt gid = FT_Get_Char_Index(face, code);
-            if (!gid) gid = FT_Get_Char_Index(face, 0xF000 | code);
+            FT_UInt gid = glyphForCode(face, code, true, none);
             if (gid) {
                 if (auto it = unicodeOf.find(gid); it != unicodeOf.end()) codes[code] = it->second;
             }
@@ -3837,7 +3837,8 @@ void pinTrueTypeMapping(QPDF& qpdf, QPDFObjectHandle font, FT_Face face, bool sy
             char name[64] = "";
             if (const char* agl = adobeGlyphNameForUnicode(static_cast<uint32_t>(u))) {
                 std::snprintf(name, sizeof name, "%s", agl);
-            } else if (differs && unicodeForGlyphName(enc.differences.at(code))) {
+            } else if (differs && (unicodeForGlyphName(enc.differences.at(code)) ||
+                                   (gid && FT_HAS_GLYPH_NAMES(face)))) {
                 std::snprintf(name, sizeof name, "%s", enc.differences.at(code).c_str());
             } else if (u > 0 && u <= 0xFFFF) {
                 std::snprintf(name, sizeof name, "uni%04lX", u);
@@ -4307,6 +4308,7 @@ int subsetEmbeddedFonts(QPDF& qpdf, bool subsetTagged) {
     // programs can be marked as shared (see below) and excluded from uniqueFonts.
     std::vector<QPDFObjectHandle> formFonts;
     std::set<QPDFObjGen> visitedFormResources;
+    std::set<QPDFObjGen> visitedFormStreams;
     std::vector<QPDFObjectHandle> pendingFormResources{
         acroForm.isDictionary() ? acroForm.getKey("/DR") : QPDFObjectHandle()};
     while (!pendingFormResources.empty()) {
@@ -4329,6 +4331,8 @@ int subsetEmbeddedFonts(QPDF& qpdf, bool subsetTagged) {
         if (xobjects.isDictionary()) {
             for (auto const& [name, xobject] : xobjects.getDictAsMap()) {
                 if (!xobject.isStream()) continue;
+                if (xobject.isIndirect() && !visitedFormStreams.insert(xobject.getObjGen()).second)
+                    continue;
                 pendingFormResources.push_back(xobject.getDict().getKey("/Resources"));
             }
         }
@@ -4642,6 +4646,19 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
                 // glyph order is recovered after the symbolic flag is known.
                 explicitCidMapping = true;
             }
+            auto flags =
+                descriptor.isDictionary() ? descriptor.getKey("/Flags") : QPDFObjectHandle();
+            bool hasEncoding = font.hasKey("/Encoding") || target.hasKey("/Encoding");
+            bool builtInMapping = !cid && !hasEncoding;
+            bool isSymbolName = (targetName == "Symbol" || targetName == "ZapfDingbats" ||
+                                 targetName.find("Symbol") != std::string::npos ||
+                                 targetName.find("Dingbats") != std::string::npos);
+            bool symbolic = builtInMapping &&
+                            (isSymbolName || (flags.isInteger() && (flags.getIntValue() & 4) != 0));
+            bool mapBuiltIn = builtInMapping && symbolic;
+            if (!cid && (onlyMissing || !target.getKey("/Widths").isArray()) &&
+                !addWidths(target, program.face, mapBuiltIn))
+                continue;
             if (descriptor.isIndirect()) {
                 // A descriptor can be shared by a font that is not being
                 // replaced. Always isolate it before installing a program so
@@ -4653,16 +4670,6 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
                 descriptor.replaceKey("/FontName", target.getKey("/BaseFont"));
                 target.replaceKey("/FontDescriptor", descriptor);
             }
-            auto flags =
-                descriptor.isDictionary() ? descriptor.getKey("/Flags") : QPDFObjectHandle();
-            bool hasEncoding = font.hasKey("/Encoding") || target.hasKey("/Encoding");
-            bool builtInMapping = !cid && !hasEncoding;
-            bool isSymbolName = (targetName == "Symbol" || targetName == "ZapfDingbats" ||
-                                 targetName.find("Symbol") != std::string::npos ||
-                                 targetName.find("Dingbats") != std::string::npos);
-            bool symbolic = builtInMapping &&
-                            (isSymbolName || (flags.isInteger() && (flags.getIntValue() & 4) != 0));
-            bool mapBuiltIn = builtInMapping && symbolic;
             if (!cid && !hasProgram && onlyMissing) {
                 // A substitute must cover every character the content actually
                 // draws. Installing a program with missing glyphs silently
@@ -4731,10 +4738,6 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
                 } else {
                     pinTrueTypeMapping(*qpdf, target, program.face, symbolic);
                 }
-            }
-            if (!cid && (onlyMissing || !target.getKey("/Widths").isArray()) &&
-                !addWidths(target, program.face, mapBuiltIn)) {
-                continue;
             }
             // OTTO/CFF can be carried by a pre-1.6 PDF as /FontFile3
             // /Subtype /Type1C or /CIDFontType0C instead of requiring /Subtype /OpenType
