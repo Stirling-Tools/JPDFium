@@ -336,6 +336,10 @@ public final class PdfFontEmbedder {
      *     predefined CMap whose code-to-glyph mapping cannot be preserved
      */
     public static Result embedMissingStrict(byte[] pdf, Path... fontDirs) throws IOException {
+        if (!QpdfLib.isFontInventorySupported()) {
+            throw new JPDFiumException(
+                    "strict font embedding requires the native font inventory");
+        }
         return embedMissing(pdf, fontDirs).requireAllEmbedded();
     }
 
@@ -983,6 +987,8 @@ public final class PdfFontEmbedder {
             if (subRec + 8 > cmapOffset + cmapLength) break;
             int platformId = buf.getShort(subRec) & 0xFFFF;
             int encodingId = buf.getShort(subRec + 2) & 0xFFFF;
+            int subtableOffset = buf.getInt(subRec + 4);
+            if (subtableOffset < 0 || subtableOffset > cmapLength - 4) continue;
             if (platformId == 3 && encodingId == 0) {
                 return fontData;
             }
@@ -996,6 +1002,8 @@ public final class PdfFontEmbedder {
             selectedSubtableOffset = cmapOffset + 4;
         }
         if (selectedSubtableOffset + 8 > fontData.length) return fontData;
+        int selectedOffset = buf.getInt(selectedSubtableOffset + 4);
+        if (selectedOffset < 0 || selectedOffset > cmapLength - 4) return fontData;
 
         byte[] modified = fontData.clone();
         ByteBuffer out = ByteBuffer.wrap(modified);
