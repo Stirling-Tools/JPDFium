@@ -3470,8 +3470,10 @@ bool subsetEmbeddedSimpleFont(QPDF& qpdf, FT_Library lib, QPDFObjectHandle& font
     std::string charsetStr;
     char glyphName[256];
     for (FT_UInt gid : targetGlyphs) {
+        if (gid == 0) continue;
         if (FT_HAS_GLYPH_NAMES(program.face) &&
-            FT_Get_Glyph_Name(program.face, gid, glyphName, sizeof(glyphName)) == 0) {
+            FT_Get_Glyph_Name(program.face, gid, glyphName, sizeof(glyphName)) == 0 &&
+            std::strcmp(glyphName, ".notdef") != 0) {
             charsetStr += "/";
             charsetStr += glyphName;
         }

@@ -2443,8 +2443,10 @@ static bool resubset_embedded_sfnt(QPDF& pdf, QPDFObjectHandle& font, QPDFObject
         std::string charset_str;
         char glyph_name[256];
         for (FT_UInt gid : target_glyphs) {
+            if (gid == 0) continue;
             if (FT_HAS_GLYPH_NAMES(face.get()) &&
-                FT_Get_Glyph_Name(face.get(), gid, glyph_name, sizeof(glyph_name)) == 0) {
+                FT_Get_Glyph_Name(face.get(), gid, glyph_name, sizeof(glyph_name)) == 0 &&
+                std::strcmp(glyph_name, ".notdef") != 0) {
                 charset_str += "/";
                 charset_str += glyph_name;
             }
