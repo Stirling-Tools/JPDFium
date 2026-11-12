@@ -3897,13 +3897,13 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
                     }
                     for (uint32_t code : scan.codes) {
                         if (code > 0xFFFF) continue;
-                        uint32_t cid = 0;
-                        bool found = japan1Rksj ? japan1CidForCode(static_cast<uint16_t>(code), cid)
+                        uint32_t cidFromCode = 0;
+                        bool found = japan1Rksj ? japan1CidForCode(static_cast<uint16_t>(code), cidFromCode)
                                      : korea1Ksc
-                                         ? korea1CidForCode(static_cast<uint16_t>(code), cid)
-                                         : gb1CidForCode(static_cast<uint16_t>(code), cid);
+                                         ? korea1CidForCode(static_cast<uint16_t>(code), cidFromCode)
+                                         : gb1CidForCode(static_cast<uint16_t>(code), cidFromCode);
                         if (!found) continue;
-                        if (auto it = cidUnicode.find(cid); it != cidUnicode.end())
+                        if (auto it = cidUnicode.find(cidFromCode); it != cidUnicode.end())
                             codeUnicode[code] = it->second;
                     }
                     if (cidUnicode.empty() ||
@@ -3929,13 +3929,13 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
                     writeCidWidths(target, program.face, cidGlyph);
                 } else {
                     if (!cidGlyphOrderMatches(program.face, cidUnicode)) continue;
-                    for (auto const& [cid, unicode] : cidUnicode) {
+                    for (auto const& [mappedCid, unicode] : cidUnicode) {
                         uint32_t scalar = UnicodeScalar::decode(unicode);
                         if (!scalar) {
                             cidGlyph.clear();
                             break;
                         }
-                        cidGlyph[cid] = FT_Get_Char_Index(program.face, scalar);
+                        cidGlyph[mappedCid] = FT_Get_Char_Index(program.face, scalar);
                     }
                     if (cidGlyph.empty()) continue;
                     writeCidWidths(target, program.face, cidGlyph);
@@ -3962,7 +3962,6 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
             bool symbolic = builtInMapping &&
                             (isSymbolName || (flags.isInteger() && (flags.getIntValue() & 4) != 0));
             bool mapBuiltIn = builtInMapping && symbolic;
-            bool forceWinAnsi = builtInMapping && !symbolic;
             if (!cid && !hasProgram && onlyMissing) {
                 // A substitute must cover every character the content actually
                 // draws. Installing a program with missing glyphs silently
@@ -3971,10 +3970,6 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
                                             indexedUsage ? &usageOne : nullptr);
                 if (!scan.complete) continue;
                 auto enc = parseEncoding(target);
-                if (forceWinAnsi) {
-                    enc.base = BaseEncoding::WinAnsi;
-                    enc.namedBase = true;
-                }
                 bool covered = true;
                 for (uint32_t code : scan.cids) {
                     if (code >= 256) continue;
@@ -4026,10 +4021,11 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
                     target.replaceKey("/CIDToGIDMap", QPDFObjectHandle::newName("/Identity"));
             }
             if (pinSimpleMapping) {
-                if (mapBuiltIn)
+                if (mapBuiltIn) {
                     pinBuiltInTrueTypeMapping(*qpdf, target, program.face);
-                else
+                } else {
                     pinTrueTypeMapping(*qpdf, target, program.face, symbolic);
+                }
             }
             if (!cid && (onlyMissing || !target.getKey("/Widths").isArray()) &&
                 !addWidths(target, program.face, mapBuiltIn)) {
