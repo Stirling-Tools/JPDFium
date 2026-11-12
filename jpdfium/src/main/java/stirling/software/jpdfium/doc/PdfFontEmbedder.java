@@ -129,6 +129,10 @@ public final class PdfFontEmbedder {
 
     private static final int TTCF = 0x74746366;
     private static final Pattern TYPE1_NAME = Pattern.compile("/FontName\\s*/(\\S+)");
+    private static final List<String> CJK_FAMILY_HINTS = List.of(
+            "heisei", "mincho", "gothic", "simsun", "simhei", "fangsong", "kaiti",
+            "batang", "gulim", "kozgothic", "msmincho", "msgothic");
+
     private static final List<List<String>> METRIC_COMPATIBLE = List.of(
             List.of("liberationsans", "helvetica", "arial", "nimbussans", "nimbussanl", "arimo", "freesans"),
             List.of("liberationserif", "times", "timesnewroman", "nimbusroman", "nimbusromno9l", "tinos",
@@ -332,10 +336,11 @@ public final class PdfFontEmbedder {
     }
 
     /**
-     * The native bridge can rewrite {@code /CIDToGIDMap} and {@code /ToUnicode} only for
-     * Identity-encoded CID fonts. A predefined CMap or an existing CID-to-GID stream carries
-     * an ordering that a substitute program does not share; embedding it would keep the
-     * document renderable but change its extracted text.
+     * The native bridge can rewrite {@code /CIDToGIDMap} and {@code /ToUnicode} for
+     * Identity-encoded CID fonts and for the Adobe-Japan1 {@code 90ms-RKSJ-H} CMap, whose
+     * code-to-CID and CID-to-Unicode mappings are bundled. Other predefined CMaps or an
+     * existing CID-to-GID stream carry an ordering that a substitute program does not
+     * share; embedding them would keep the document renderable but change its text.
      */
     private static String substitutionBlocker(PdfFontAuditor.FontResource resource) {
         if (!resource.hasToUnicode() && !isAscii(resource.baseName())) {
@@ -368,7 +373,8 @@ public final class PdfFontEmbedder {
             return null;
         }
         boolean identityEncoding = "Identity-H".equals(resource.encoding())
-                || "Identity-V".equals(resource.encoding());
+                || "Identity-V".equals(resource.encoding())
+                || "90ms-RKSJ-H".equals(resource.encoding());
         if (!identityEncoding) {
             return "CID encoding: predefined CMap " + resource.encoding()
                     + " cannot be rewritten without a verified code-to-glyph mapping";
@@ -563,6 +569,10 @@ public final class PdfFontEmbedder {
         if (key.isEmpty()) return null;
         Face exact = index.get(key);
         if (exact != null && (!embeddableOnly || exact.embeddable())) return exact;
+        if (CJK_FAMILY_HINTS.stream().anyMatch(key::contains)) {
+            Face cjk = index.get("notosansscregular");
+            if (cjk != null && (!embeddableOnly || cjk.embeddable())) return cjk;
+        }
         for (List<String> group : METRIC_COMPATIBLE) {
             String family = group.stream().filter(key::startsWith)
                     .max((a, b) -> a.length() - b.length()).orElse(null);
