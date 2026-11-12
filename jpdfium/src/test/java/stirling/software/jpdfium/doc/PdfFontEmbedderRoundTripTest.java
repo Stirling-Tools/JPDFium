@@ -142,7 +142,8 @@ class PdfFontEmbedderRoundTripTest {
             assertEquals(before.pageCount(), after.pageCount());
             assertEquals(result.unresolved(), PdfFontAuditor.auditAll(after).nonEmbeddedFonts().stream()
                     .map(PdfFontAuditor.FontInfo::baseName).distinct().toList());
-            long changed = 0, total = 0;
+            long changed = 0;
+            long total = 0;
             for (int i = 0; i < Math.min(before.pageCount(), 8); i++) {
                 PdfPage a;
                 try {
@@ -182,7 +183,7 @@ class PdfFontEmbedderRoundTripTest {
                     content.beginText();
                     content.setFont(new PDType1Font(name), 11);
                     content.newLineAtOffset(40, y -= 40);
-                    content.showText(name == Standard14Fonts.FontName.SYMBOL ? "\u03b1\u03b2\u03b3\u03b4\u03c0\u2211\u221e" : name == Standard14Fonts.FontName.ZAPF_DINGBATS ? "\u2701\u2702\u2708\u2766" : "Hamburgefonstiv éü–“€");
+                    content.showText(name == Standard14Fonts.FontName.SYMBOL ? "\u03b1\u03b2\u03b3\u03b4\u03c0\u2211\u221e" : name == Standard14Fonts.FontName.ZAPF_DINGBATS ? "\u2701\u2702\u2708\u2766" : "Hamburgefonstiv \u00e9\u00fc\u2013\u201c\u20ac");
                     content.endText();
                 }
             }
@@ -296,8 +297,9 @@ class PdfFontEmbedderRoundTripTest {
         }
     }
 
-        private static void assertSameOrResolvedText(String before, String after, String where) {
-        String a = before.replaceAll("\\s", ""), b = after.replaceAll("\\s", "");
+    private static void assertSameOrResolvedText(String before, String after, String where) {
+        String a = before.replaceAll("\\s", "");
+        String b = after.replaceAll("\\s", "");
         boolean same = a.length() == b.length();
         for (int i = 0; same && i < a.length(); i++) {
             char c = a.charAt(i);
