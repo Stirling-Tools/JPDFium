@@ -219,4 +219,34 @@ class PdfCompressorTest {
                     "subsetFonts(false) must disable the subsetting pass");
         }
     }
+
+    @Test
+    void taggedFontSubsettingIsStrictlyOptIn(@TempDir Path temp) throws Exception {
+        assumeTrue(QpdfLib.isSubsetFontsSupported(), "native font subsetting unavailable");
+        assertFalse(CompressOptions.builder().build().reSubsetTaggedFonts(),
+                "tagged font re-subsetting must default to false");
+        Path src = fullFontPdf(temp);
+        byte[] firstPass;
+        try (PdfDocument doc = PdfDocument.open(src)) {
+            PdfCompressor.CompressResultWithBytes out = PdfCompressor.compress(
+                    doc, CompressOptions.builder().preset(CompressPreset.WEB).subsetFonts(true).build());
+            assertTrue(out.result().actions().stream().anyMatch(a -> a.contains("Subsetted")),
+                    "first pass must subset untagged font");
+            firstPass = out.bytes();
+        }
+
+        try (PdfDocument doc = PdfDocument.open(firstPass)) {
+            PdfCompressor.CompressResultWithBytes out = PdfCompressor.compress(
+                    doc, CompressOptions.builder().preset(CompressPreset.WEB).subsetFonts(true).build());
+            assertFalse(out.result().actions().stream().anyMatch(a -> a.contains("Subsetted")),
+                    "already-tagged font must not be re-subsetted by default");
+        }
+
+        try (PdfDocument doc = PdfDocument.open(firstPass)) {
+            PdfCompressor.CompressResultWithBytes out = PdfCompressor.compress(
+                    doc, CompressOptions.builder().preset(CompressPreset.WEB)
+                            .subsetFonts(true).reSubsetTaggedFonts(true).build());
+            assertNotNull(out.bytes());
+        }
+    }
 }
