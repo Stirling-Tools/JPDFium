@@ -231,16 +231,22 @@ void clampTilingPatternStep(QPDFObjectHandle pattern) {
     if (!type.isInteger() || type.getIntValueAsInt() != 1) return;
     for (char const* key : {"/XStep", "/YStep"}) {
         QPDFObjectHandle value = dict.getKey(key);
+        bool replace = !value.isNumber();
         double step = value.isNumber() ? value.getNumericValue() : 1.0;
-        if (!std::isfinite(step) || std::fabs(step) < 1e-12) {
+        if (!std::isfinite(step)) {
             step = 1.0;
+            replace = true;
+        } else if (std::fabs(step) < std::numeric_limits<double>::min()) {
+            step = 1.0;
+            replace = true;
         } else if (std::fabs(step) < 1.0) {
             step = std::copysign(1.0, step);
+            replace = true;
         } else if (std::fabs(step) > 32767.0) {
             step = std::copysign(32767.0, step);
+            replace = true;
         }
-        if (!value.isNumber() || std::fabs(value.getNumericValue() - step) > 1e-9)
-            dict.replaceKey(key, QPDFObjectHandle::newReal(step, 4));
+        if (replace) dict.replaceKey(key, QPDFObjectHandle::newReal(step, 4));
     }
 }
 
@@ -2742,7 +2748,8 @@ FontUsageIndex buildFontUsageIndex(QPDF& qpdf, CidEncoding encoding) {
                     auto data = stream.getStreamData(qpdf_dl_generalized);
                     if (data && data->getSize()) {
                         size_t separator = pageContent.empty() ? 0 : 1;
-                        if (data->getSize() > kMaxPageContent - bytes - separator) {
+                        if (bytes > kMaxPageContent || separator > kMaxPageContent - bytes ||
+                            data->getSize() > kMaxPageContent - bytes - separator) {
                             index.complete = false;
                             break;
                         }
@@ -2857,7 +2864,9 @@ CidScanResult usedCidsForFont(QPDF& qpdf, QPDFObjectHandle const& target,
                     auto data = stream.getStreamData(qpdf_dl_generalized);
                     if (data && data->getSize()) {
                         size_t separator = pageContent.empty() ? 0 : 1;
-                        if (data->getSize() > kMaxPageContent - pageContentBytes - separator) {
+                        if (pageContentBytes > kMaxPageContent ||
+                            separator > kMaxPageContent - pageContentBytes ||
+                            data->getSize() > kMaxPageContent - pageContentBytes - separator) {
                             // Joining is only an optimization for scanners that need
                             // tokens to span stream boundaries. Past the cap, stop
                             // accumulating and let the /W fallback handle the font.
@@ -3676,7 +3685,7 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
         };
         FontUsageIndex usageTwo;
         FontUsageIndex usageOne;
-        bool indexedUsage = fonts.size() > 1;
+        bool indexedUsage = onlyMissing && fonts.size() > 1;
         if (indexedUsage) {
             usageTwo = buildFontUsageIndex(*qpdf, CidEncoding::TwoByte);
             usageOne = buildFontUsageIndex(*qpdf, CidEncoding::SingleByte);
