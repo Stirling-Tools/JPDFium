@@ -150,7 +150,13 @@ public final class PdfFontAuditor {
         Map<String, FontBuilder> fontMap = new LinkedHashMap<>();
 
         for (int pageIdx = 0; pageIdx < doc.pageCount(); pageIdx++) {
-            try (PdfPage page = doc.page(pageIdx)) {
+            PdfPage page;
+            try {
+                page = doc.page(pageIdx);
+            } catch (JPDFiumException unopenablePage) {
+                continue;
+            }
+            try (page) {
                 MemorySegment rawPage = page.rawHandleForRead();
                 int objCount;
                 try {
@@ -340,6 +346,7 @@ public final class PdfFontAuditor {
      * when the native inventory is unavailable.
      */
     static List<FontResource> unembeddedResources(byte[] pdf) {
+        if (pdf == null || pdf.length == 0) return List.of();
         if (QpdfLib.isFontInventorySupported()) {
             String json = QpdfLib.inspectFonts(pdf);
             if (json != null) {
@@ -393,6 +400,7 @@ public final class PdfFontAuditor {
     }
 
     static List<FontResource> inventoryBytes(byte[] pdf) {
+        if (pdf == null || pdf.length == 0) return List.of();
         String json = QpdfLib.inspectFonts(pdf);
         return json == null ? List.of() : parseInventory(json);
     }
