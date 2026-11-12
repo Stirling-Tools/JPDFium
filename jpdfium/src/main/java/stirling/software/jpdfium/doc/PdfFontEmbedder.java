@@ -987,13 +987,13 @@ public final class PdfFontEmbedder {
             }
         }
         out.putInt(cmapRecordOffset + 4, checksum);
-        if (headOffset >= 0 && headOffset + 12 <= modified.length) {
-            fontChecksum(modified, headOffset + 8);
+        if (headOffset >= 12 && headOffset + 54 <= modified.length) {
+            updateChecksumAdjustment(modified, headOffset + 8);
         }
         return modified;
     }
 
-    private static void fontChecksum(byte[] font, int adjustmentOffset) {
+    private static void updateChecksumAdjustment(byte[] font, int adjustmentOffset) {
         ByteBuffer view = ByteBuffer.wrap(font);
         view.putInt(adjustmentOffset, 0);
         int sum = 0;
