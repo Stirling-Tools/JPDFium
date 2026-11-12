@@ -1064,11 +1064,13 @@ static bool cmapHasMappings(std::string const& text) {
     for (auto const& section :
          {std::pair<char const*, char const*>("beginbfchar", "endbfchar"),
           std::pair<char const*, char const*>("beginbfrange", "endbfrange")}) {
-        size_t begin = text.find(section.first);
-        if (begin == std::string::npos) continue;
-        size_t end = text.find(section.second, begin);
-        if (end == std::string::npos) continue;
-        if (cmapSectionHasMapping(text.substr(begin, end - begin))) return true;
+        size_t pos = 0;
+        while ((pos = text.find(section.first, pos)) != std::string::npos) {
+            size_t end = text.find(section.second, pos);
+            if (end == std::string::npos) break;
+            if (cmapSectionHasMapping(text.substr(pos, end - pos))) return true;
+            pos = end + 1;
+        }
     }
     return false;
 }
@@ -1142,9 +1144,10 @@ static void repair_font_tounicode(QPDF& pdf, QPDFObjectHandle& font, FT_Face fac
                 }
             } else {
                 for (auto const& entry : gid_to_unicode) {
-                    if (entry.first <= 0xFFFF &&
-                        (!ambiguous_gids.contains(entry.first) || FT_HAS_GLYPH_NAMES(face)))
-                        code_to_unicode.emplace(entry.first, std::vector<uint32_t>{entry.second});
+                    if (entry.first > 0xFFFF) continue;
+                    uint32_t unicode = reverse_cid_unicode(entry.first);
+                    if (unicode || !ambiguous_gids.contains(entry.first))
+                        code_to_unicode.emplace(entry.first, std::vector<uint32_t>{unicode});
                 }
             }
         }
@@ -1263,7 +1266,8 @@ static void repair_cid_font_widths(QPDFObjectHandle& font, QPDFObjectHandle& tar
     if (existing_w.isArray() && existing_w.getArrayNItems() > 0) return;
 
     QPDFObjectHandle dw = target.getKey("/DW");
-    const int default_dw = dw.isInteger() ? dw.getIntValueAsInt() : 1000;
+    const int default_dw =
+        dw.isNumber() ? static_cast<int>(std::lround(dw.getNumericValue())) : 1000;
     // /W is keyed by CID, not GID.
     std::map<uint32_t, int> cid_to_width;
     if (cid_to_gid.isStream()) {
