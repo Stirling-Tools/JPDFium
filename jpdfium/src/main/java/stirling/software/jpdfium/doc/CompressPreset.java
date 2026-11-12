@@ -8,17 +8,17 @@ public enum CompressPreset {
      * Web optimization: moderate image quality, object stream compression.
      * Good balance between file size and quality.
      */
-    WEB(75, 150, true, true, true, false, PreservationMode.VISUALLY_CONSTRAINED),
+    WEB(75, 150, true, true, true, false, true, PreservationMode.VISUALLY_CONSTRAINED),
 
     /**
      * Screen/email: lower quality, maximum compression.
      */
-    SCREEN(60, 96, true, true, true, false, PreservationMode.SCAN),
+    SCREEN(60, 96, true, true, true, false, true, PreservationMode.SCAN),
 
     /**
      * Print-ready: high quality, structural optimization only.
      */
-    PRINT(90, 300, false, true, false, false, PreservationMode.VISUALLY_CONSTRAINED),
+    PRINT(90, 300, false, true, false, false, true, PreservationMode.VISUALLY_CONSTRAINED),
 
     /**
      * Lossless maximum: aggressive structural optimization and stream
@@ -31,12 +31,12 @@ public enum CompressPreset {
      * than the qpdf pass alone. zopfli remains available as an explicit opt-in
      * via {@link CompressOptions.Builder#useZopfliDeflate(boolean)}.
      */
-    LOSSLESS(-1, -1, false, true, false, false, PreservationMode.EXACT),
+    LOSSLESS(-1, -1, false, true, false, false, true, PreservationMode.EXACT),
 
     /**
      * Maximum compression: aggressive image optimization and structural compression.
      */
-    MAXIMUM(50, 96, true, true, true, false, PreservationMode.DESTRUCTIVE);
+    MAXIMUM(50, 96, true, true, true, false, true, PreservationMode.DESTRUCTIVE);
 
     private final int imageQuality;
     private final int maxImageDpi;
@@ -44,17 +44,19 @@ public enum CompressPreset {
     private final boolean optimizeStreams;
     private final boolean removeMetadata;
     private final boolean useZopfliDeflate;
+    private final boolean subsetFonts;
     private final PreservationMode preservationMode;
 
     CompressPreset(int imageQuality, int maxImageDpi, boolean convertPngToJpeg,
                    boolean optimizeStreams, boolean removeMetadata, boolean useZopfliDeflate,
-                   PreservationMode preservationMode) {
+                   boolean subsetFonts, PreservationMode preservationMode) {
         this.imageQuality = imageQuality;
         this.maxImageDpi = maxImageDpi;
         this.convertPngToJpeg = convertPngToJpeg;
         this.optimizeStreams = optimizeStreams;
         this.removeMetadata = removeMetadata;
         this.useZopfliDeflate = useZopfliDeflate;
+        this.subsetFonts = subsetFonts;
         this.preservationMode = preservationMode;
     }
 
@@ -64,6 +66,7 @@ public enum CompressPreset {
     public boolean optimizeStreams() { return optimizeStreams; }
     public boolean removeMetadata() { return removeMetadata; }
     public boolean useZopfliDeflate() { return useZopfliDeflate; }
+    public boolean subsetFonts() { return subsetFonts; }
     public PreservationMode preservationMode() { return preservationMode; }
 
     /**
