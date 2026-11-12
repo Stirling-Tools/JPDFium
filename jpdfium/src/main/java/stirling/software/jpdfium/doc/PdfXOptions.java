@@ -269,7 +269,7 @@ public final class PdfXOptions {
             return this;
         }
 
-        /** Fail when the audit finds a non-embedded font in page text or form XObjects. */
+        /** Fail when the audit finds a non-embedded font in any reachable resource. */
         public Builder requireEmbeddedFonts(boolean value) {
             this.requireEmbeddedFonts = value;
             return this;

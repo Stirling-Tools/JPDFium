@@ -55,14 +55,13 @@ import stirling.software.jpdfium.panama.QpdfLib;
  * without {@code /ToUnicode}, are reported instead of substituted because the original
  * code-to-glyph mapping cannot be preserved. That keeps extracted text and drawn glyphs stable.
  *
- * <p>A font without a descriptor or {@code /Widths} gains them from the program, and the
- * subtype follows the program's outlines with the code-to-glyph mapping pinned by an explicit
- * encoding and {@code /ToUnicode}; existing widths are kept, so text never moves. A simple
- * non-symbolic font backed by a TrueType or OpenType program that permits subsetting is
- * embedded as a subset of the glyphs its codes can reach; Type 1 and bare CFF programs are
- * embedded whole. Signed
- * documents are refused because the rewrite invalidates their signatures, and a CIDFont keeps
- * its CID-to-glyph mapping, so its program must use the original glyph order.
+ * <p>A font without a descriptor gains one from the program. A missing font gains widths
+ * from the substitute, or has existing widths recomputed, so PDF/A-2 6.2.11.5 and PDF/UA
+ * 7.21.5 metrics match the embedded program. Explicitly supplied programs keep existing
+ * widths. Missing simple fonts are embedded whole; compression can subset an already embedded
+ * TrueType or OpenType program. Signed documents are refused because the rewrite invalidates
+ * their signatures, and a CIDFont keeps its CID-to-glyph mapping, so its program must use the
+ * original glyph order.
  */
 public final class PdfFontEmbedder {
 
