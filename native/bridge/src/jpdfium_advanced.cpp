@@ -2090,6 +2090,7 @@ static void repair_simple_font_widths(QPDFObjectHandle& target, FT_Face face,
         if (has_widths_array && index >= 0 && index < existing_widths.getArrayNItems())
             item = existing_widths.getArrayItem(index);
         const bool existing_number = item.isNumber();
+        const bool existing_nonnegative = existing_number && item.getNumericValue() >= 0.0;
         const int preserved =
             existing_number ? std::max(0, static_cast<int>(std::lround(item.getNumericValue())))
                             : 0;
@@ -2098,7 +2099,7 @@ static void repair_simple_font_widths(QPDFObjectHandle& target, FT_Face face,
         const bool resolved = simple_glyphs[code].gid != 0 &&
                               pdf_width_from_glyph(face, simple_glyphs[code].gid, computed);
         if (resolved) {
-            if (existing_number && (preserved > 0 || computed == 0)) {
+            if (existing_number && (preserved > 0 || (computed == 0 && existing_nonnegative))) {
                 // Keep a positive producer width even when it differs from the
                 // program advance; keep a legitimate zero-advance glyph too.
                 width = preserved;

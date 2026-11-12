@@ -702,7 +702,7 @@ public final class PdfFontEmbedder {
                     : 1;
             for (int f = 0; f < faceCount; f++) {
                 int offset = collection ? b.getInt(12 + 4 * f) : 0;
-                if (offset < 0 || offset + 12 > b.capacity()) continue;
+                if (offset < 0 || offset > b.capacity() - 12) continue;
                 int fsType = fsType(b, offset);
                 // Restricted-license embedding and bitmap-only embedding are both unusable
                 // for a program substitution that must keep outlines, but the face stays in

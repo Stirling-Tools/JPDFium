@@ -461,10 +461,18 @@ class FontNormalizerTest {
                 for (int page = 0; page < 2; page++) {
                     COSDictionary font = loaded.getPage(page).getResources()
                             .getFont(COSName.getPDFName("F1")).getCOSObject();
-                    assertNotNull(font.getDictionaryObject(COSName.WIDTHS),
-                            "page " + page + " font must carry /Widths");
+                    COSArray widths = (COSArray) font.getDictionaryObject(COSName.WIDTHS);
+                    assertNotNull(widths, "page " + page + " font must carry /Widths");
+                    int firstChar = font.getInt(COSName.FIRST_CHAR, 0);
+                    assertEquals(722, widths.getInt('H' - firstChar),
+                            "page " + page + " H width must match the program");
                     assertNotNull(font.getDictionaryObject(COSName.TO_UNICODE),
                             "page " + page + " font must carry /ToUnicode");
+                    PDFTextStripper stripper = new PDFTextStripper();
+                    stripper.setStartPage(page + 1);
+                    stripper.setEndPage(page + 1);
+                    assertEquals("H", stripper.getText(loaded).strip(),
+                            "page " + page + " must extract its repaired text");
                 }
             }
         }
