@@ -1748,18 +1748,18 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
                 std::map<uint32_t, FT_ULong> codes;
                 std::map<uint32_t, FT_UInt> gidByCid;
                 uint32_t maxCid = 0;
-                for (auto [cid, u] : cidUnicode) {
+                for (auto [code, u] : cidUnicode) {
                     if (FT_UInt gid = FT_Get_Char_Index(program.face, u)) {
-                        codes[cid] = u;
-                        gidByCid[cid] = gid;
-                        maxCid = std::max(maxCid, cid);
+                        codes[code] = u;
+                        gidByCid[code] = gid;
+                        maxCid = std::max(maxCid, code);
                     }
                 }
                 if (cidRemap && !gidByCid.empty()) {
                     std::vector<uint8_t> map(2 * (size_t(maxCid) + 1), 0);
-                    for (auto [cid, gid] : gidByCid) {
-                        map[2 * cid] = uint8_t(gid >> 8);
-                        map[2 * cid + 1] = uint8_t(gid & 0xFF);
+                    for (auto [code, gid] : gidByCid) {
+                        map[2 * code] = uint8_t(gid >> 8);
+                        map[2 * code + 1] = uint8_t(gid & 0xFF);
                     }
                     target.replaceKey("/CIDToGIDMap",
                                       QPDFObjectHandle::newStream(
