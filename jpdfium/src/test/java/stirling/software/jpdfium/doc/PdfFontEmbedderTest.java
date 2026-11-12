@@ -137,21 +137,23 @@ class PdfFontEmbedderTest {
         assertNotNull(url, "KSC-EUC-H fixture missing");
         byte[] input = Files.readAllBytes(Path.of(url.toURI()));
 
+        assumeTrue(PdfFontEmbedder.diagnose("Batang").resolved(),
+                "no Korean-capable substitute installed");
         PdfFontEmbedder.Result result = PdfFontEmbedder.embedMissing(input);
         assertFalse(result.statuses().stream().anyMatch(s -> s.reason().contains("predefined CMap")),
                 "KSC-EUC-H must be supported and never blocked as unsupported CMap");
-        if (result.embedded().contains("Batang")) {
-            try (PDDocument doc = Loader.loadPDF(result.pdf())) {
-                String text = new PDFTextStripper().getText(doc);
-                assertTrue(text.contains("한국어 테스트"),
-                        "the embedded fallback must preserve Korean text, got: " + text);
-            }
-            try (PdfDocument doc =
-                            PdfDocument.open(result.pdf());
-                    PdfPage page = doc.page(0)) {
-                assertTrue(page.extractText().contains("한국어 테스트"),
-                        "PDFium must extract Korean after embedding, got: " + page.extractText());
-            }
+        assertTrue(result.embedded().contains("Batang"),
+                "the Korean substitute must be embedded, got " + result);
+        try (PDDocument doc = Loader.loadPDF(result.pdf())) {
+            String text = new PDFTextStripper().getText(doc);
+            assertTrue(text.contains("한국어 테스트"),
+                    "the embedded fallback must preserve Korean text, got: " + text);
+        }
+        try (PdfDocument doc =
+                        PdfDocument.open(result.pdf());
+                PdfPage page = doc.page(0)) {
+            assertTrue(page.extractText().contains("한국어 테스트"),
+                    "PDFium must extract Korean after embedding, got: " + page.extractText());
         }
     }
 
