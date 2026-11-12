@@ -172,6 +172,21 @@ class PdfFontEmbedderTest {
     }
 
     @Test
+    void nestedFormsWithInheritedCidFontKeepEveryCid() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
+        byte[] input = nestedInheritedCidPdf();
+
+        PdfFontEmbedder.Result result = PdfFontEmbedder.embedMissing(input);
+
+        assertTrue(result.embedded().contains("ArialMT"), "the inherited font must embed: " + result);
+        try (PdfDocument doc = PdfDocument.open(result.pdf())) {
+            String text = doc.page(0).extractText();
+            assertTrue(text.contains("A"), "the outer form CID must survive: " + text);
+            assertTrue(text.contains("B"), "the nested form CID must survive: " + text);
+        }
+    }
+
+    @Test
     void repeatedDistinctFormsExhaustTheScanBudgetAndFailClosed(@TempDir Path temp) throws Exception {
         assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
         Path input = manyFormPage(temp.resolve("many-forms.pdf"), 2_100);
@@ -181,6 +196,84 @@ class PdfFontEmbedderTest {
 
         assertTrue(result.unresolved().contains("Helvetica"),
                 "a scan that exhausts its stream budget must not claim success");
+    }
+
+
+    private static byte[] nestedInheritedCidPdf() throws Exception {
+        try (PDDocument pdf = new PDDocument()) {
+            PDPage page = new PDPage(PDRectangle.LETTER);
+            pdf.addPage(page);
+            COSDictionary font = identityCidFont("ArialMT");
+            COSDictionary descendant = (COSDictionary) ((COSArray) font.getDictionaryObject(
+                    COSName.DESCENDANT_FONTS)).getObject(0);
+            COSArray widths = new COSArray();
+            for (int cid : new int[] {1, 2}) {
+                widths.add(COSInteger.get(cid));
+                COSArray run = new COSArray();
+                run.add(COSInteger.get(500));
+                widths.add(run);
+            }
+            descendant.setItem(COSName.W, widths);
+            COSStream toUnicode = new COSStream();
+            try (OutputStream out = toUnicode.createOutputStream()) {
+                out.write("""
+                        /CIDInit /ProcSet findresource begin
+                        12 dict begin
+                        begincmap
+                        /CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def
+                        /CMapName /Adobe-Identity-UCS def
+                        /CMapType 2 def
+                        1 begincodespacerange
+                        <0000> <FFFF>
+                        endcodespacerange
+                        2 beginbfchar
+                        <0001> <0041>
+                        <0002> <0042>
+                        endbfchar
+                        endcmap
+                        CMapName currentdict /CMap defineresource pop
+                        end
+                        end
+                        """.getBytes(StandardCharsets.US_ASCII));
+            }
+            font.setItem(COSName.TO_UNICODE, toUnicode);
+
+            PDStream innerStream = new PDStream(pdf);
+            try (OutputStream out = innerStream.createOutputStream()) {
+                out.write("BT /F1 12 Tf 72 700 Td <0002> Tj ET"
+                        .getBytes(StandardCharsets.US_ASCII));
+            }
+            PDFormXObject inner = new PDFormXObject(innerStream);
+            inner.setBBox(new PDRectangle(0, 0, 200, 200));
+
+            PDStream outerStream = new PDStream(pdf);
+            try (OutputStream out = outerStream.createOutputStream()) {
+                out.write("BT /F1 12 Tf 72 700 Td <0001> Tj ET /X1 Do"
+                        .getBytes(StandardCharsets.US_ASCII));
+            }
+            PDFormXObject outer = new PDFormXObject(outerStream);
+            outer.setBBox(new PDRectangle(0, 0, 200, 200));
+
+            COSDictionary fonts = new COSDictionary();
+            fonts.setItem("F1", font);
+            COSDictionary xobjects = new COSDictionary();
+            xobjects.setItem("X0", outer.getCOSObject());
+            xobjects.setItem("X1", inner.getCOSObject());
+            COSDictionary resourceDict = new COSDictionary();
+            resourceDict.setItem(COSName.FONT, fonts);
+            resourceDict.setItem(COSName.XOBJECT, xobjects);
+            page.setResources(new PDResources(resourceDict));
+
+            PDStream pageContent = new PDStream(pdf);
+            try (OutputStream out = pageContent.createOutputStream()) {
+                out.write("/X0 Do".getBytes(StandardCharsets.US_ASCII));
+            }
+            page.setContents(pageContent);
+
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            pdf.save(out);
+            return out.toByteArray();
+        }
     }
 
     private static Path manyFormPage(Path target, int forms) throws IOException {
