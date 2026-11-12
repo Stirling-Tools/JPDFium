@@ -3239,8 +3239,12 @@ std::set<uint32_t> cidsPresentInProgram(QPDFObjectHandle const& target, FT_Face 
             std::shared_ptr<Buffer> data = map.getStreamData(qpdf_dl_generalized);
             if (data) {
                 const size_t entries = data->getSize() / 2;
-                for (size_t i = 0; i < entries && i <= kMaxCid; ++i)
-                    cids.insert(static_cast<uint32_t>(i));
+                auto const* bytes = reinterpret_cast<uint8_t const*>(data->getBuffer());
+                for (size_t i = 0; i < entries && i <= kMaxCid; ++i) {
+                    uint32_t gid = (uint32_t(bytes[2 * i]) << 8) | bytes[2 * i + 1];
+                    if (!face || gid < static_cast<uint32_t>(face->num_glyphs))
+                        cids.insert(static_cast<uint32_t>(i));
+                }
             }
         } catch (...) {
             cids.clear();

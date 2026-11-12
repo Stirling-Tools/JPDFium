@@ -2514,8 +2514,12 @@ static std::set<uint32_t> cids_present_in_program(FT_Face face, QPDFObjectHandle
             std::shared_ptr<Buffer> data = cid_to_gid.getStreamData(qpdf_dl_generalized);
             if (data) {
                 const size_t entries = data->getSize() / 2;
-                for (size_t i = 0; i < entries && i <= kFontMaxCid; ++i)
-                    cids.insert(static_cast<uint32_t>(i));
+                auto const* bytes = static_cast<uint8_t const*>(data->getBuffer());
+                for (size_t i = 0; i < entries && i <= kFontMaxCid; ++i) {
+                    uint32_t gid = (uint32_t(bytes[2 * i]) << 8) | bytes[2 * i + 1];
+                    if (!face || gid < static_cast<uint32_t>(face->num_glyphs))
+                        cids.insert(static_cast<uint32_t>(i));
+                }
             }
         } catch (...) {
             cids.clear();
