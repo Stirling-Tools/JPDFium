@@ -1,4 +1,4 @@
-Adobe-Japan1 CMap resources (90ms-RKSJ-H, Adobe-Japan1-UCS2)
+Adobe CMap resources (Adobe-Japan1: 90ms-RKSJ-H, Adobe-Japan1-UCS2; Adobe-Korea1: KSC-EUC-H, Adobe-Korea1-UCS2; Adobe-GB1: GB-EUC-H, Adobe-GB1-UCS2)
 Copyright 1990-2019 Adobe. All rights reserved.
 BSD-3-Clause-style license follows.
 
