@@ -1,6 +1,7 @@
 package stirling.software.jpdfium.doc;
 
 import stirling.software.jpdfium.PdfDocument;
+import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.QpdfLib;
 import stirling.software.jpdfium.panama.RustBridgeBindings;
@@ -359,7 +360,8 @@ public final class PdfCompressor {
         //    structural pass so qpdf recompresses the smaller font streams.
         if (!preserve && opts.subsetFonts() && QpdfLib.isSubsetFontsSupported()) {
             try {
-                QpdfLib.FontSubsetResult sub = QpdfLib.subsetFonts(resultBytes);
+                QpdfLib.FontSubsetResult sub = QpdfLib.subsetFonts(resultBytes,
+                        opts.reSubsetTaggedFonts());
                 if (sub != null && sub.fontsSubset() > 0 && sub.pdf() != null
                         && sub.pdf().length < resultBytes.length) {
                     // A smaller file is not enough: the subset must keep the
@@ -934,8 +936,10 @@ public final class PdfCompressor {
              PdfDocument da = PdfDocument.open(after)) {
             if (db.pageCount() != expectedPages || da.pageCount() != expectedPages) return false;
             for (int i = 0; i < expectedPages; i++) {
-                if (!Objects.equals(db.page(i).extractText(), da.page(i).extractText()))
-                    return false;
+                try (PdfPage beforePage = db.page(i); PdfPage afterPage = da.page(i)) {
+                    if (!Objects.equals(beforePage.extractText(), afterPage.extractText()))
+                        return false;
+                }
             }
             return true;
         } catch (Throwable t) {
