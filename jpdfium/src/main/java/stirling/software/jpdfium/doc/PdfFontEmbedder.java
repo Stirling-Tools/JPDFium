@@ -964,6 +964,7 @@ public final class PdfFontEmbedder {
         if (selectedSubtableOffset < 0) {
             selectedSubtableOffset = cmapOffset + 4;
         }
+        if (selectedSubtableOffset + 8 > fontData.length) return fontData;
 
         byte[] modified = fontData.clone();
         ByteBuffer out = ByteBuffer.wrap(modified);
