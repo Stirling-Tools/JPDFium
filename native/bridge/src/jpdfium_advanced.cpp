@@ -2327,52 +2327,9 @@ static void convert_cff_in_sfnt(QPDF& pdf, QPDFObjectHandle& descriptor,
 }
 
 /**
- * Re-subsets an embedded SFNT (TrueType or OpenType/CFF) font program or extracts
- * a single face from a multi-face TrueType Collection (TTC) container to retain
- * strictly those glyphs drawn by referencing content streams across the document.
- *
- * Algorithm overview:
- * 1. Precondition checks:
- *    - Rejects fonts with <= 1 glyph, non-SFNT fonts, CFF2 tables, or fonts whose
- *      OS/2 fsType flags forbid subsetting (e.g., Restricted License embedding 0x0002).
- *    - Extracts BaseFont name and descriptor FontName; rejects fonts missing BaseFont.
- *    - Checks subset tag (pattern 'XXXXXX+'); skips fonts already tagged as subsets
- *      unless extracting a face from a TrueType Collection (.ttc / 'ttcf').
- *    - Checks sharing: skips programs or descriptors referenced by multiple font
- *      dictionaries across pages, or referenced by /AcroForm /DR.
- * 2. Usage discovery (fail-closed):
- *    - For CID fonts (Type 0 / CIDFontType2): scans all content streams for 2-byte CIDs,
- *      mapping each CID through /CIDToGIDMap (stream or /Identity) to a glyph index (GID).
- *    - For simple fonts (TrueType): scans content streams for 1-byte character codes.
- *      Validates that every referenced code resolves to a valid non-zero GID in
- *      simple_glyphs. If any drawn code is unmapped or maps to GID 0, subsetting is rejected
- *      to avoid dropping glyphs that PDFium's engine-level heuristics might render.
- * 3. Subset generation:
- *    - Invokes the HarfBuzz subsetter (hb_subset) to retain targeted GIDs while
- *      preserving original glyph advances, hinting metrics, and required tables.
- *    - Verifies that glyph advances in the subsetted program exactly match the original.
- * 4. PDF dictionary updates:
- *    - Generates a deterministic 6-character uppercase tag (e.g., 'ABCDEF+FontName').
- *    - Updates /BaseFont in font and descendant dictionaries, and /FontName in descriptor.
- *    - Replaces /FontFile2 (TrueType) or /FontFile3 (OpenType/CFF) stream data and Length.
- *    - Keeps the original FreeType face, whose backing buffer outlives this call, and updates
- *      active CID tracking.
- *
- * @param pdf Document handle.
- * @param font Referring font dictionary handle.
- * @param target Descendant CIDFont or simple font dictionary handle.
- * @param descriptor /FontDescriptor dictionary handle.
- * @param stream Embedded font program stream handle.
- * @param data Decompressed raw bytes of the original font program.
- * @param face_index Face index in TTC collection, or 0 for standalone fonts.
- * @param face FreeType face pointer; not reloaded because the subset buffer is temporary.
- * @param cid True for 2-byte composite fonts; false for 1-byte simple fonts.
- * @param cid_to_gid /CIDToGIDMap stream handle (or /Identity).
- * @param cid_identity True if /CIDToGIDMap is /Identity.
- * @param simple_glyphs Character-code-to-GID mapping array for simple fonts.
- * @param usage Shared reference counts for descriptors and font streams.
- * @param state Normalization statistics and scan cache.
- * @return True if the font program was successfully subsetted and replaced; false otherwise.
+ * Re-subsets an embedded SFNT or extracts one face from a TrueType Collection,
+ * retaining only glyphs drawn by content. Returns false when usage discovery or
+ * advance validation is incomplete.
  */
 static bool resubset_embedded_sfnt(QPDF& pdf, QPDFObjectHandle& font, QPDFObjectHandle& target,
                                    QPDFObjectHandle& descriptor, QPDFObjectHandle const& stream,
