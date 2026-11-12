@@ -2,6 +2,7 @@ package stirling.software.jpdfium.doc;
 
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.panama.NativeRuntime;
+import stirling.software.jpdfium.panama.QpdfLib;
 import stirling.software.jpdfium.panama.RustBridgeBindings;
 
 import java.awt.image.BufferedImage;
@@ -353,7 +354,18 @@ public final class PdfCompressor {
         }
         boolean streamsOptimized = false;
 
-        // 5. qpdf pass: recompress streams, generate object/xref streams.
+        // 5. Subset already-embedded TrueType/OpenType programs. Run before the
+        //    structural pass so qpdf recompresses the smaller font streams.
+        if (!signed && !pdfA && opts.subsetFonts() && QpdfLib.isSubsetFontsSupported()) {
+            QpdfLib.FontSubsetResult sub = QpdfLib.subsetFonts(resultBytes);
+            if (sub != null && sub.fontsSubset() > 0 && sub.pdf() != null
+                    && sub.pdf().length < resultBytes.length) {
+                resultBytes = sub.pdf();
+                actions.add("Subsetted %d embedded font(s)".formatted(sub.fontsSubset()));
+            }
+        }
+
+        // 6. qpdf pass: recompress streams, generate object/xref streams.
         //    Only adopt when strictly smaller so small PDFs are never inflated.
         if (!signed && opts.optimizeStreams()) {
             // PDF/A-1 forbids object streams and cross-reference streams, so a
@@ -391,7 +403,7 @@ public final class PdfCompressor {
             }
         }
 
-        // 6. Rust/zopfli post-processing pass (optional opt-in).
+        // 7. Rust/zopfli post-processing pass (optional opt-in).
         if (!signed && opts.useZopfliDeflate()) {
             if (opts.zopfliMaxInputBytes() <= 0
                     || resultBytes.length <= opts.zopfliMaxInputBytes()) {
@@ -416,7 +428,7 @@ public final class PdfCompressor {
             }
         }
 
-        // 7. Monotonic guarantee: never return more than the live document. Fall back
+        // 8. Monotonic guarantee: never return more than the live document. Fall back
         //    to the in-memory snapshot, never the open-time bytes, so an edit survives.
         if (resultBytes.length > originalSize) {
             if (resultBytes.length > openStateBytes.length) {
