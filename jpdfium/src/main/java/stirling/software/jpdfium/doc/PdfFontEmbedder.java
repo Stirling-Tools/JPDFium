@@ -237,7 +237,6 @@ public final class PdfFontEmbedder {
         Map<String, Face> bundled = fontDirs.length == 0 ? bundledFaces() : null;
         Map<String, Face> index = null;
         Map<String, byte[]> found = new LinkedHashMap<>();
-        Map<Face, byte[]> programs = new HashMap<>();
         List<FontStatus> statuses = new ArrayList<>(missing.size());
         for (String name : missing) {
             if (!substitutable.getOrDefault(name, true)) {
@@ -260,13 +259,27 @@ public final class PdfFontEmbedder {
                                 "embedding restricted by fsType " + restricted.fsType()));
                 continue;
             }
-            byte[] data = programs.get(face);
-            if (data == null) programs.put(face, data = program(face));
+            byte[] data = program(face);
+            int fsType = programFsType(face, data);
+            if (!embeddableProgram(fsType)) {
+                statuses.add(new FontStatus(name, source(face), fsType, false,
+                        "embedding restricted by fsType " + fsType));
+                continue;
+            }
             found.put(name, data);
-            statuses.add(new FontStatus(name, source(face), face.fsType(), true, "embedded"));
+            statuses.add(new FontStatus(name, source(face), fsType, true, "embedded"));
         }
         byte[] out = found.isEmpty() ? null : QpdfLib.embedFonts(pdf, found, true);
-        if (out == null) return new Result(pdf, List.of(), missing, statuses);
+        if (out == null) {
+            List<FontStatus> failed = new ArrayList<>(statuses.size());
+            for (FontStatus status : statuses) {
+                failed.add(status.resolved()
+                        ? new FontStatus(status.baseName(), status.source(), status.fsType(), false,
+                                "native embedder left the font unchanged (glyph order or width coverage)")
+                        : status);
+            }
+            return new Result(pdf, List.of(), missing, failed);
+        }
         List<String> unresolved = PdfFontAuditor.unembeddedNames(out);
         List<FontStatus> finalStatuses = new ArrayList<>(statuses.size());
         for (FontStatus status : statuses) {
@@ -378,13 +391,12 @@ public final class PdfFontEmbedder {
             throws IOException {
         Map<String, Face> index = indexFor(fontDirs);
         Map<String, byte[]> found = new LinkedHashMap<>();
-        Map<Face, byte[]> programs = new HashMap<>();
         for (String name : missing) {
             if (!substitutable.getOrDefault(name, true)) continue;
             Face face = resolve(index, key(name));
             if (face == null) continue;
-            byte[] data = programs.get(face);
-            if (data == null) programs.put(face, data = program(face));
+            byte[] data = program(face);
+            if (!embeddableProgram(programFsType(face, data))) continue;
             found.put(name, data);
         }
         return found;
@@ -420,7 +432,7 @@ public final class PdfFontEmbedder {
                 int separator = end - suffix.length() - 1;
                 if (separator >= start
                         && (name.charAt(separator) == '-' || name.charAt(separator) == ',')
-                        && name.regionMatches(separator + 1, suffix, 0, suffix.length())) {
+                        && name.regionMatches(true, separator + 1, suffix, 0, suffix.length())) {
                     end = separator;
                     trimmed = true;
                     break;
@@ -430,14 +442,14 @@ public final class PdfFontEmbedder {
         StringBuilder normalized = new StringBuilder(end - start);
         for (int i = start; i < end; ) {
             char c = name.charAt(i);
-            if (c == 'P' && i + 1 < end && name.charAt(i + 1) == 'S'
+            if (name.regionMatches(true, i, "PS", 0, 2)
                     && (i + 2 == end || name.charAt(i + 2) == '-'
-                            || (i + 4 == end && name.startsWith("MT", i + 2)))) {
+                            || (i + 4 == end && name.regionMatches(true, i + 2, "MT", 0, 2)))) {
                 i += 2;
                 continue;
             }
-            if (c == 'M' && i + 2 == end && name.charAt(i + 1) == 'T') break;
-            if (c == 'T' && i + 1 < end && name.charAt(i + 1) == 'M' && !alnumAfter(name, i + 2, end)) {
+            if (i + 2 == end && name.regionMatches(true, i, "MT", 0, 2)) break;
+            if (name.regionMatches(true, i, "TM", 0, 2) && !alnumAfter(name, i + 2, end)) {
                 i += 2;
                 continue;
             }
@@ -587,7 +599,8 @@ public final class PdfFontEmbedder {
     private static void indexFile(Path path, Map<String, Face> index) {
         try (FileChannel channel = FileChannel.open(path)) {
             BasicFileAttributes attrs = Files.readAttributes(path, BasicFileAttributes.class);
-            long size = attrs.size(), mtime = attrs.lastModifiedTime().toMillis();
+            long size = attrs.size();
+            long mtime = attrs.lastModifiedTime().toMillis();
             ByteBuffer b = channel.map(FileChannel.MapMode.READ_ONLY, 0, channel.size());
             if (b.getShort(0) == (short) 0x8001 || b.get(0) == '%') {
                 byte[] head = new byte[Math.min(b.capacity(), 8192)];
@@ -636,9 +649,12 @@ public final class PdfFontEmbedder {
         for (int i = 0, n = b.getShort(face + 4) & 0xFFFF; i < n; i++) {
             int record = face + 12 + 16 * i;
             if (b.getInt(record) != 0x6E616D65) continue;
-            int table = b.getInt(record + 8), strings = table + (b.getShort(table + 4) & 0xFFFF);
+            int table = b.getInt(record + 8);
+            int strings = table + (b.getShort(table + 4) & 0xFFFF);
             for (int j = 0, count = b.getShort(table + 2) & 0xFFFF; j < count; j++) {
-                int q = table + 6 + 12 * j, platform = b.getShort(q) & 0xFFFF, id = b.getShort(q + 6);
+                int q = table + 6 + 12 * j;
+                int platform = b.getShort(q) & 0xFFFF;
+                int id = b.getShort(q + 6);
                 int language = b.getShort(q + 4) & 0xFFFF;
                 boolean english = platform == 3 ? language == 0x409 : platform == 1 && language == 0;
                 if (id != 6 && !(id == 4 && english)) continue;
@@ -655,9 +671,40 @@ public final class PdfFontEmbedder {
         return names;
     }
 
+    /** fsType of the bytes actually selected for embedding, not the cached index entry. */
+    private static int programFsType(Face face, byte[] data) {
+        if (face.resource() != null) return face.fsType();
+        try {
+            return data.length < 12 ? -1 : fsType(ByteBuffer.wrap(data), 0);
+        } catch (RuntimeException malformed) {
+            return -1;
+        }
+    }
+
+    private static boolean embeddableProgram(int fsType) {
+        return fsType >= 0 && (fsType & 0xF) != 2 && (fsType & 0x0200) == 0;
+    }
+
     private static byte[] program(Face face) throws IOException {
+        // A replaced font file invalidates the cached face even when the path and
+        // TTC offset are unchanged; resolve the current key before looking up.
+        Face key = face;
+        if (face.resource() == null) {
+            long size = Files.size(face.path());
+            long mtime = Files.getLastModifiedTime(face.path()).toMillis();
+            if (size != face.size() || mtime != face.mtime()) {
+                key = new Face(
+                        face.path(),
+                        face.resource(),
+                        face.offset(),
+                        size,
+                        mtime,
+                        face.embeddable(),
+                        face.fsType());
+            }
+        }
         synchronized (PROGRAMS) {
-            byte[] cached = PROGRAMS.get(face);
+            byte[] cached = PROGRAMS.get(key);
             if (cached != null) return cached;
         }
         if (face.resource() != null) {
@@ -674,28 +721,12 @@ public final class PdfFontEmbedder {
                 }
             }
             synchronized (PROGRAMS) {
-                byte[] raced = PROGRAMS.get(face);
+                byte[] raced = PROGRAMS.get(key);
                 if (raced != null) return raced;
-                PROGRAMS.put(face, data);
-                programBytes += data.length;
+                cacheProgram(key, data);
             }
             return data;
         }
-        long size = Files.size(face.path());
-        long mtime = Files.getLastModifiedTime(face.path()).toMillis();
-        // A replaced font file invalidates the cached face even when the path and
-        // TTC offset are unchanged.
-        Face key =
-                size == face.size() && mtime == face.mtime()
-                        ? face
-                        : new Face(
-                                face.path(),
-                                face.resource(),
-                                face.offset(),
-                                size,
-                                mtime,
-                                face.embeddable(),
-                                face.fsType());
         byte[] all = Files.readAllBytes(face.path());
         byte[] data = face.offset() < 0 ? all : extractFace(all, face.offset());
         if (data.length > MAX_PROGRAM_BYTES) {
@@ -704,17 +735,27 @@ public final class PdfFontEmbedder {
         synchronized (PROGRAMS) {
             byte[] raced = PROGRAMS.get(key);
             if (raced != null) return raced;
-            PROGRAMS.put(key, data);
-            programBytes += data.length;
-            Iterator<Map.Entry<Face, byte[]>> it = PROGRAMS.entrySet().iterator();
-            while (it.hasNext()
-                    && (PROGRAMS.size() > MAX_PROGRAMS || programBytes > MAX_PROGRAM_BYTES)) {
-                Map.Entry<Face, byte[]> eldest = it.next();
-                programBytes -= eldest.getValue().length;
-                it.remove();
-            }
+            cacheProgram(key, data);
         }
         return data;
+    }
+
+    private static void cacheProgram(Face key, byte[] data) {
+        if (data.length > MAX_PROGRAM_BYTES) {
+            // A single oversized program stays out of the cache; returning it
+            // directly must not push programBytes past the byte bound.
+            return;
+        }
+        programBytes += data.length;
+        PROGRAMS.put(key, data);
+        Iterator<Map.Entry<Face, byte[]>> eldest = PROGRAMS.entrySet().iterator();
+        while ((PROGRAMS.size() > MAX_PROGRAMS || programBytes > MAX_PROGRAM_BYTES)
+                && eldest.hasNext()) {
+            Map.Entry<Face, byte[]> entry = eldest.next();
+            if (entry.getKey().equals(key)) continue;
+            programBytes -= entry.getValue().length;
+            eldest.remove();
+        }
     }
 
     private static byte[] singleFace(byte[] data, String name) {
