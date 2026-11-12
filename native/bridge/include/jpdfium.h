@@ -666,9 +666,8 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_embed_fonts_file(const char* in_path, const 
 // RETAIN_GIDS. Returns 0 when at least one font was subsetted (*output populated),
 // 1 when no font needed subsetting (*output is NULL), negative on error.
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_subset_fonts(const uint8_t* input, int64_t inputLen,
-                                                 int32_t subsetTagged,
-                                                 uint8_t** output, int64_t* outputLen,
-                                                 int32_t* fontsSubset);
+                                                 int32_t subsetTagged, uint8_t** output,
+                                                 int64_t* outputLen, int32_t* fontsSubset);
 
 // In-process qpdf structural sanitization (FFM, no CLI).
 // Scrubs metadata/info/structure, JavaScript actions, embedded files, AcroForm
