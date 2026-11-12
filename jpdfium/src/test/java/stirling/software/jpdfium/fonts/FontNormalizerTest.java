@@ -598,7 +598,9 @@ class FontNormalizerTest {
                 assertTrue(font.getNameAsString(COSName.BASE_FONT)
                                 .matches("[A-Z]{6}\\+FaceTwo-Regular"),
                         "a re-subset collection font must carry a deterministic subset tag");
-                assertNull(font.getDictionaryObject(COSName.getPDFName("CharSet")),
+                COSDictionary descriptor = font.getCOSDictionary(COSName.FONT_DESC);
+                assertNotNull(descriptor);
+                assertNull(descriptor.getDictionaryObject(COSName.getPDFName("CharSet")),
                         "PDF 32000-1 9.8.2 defines CharSet only for Type 1 subsets");
                 assertEquals("H", new PDFTextStripper().getText(loaded).trim(),
                         "the re-subset font program must still draw drawn glyphs");
