@@ -21,6 +21,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -2288,6 +2289,12 @@ bool sameFont(QPDFObjectHandle const& a, QPDFObjectHandle const& b) {
 enum class CidEncoding { TwoByte, SingleByte, Rksj, KscEuc, GbEuc };
 
 bool japan1CidForCode(uint16_t code, uint32_t& cid) {
+    // Codes in the printable ASCII block map linearly; skip the table search.
+    if (code >= 0x0020 && code <= 0x007D) {
+        cid = 231 + (code - 0x0020);
+        return true;
+    }
+    if (code < 0x0020) return false;
     auto it = std::lower_bound(
         std::begin(kJapan1CodeRanges), std::end(kJapan1CodeRanges), code,
         [](Japan1CodeRange const& range, uint16_t value) { return range.hi < value; });
@@ -2298,11 +2305,18 @@ bool japan1CidForCode(uint16_t code, uint32_t& cid) {
 
 bool japan1UnicodeForCid(uint32_t cid, uint32_t& unicode) {
     if (cid > 0xFFFF) return false;
+    auto const cid16 = static_cast<uint16_t>(cid);
+    // Adjacent CIDs usually resolve to the same range; probe it first.
+    static thread_local Japan1UnicodeRange const* last = nullptr;
+    if (last && cid16 >= last->cidLo && cid16 <= last->cidHi) {
+        unicode = last->unicode + (cid - last->cidLo);
+        return true;
+    }
     auto it = std::lower_bound(
-        std::begin(kJapan1UnicodeRanges), std::end(kJapan1UnicodeRanges),
-        static_cast<uint16_t>(cid),
+        std::begin(kJapan1UnicodeRanges), std::end(kJapan1UnicodeRanges), cid16,
         [](Japan1UnicodeRange const& range, uint16_t value) { return range.cidHi < value; });
     if (it == std::end(kJapan1UnicodeRanges) || cid < it->cidLo) return false;
+    last = &*it;
     unicode = it->unicode + (cid - it->cidLo);
     return true;
 }
@@ -2318,11 +2332,18 @@ bool korea1CidForCode(uint16_t code, uint32_t& cid) {
 
 bool korea1UnicodeForCid(uint32_t cid, uint32_t& unicode) {
     if (cid > 0xFFFF) return false;
+    auto const cid16 = static_cast<uint16_t>(cid);
+    // Adjacent CIDs usually resolve to the same range; probe it first.
+    static thread_local Korea1UnicodeRange const* last = nullptr;
+    if (last && cid16 >= last->cidLo && cid16 <= last->cidHi) {
+        unicode = last->unicode + (cid - last->cidLo);
+        return true;
+    }
     auto it = std::lower_bound(
-        std::begin(kKorea1UnicodeRanges), std::end(kKorea1UnicodeRanges),
-        static_cast<uint16_t>(cid),
+        std::begin(kKorea1UnicodeRanges), std::end(kKorea1UnicodeRanges), cid16,
         [](Korea1UnicodeRange const& range, uint16_t value) { return range.cidHi < value; });
     if (it == std::end(kKorea1UnicodeRanges) || cid < it->cidLo) return false;
+    last = &*it;
     unicode = it->unicode + (cid - it->cidLo);
     return true;
 }
@@ -2338,17 +2359,24 @@ bool gb1CidForCode(uint16_t code, uint32_t& cid) {
 
 bool gb1UnicodeForCid(uint32_t cid, uint32_t& unicode) {
     if (cid > 0xFFFF) return false;
+    auto const cid16 = static_cast<uint16_t>(cid);
+    // Adjacent CIDs usually resolve to the same range; probe it first.
+    static thread_local Gb1UnicodeRange const* last = nullptr;
+    if (last && cid16 >= last->cidLo && cid16 <= last->cidHi) {
+        unicode = last->unicode + (cid - last->cidLo);
+        return true;
+    }
     auto it = std::lower_bound(
-        std::begin(kGb1UnicodeRanges), std::end(kGb1UnicodeRanges), static_cast<uint16_t>(cid),
+        std::begin(kGb1UnicodeRanges), std::end(kGb1UnicodeRanges), cid16,
         [](Gb1UnicodeRange const& range, uint16_t value) { return range.cidHi < value; });
     if (it == std::end(kGb1UnicodeRanges) || cid < it->cidLo) return false;
+    last = &*it;
     unicode = it->unicode + (cid - it->cidLo);
     return true;
 }
 
-void collectStringCids(std::string const& bytes, std::set<uint32_t>& cids,
-                       std::set<uint32_t>& codes, bool& complete,
-                       CidEncoding encoding = CidEncoding::TwoByte) {
+void collectStringCids(std::string_view bytes, std::set<uint32_t>& cids, std::set<uint32_t>& codes,
+                       bool& complete, CidEncoding encoding = CidEncoding::TwoByte) {
     if (encoding == CidEncoding::SingleByte) {
         for (unsigned char ch : bytes) {
             cids.insert(static_cast<uint32_t>(ch));
@@ -2446,7 +2474,7 @@ void scanContentStream(std::string_view data, QPDFObjectHandle const& resources,
     while (lexer.next(token)) {
         if (!token.word) {
             operands.push_back(std::move(token.operand));
-            if (operands.size() > 64) operands.erase(operands.begin());
+            if (operands.size() > 64) operands.erase(operands.begin(), operands.begin() + 32);
             continue;
         }
         std::string const& op = token.text;
@@ -2569,8 +2597,8 @@ void scanResourceStreams(QPDFObjectHandle const& resources, QPDFObjectHandle con
         try {
             auto data = stream.getStreamData(qpdf_dl_generalized);
             if (data && data->getSize()) {
-                std::string content(reinterpret_cast<char const*>(data->getBuffer()),
-                                    data->getSize());
+                std::string_view content(reinterpret_cast<char const*>(data->getBuffer()),
+                                         data->getSize());
                 scanContentStream(content, streamResources, target, cids, codes, depth + 1,
                                   seenStreams, budget, complete, encoding);
                 scanResourceStreams(streamResources, target, cids, codes, depth + 1, seenStreams,
@@ -2623,13 +2651,22 @@ struct FontUsageIndex {
     std::map<std::string, CidScanResult> byDirect;
     bool complete = true;
 
-    void add(QPDFObjectHandle const& font, std::set<uint32_t> const& cids, bool ok) {
-        if (!font.isDictionary()) return;
-        CidScanResult& usage =
-            font.isIndirect() ? byFont[font.getObjGen()] : byDirect[objectKey(font)];
-        usage.cids.insert(cids.begin(), cids.end());
-        usage.complete = usage.complete && ok;
-        complete = complete && ok;
+    CidScanResult* slot(QPDFObjectHandle const& font) {
+        if (!font.isDictionary()) return nullptr;
+        return font.isIndirect() ? &byFont[font.getObjGen()] : &byDirect[objectKey(font)];
+    }
+
+    // Scans text bytes straight into the font's own CID/code sets so the
+    // common path allocates no temporaries.
+    void collectString(QPDFObjectHandle const& font, std::string_view bytes, bool& ok,
+                       CidEncoding encoding) {
+        CidScanResult* usage = slot(font);
+        if (!usage) return;
+        bool localOk = true;
+        collectStringCids(bytes, usage->cids, usage->codes, localOk, encoding);
+        usage->complete = usage->complete && localOk;
+        complete = complete && localOk;
+        ok = localOk;
     }
 
     CidScanResult const* find(QPDFObjectHandle const& font) const {
@@ -2681,7 +2718,7 @@ void scanContentStreamAll(std::string_view data, QPDFObjectHandle const& resourc
     while (lexer.next(token)) {
         if (!token.word) {
             operands.push_back(std::move(token.operand));
-            if (operands.size() > 64) operands.erase(operands.begin());
+            if (operands.size() > 64) operands.erase(operands.begin(), operands.begin() + 32);
             continue;
         }
         std::string const& op = token.text;
@@ -2720,33 +2757,24 @@ void scanContentStreamAll(std::string_view data, QPDFObjectHandle const& resourc
         } else if (op == "Tj" && !operands.empty() &&
                    operands.back().kind == ContentOperand::Kind::String) {
             if (FontUsageIndex::acceptsCodeWidth(currentFont, encoding)) {
-                std::set<uint32_t> cids;
-                std::set<uint32_t> codes;
                 bool ok = true;
-                collectStringCids(operands.back().text, cids, codes, ok, encoding);
-                index.add(currentFont, cids, ok);
+                index.collectString(currentFont, operands.back().text, ok, encoding);
                 complete = complete && ok;
             }
         } else if (op == "TJ" && !operands.empty() &&
                    operands.back().kind == ContentOperand::Kind::Array) {
             if (FontUsageIndex::acceptsCodeWidth(currentFont, encoding)) {
                 for (auto const& text : operands.back().strings) {
-                    std::set<uint32_t> cids;
-                    std::set<uint32_t> codes;
                     bool ok = true;
-                    collectStringCids(text, cids, codes, ok, encoding);
-                    index.add(currentFont, cids, ok);
+                    index.collectString(currentFont, text, ok, encoding);
                     complete = complete && ok;
                 }
             }
         } else if ((op == "'" || op == "\"") && !operands.empty() &&
                    operands.back().kind == ContentOperand::Kind::String) {
             if (FontUsageIndex::acceptsCodeWidth(currentFont, encoding)) {
-                std::set<uint32_t> cids;
-                std::set<uint32_t> codes;
                 bool ok = true;
-                collectStringCids(operands.back().text, cids, codes, ok, encoding);
-                index.add(currentFont, cids, ok);
+                index.collectString(currentFont, operands.back().text, ok, encoding);
                 complete = complete && ok;
             }
         } else if (op == "Do" && !operands.empty() &&
@@ -2815,8 +2843,8 @@ void scanResourceStreamsAll(QPDFObjectHandle const& resources, QPDFObjectHandle 
         try {
             auto data = stream.getStreamData(qpdf_dl_generalized);
             if (data && data->getSize()) {
-                std::string content(reinterpret_cast<char const*>(data->getBuffer()),
-                                    data->getSize());
+                std::string_view content(reinterpret_cast<char const*>(data->getBuffer()),
+                                         data->getSize());
                 scanContentStreamAll(content, streamResources, currentFont, index, depth + 1,
                                      seenStreams, budget, complete, encoding);
                 scanResourceStreamsAll(streamResources, currentFont, index, depth + 1, seenStreams,
@@ -2915,8 +2943,8 @@ FontUsageIndex buildFontUsageIndex(QPDF& qpdf, CidEncoding encoding) {
                 try {
                     auto data = stream.getStreamData(qpdf_dl_generalized);
                     if (!data || !data->getSize()) return;
-                    std::string content(reinterpret_cast<char const*>(data->getBuffer()),
-                                        data->getSize());
+                    std::string_view content(reinterpret_cast<char const*>(data->getBuffer()),
+                                             data->getSize());
                     scanContentStreamAll(content, streamResources, QPDFObjectHandle(), index, 0,
                                          seenStreams, budget, index.complete, encoding);
                     scanResourceStreamsAll(streamResources, QPDFObjectHandle(), index, 0,
@@ -3235,12 +3263,17 @@ void pinBuiltInTrueTypeMapping(QPDF& qpdf, QPDFObjectHandle font, FT_Face face) 
 void updateCidSet(QPDF& qpdf, QPDFObjectHandle descriptor, std::set<uint32_t> const& activeCids) {
     if (!descriptor.isDictionary()) return;
     uint32_t maxCid = 0;
-    for (uint32_t c : activeCids)
-        if (c <= kMaxCid) maxCid = std::max(maxCid, c);
+    for (auto it = activeCids.rbegin(); it != activeCids.rend(); ++it) {
+        if (*it > kMaxCid) continue;
+        maxCid = *it;
+        break;
+    }
     std::string bits((maxCid / 8) + 1, '\0');
     bits[0] |= static_cast<char>(0x80U);
-    for (uint32_t c : activeCids)
-        if (c <= kMaxCid) bits[c / 8] |= static_cast<char>(0x80U >> (c & 7));
+    for (uint32_t c : activeCids) {
+        if (c > kMaxCid) break;
+        bits[c / 8] |= static_cast<char>(0x80U >> (c & 7));
+    }
     descriptor.replaceKey("/CIDSet", QPDFObjectHandle::newStream(&qpdf, bits));
 }
 
