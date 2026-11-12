@@ -3955,6 +3955,8 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
                                  targetName.find("Dingbats") != std::string::npos);
             bool symbolic = builtInMapping &&
                             (isSymbolName || (flags.isInteger() && (flags.getIntValue() & 4) != 0));
+            bool mapBuiltIn = builtInMapping && symbolic;
+            bool forceWinAnsi = builtInMapping && !symbolic;
             if (!cid && !hasProgram && onlyMissing) {
                 // A substitute must cover every character the content actually
                 // draws. Installing a program with missing glyphs silently
@@ -3963,6 +3965,10 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
                                             indexedUsage ? &usageOne : nullptr);
                 if (!scan.complete) continue;
                 auto enc = parseEncoding(target);
+                if (forceWinAnsi) {
+                    enc.base = BaseEncoding::WinAnsi;
+                    enc.namedBase = true;
+                }
                 bool covered = true;
                 for (uint32_t code : scan.cids) {
                     if (code >= 256) continue;
@@ -3972,10 +3978,6 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
                     }
                 }
                 if (!covered) continue;
-            }
-            if (!cid && (onlyMissing || !target.getKey("/Widths").isArray()) &&
-                !addWidths(target, program.face, symbolic || builtInMapping)) {
-                continue;
             }
             target.replaceKey("/Type", QPDFObjectHandle::newName("/Font"));
             if (cid) font.replaceKey("/Type", QPDFObjectHandle::newName("/Font"));
@@ -4018,10 +4020,14 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
                     target.replaceKey("/CIDToGIDMap", QPDFObjectHandle::newName("/Identity"));
             }
             if (pinSimpleMapping) {
-                if (builtInMapping)
+                if (mapBuiltIn)
                     pinBuiltInTrueTypeMapping(*qpdf, target, program.face);
                 else
                     pinTrueTypeMapping(*qpdf, target, program.face, symbolic);
+            }
+            if (!cid && (onlyMissing || !target.getKey("/Widths").isArray()) &&
+                !addWidths(target, program.face, mapBuiltIn)) {
+                continue;
             }
             // OTTO/CFF can be carried by a pre-1.6 PDF as /FontFile3
             // /Subtype /Type1C or /CIDFontType0C instead of requiring /Subtype /OpenType

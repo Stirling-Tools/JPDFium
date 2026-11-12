@@ -1075,6 +1075,8 @@ class PdfFontEmbedderTest {
                     .getFont(COSName.getPDFName("F1")).getCOSObject();
             assertTrue(font.getDictionaryObject(COSName.TO_UNICODE) instanceof COSStream,
                     "a font without /Encoding needs a ToUnicode map");
+            assertNotNull(font.getDictionaryObject(COSName.ENCODING),
+                    "non-symbolic TrueType output needs a named or dictionary encoding");
             COSArray widths = (COSArray) font.getDictionaryObject(COSName.WIDTHS);
             assertNotNull(widths, "missing /Widths must be synthesized");
             assertEquals(256, widths.size(), "/Widths must cover the simple-font code range");
