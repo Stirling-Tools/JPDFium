@@ -1093,7 +1093,6 @@ static bool cmapHasMappings(std::string const& text) {
     return false;
 }
 
-// ---------------------------------------------------------------------------
 // Helpers for embedded-font scanning, collection face selection and rewriting.
 
 static constexpr uint32_t kFontMaxCid = 0xFFFF;
