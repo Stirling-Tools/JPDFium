@@ -3921,8 +3921,18 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
                     // a partial map would silently turn uncovered CIDs into .notdef.
                     if (!mapCidsToGlyphs(program.face, cidUnicode, cidGlyph)) continue;
                     writeCidWidths(target, program.face, cidGlyph);
-                } else if (!cidGlyphOrderMatches(program.face, cidUnicode)) {
-                    continue;
+                } else {
+                    if (!cidGlyphOrderMatches(program.face, cidUnicode)) continue;
+                    for (auto const& [cid, unicode] : cidUnicode) {
+                        uint32_t scalar = UnicodeScalar::decode(unicode);
+                        if (!scalar) {
+                            cidGlyph.clear();
+                            break;
+                        }
+                        cidGlyph[cid] = FT_Get_Char_Index(program.face, scalar);
+                    }
+                    if (cidGlyph.empty()) continue;
+                    writeCidWidths(target, program.face, cidGlyph);
                 }
             }
             if (descriptor.isIndirect()) {
