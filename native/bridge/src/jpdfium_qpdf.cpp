@@ -1621,9 +1621,12 @@ std::map<FT_UInt, FT_ULong> unicodeByGlyph(FT_Face face, bool symbolic) {
     return unicodeOf;
 }
 
+std::map<uint32_t, uint32_t> parseToUnicode(QPDFObjectHandle const& font);
+
 void setToUnicode(QPDF& qpdf, QPDFObjectHandle font, std::map<uint32_t, FT_ULong> const& codes,
                   bool twoByte) {
-    if (codes.empty() || font.hasKey("/ToUnicode")) return;
+    if (codes.empty()) return;
+    if (font.hasKey("/ToUnicode") && !parseToUnicode(font).empty()) return;
     std::vector<std::pair<uint32_t, FT_ULong>> valid;
     valid.reserve(codes.size());
     for (auto [code, u] : codes) {
@@ -1666,7 +1669,8 @@ void setToUnicode(QPDF& qpdf, QPDFObjectHandle font, std::map<uint32_t, FT_ULong
 // map must use the same code lengths as the source CMap, not the CID values.
 void setCjkToUnicode(QPDF& qpdf, QPDFObjectHandle font, std::map<uint32_t, FT_ULong> const& codes,
                      bool rksj) {
-    if (codes.empty() || font.hasKey("/ToUnicode")) return;
+    if (codes.empty()) return;
+    if (font.hasKey("/ToUnicode") && !parseToUnicode(font).empty()) return;
     std::vector<std::pair<uint32_t, FT_ULong>> valid;
     for (auto [code, u] : codes) {
         if (u == 0 || u == 0xFEFF || u == 0xFFFE || (u >= 0xD800 && u <= 0xDFFF) || u > 0x10FFFF ||
