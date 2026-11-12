@@ -323,6 +323,22 @@ class FontNormalizerTest {
         }
     }
 
+    private static byte[] withCidWidth(byte[] pdf, int cid, int width) throws IOException {
+        try (PDDocument doc = Loader.loadPDF(pdf)) {
+            COSDictionary descendant = cidDescendant(doc);
+            assertNotNull(descendant);
+            COSArray widths = new COSArray();
+            widths.add(COSInteger.get(cid));
+            COSArray run = new COSArray();
+            run.add(COSInteger.get(width));
+            widths.add(run);
+            descendant.setItem(COSName.W, widths);
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            doc.save(out);
+            return out.toByteArray();
+        }
+    }
+
     private static byte[] withIntegerWidth(byte[] pdf, char code, int width) throws IOException {
         try (PDDocument doc = Loader.loadPDF(pdf)) {
             COSDictionary font = firstFontDictionary(doc);
@@ -709,8 +725,9 @@ class FontNormalizerTest {
                 .getResource("/pdfs/general/issue20065.pdf").toURI()));
         PdfFontEmbedder.Result embedded = PdfFontEmbedder.embedMissing(input);
         assertTrue(embedded.unresolved().isEmpty(), "unresolved: " + embedded.unresolved());
+        byte[] stale = withCidWidth(embedded.pdf(), 0, 500);
 
-        try (PdfDocument doc = PdfDocument.open(embedded.pdf())) {
+        try (PdfDocument doc = PdfDocument.open(stale)) {
             FontNormalizer.Result result = FontNormalizer.normalizeAll(doc);
             assertEquals(1, result.widthsRepaired(),
                     "the existing /W must be corrected against the embedded program");

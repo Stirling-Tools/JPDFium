@@ -154,8 +154,8 @@ public final class PdfOptimizer {
     }
 
     /**
-     * Normalize content streams (qpdf content normalization), preserving object
-     * streams. Used before PDF/A conversion to fix font programs and CIDSet issues.
+     * Normalize content streams with qpdf, preserving object streams. This does
+     * not repair font programs or CIDSet; use {@code FontNormalizer} for that.
      *
      * @return normalized bytes, or {@code null} on failure
      */

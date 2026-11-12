@@ -10,13 +10,17 @@ import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.cos.COSArray;
 import org.apache.pdfbox.cos.COSDictionary;
 import org.apache.pdfbox.cos.COSName;
+import org.apache.pdfbox.cos.COSNumber;
 import org.apache.pdfbox.cos.COSObject;
 import org.apache.pdfbox.cos.COSStream;
+import org.apache.pdfbox.pdfwriter.compress.CompressParameters;
+import org.apache.pdfbox.io.RandomAccessReadBuffer;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
 import org.apache.pdfbox.pdmodel.font.PDType1Font;
 import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
+import org.apache.fontbox.ttf.TTFParser;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -32,6 +36,7 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -165,7 +170,7 @@ class PdfFontEmbedderRoundTripTest {
             return;
         }
         try (before; PdfDocument after = PdfDocument.open(result.pdf())) {
-            assumeTrue(before.pageCount() == after.pageCount(), "page tree was normalized during repair");
+            assertEquals(before.pageCount(), after.pageCount(), "page tree was normalized during repair");
             try {
                 assertEquals(result.unresolved(), PdfFontAuditor.auditAll(after).nonEmbeddedFonts().stream()
                         .map(PdfFontAuditor.FontInfo::baseName).distinct().toList());
@@ -254,7 +259,7 @@ class PdfFontEmbedderRoundTripTest {
                     if (".notdef".equals(glyph)) continue;
                     float expected = Standard14Fonts.getAFM(afm.getName()).getCharacterWidth(glyph);
                     if (expected <= 0) continue;
-                    float actual = ((org.apache.pdfbox.cos.COSNumber) widths.getObject(code)).floatValue();
+                    float actual = ((COSNumber) widths.getObject(code)).floatValue();
                     assertEquals(expected, actual, 2.0f, name + " width of code " + code);
                     checked++;
                 }
@@ -306,7 +311,7 @@ class PdfFontEmbedderRoundTripTest {
 
     private static byte[] save(PDDocument doc) throws IOException {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        doc.save(out, org.apache.pdfbox.pdfwriter.compress.CompressParameters.NO_COMPRESSION);
+        doc.save(out, CompressParameters.NO_COMPRESSION);
         return out.toByteArray();
     }
 
@@ -323,8 +328,8 @@ class PdfFontEmbedderRoundTripTest {
                 String baseName = name.replaceFirst("^[A-Z]{6}\\+", "");
                 if (!embeddedNames.contains(name) && !embeddedNames.contains(baseName)) continue;
                 try (var in = program.createInputStream()) {
-                    var ttf = new org.apache.fontbox.ttf.TTFParser().parse(
-                            new org.apache.pdfbox.io.RandomAccessReadBuffer(in.readAllBytes()));
+                    var ttf = new TTFParser().parse(
+                            new RandomAccessReadBuffer(in.readAllBytes()));
                     if (ttf.getName() != null) {
                         String expectedStyle = style(name);
                         String actualStyle = style(ttf.getName());
@@ -398,7 +403,7 @@ class PdfFontEmbedderRoundTripTest {
     }
 
     private static String style(String name) {
-        String lower = name.replaceFirst("^[A-Z]{6}\\+", "").toLowerCase(java.util.Locale.ROOT);
+        String lower = name.replaceFirst("^[A-Z]{6}\\+", "").toLowerCase(Locale.ROOT);
         return (lower.matches(".*(bold|black|heavy|negrita|negreta|fett|grassetto|gras).*") ? "bold" : "")
                 + (lower.matches(".*(italic|oblique|cursiva|kursiv|corsivo|italique|cursiva).*") ? "italic" : "");
     }
