@@ -15,6 +15,7 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -1915,12 +1916,17 @@ static bool fn_subset_keeps_advances(FT_Library lib, std::string const& subset, 
 
 static std::string build_cid_set_bits(std::set<uint32_t> const& cids) {
     uint32_t max_cid = 0;
-    for (uint32_t c : cids)
-        if (c <= kFontMaxCid) max_cid = std::max(max_cid, c);
+    for (auto it = cids.rbegin(); it != cids.rend(); ++it) {
+        if (*it > kFontMaxCid) continue;
+        max_cid = *it;
+        break;
+    }
     std::string bits((max_cid / 8) + 1, '\0');
     bits[0] |= static_cast<char>(0x80U);
-    for (uint32_t c : cids)
-        if (c <= kFontMaxCid) bits[c / 8] |= static_cast<char>(0x80U >> (c & 7));
+    for (uint32_t c : cids) {
+        if (c > kFontMaxCid) break;
+        bits[c / 8] |= static_cast<char>(0x80U >> (c & 7));
+    }
     return bits;
 }
 
@@ -2558,8 +2564,8 @@ static void repair_cidset_stream(QPDF& pdf, QPDFObjectHandle& descriptor, FT_Fac
         try {
             std::shared_ptr<Buffer> old = existing.getStreamData(qpdf_dl_generalized);
             if (old)
-                differs = std::string(reinterpret_cast<const char*>(old->getBuffer()),
-                                      old->getSize()) != bits;
+                differs = std::string_view(reinterpret_cast<const char*>(old->getBuffer()),
+                                           old->getSize()) != std::string_view(bits);
         } catch (...) {
             differs = true;
         }
@@ -2756,8 +2762,8 @@ static void process_font(QPDF& pdf, QPDFObjectHandle font, bool do_fix_tounicode
                 try {
                     std::shared_ptr<Buffer> old = existing.getStreamData(qpdf_dl_generalized);
                     if (old)
-                        differs = std::string(reinterpret_cast<const char*>(old->getBuffer()),
-                                              old->getSize()) != bits;
+                        differs = std::string_view(reinterpret_cast<const char*>(old->getBuffer()),
+                                                   old->getSize()) != std::string_view(bits);
                 } catch (...) {
                     differs = true;
                 }
