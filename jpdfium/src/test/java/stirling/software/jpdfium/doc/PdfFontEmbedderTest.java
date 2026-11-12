@@ -1075,8 +1075,13 @@ class PdfFontEmbedderTest {
                     .getFont(COSName.getPDFName("F1")).getCOSObject();
             assertTrue(font.getDictionaryObject(COSName.TO_UNICODE) instanceof COSStream,
                     "a font without /Encoding needs a ToUnicode map");
-            assertNotNull(font.getDictionaryObject(COSName.ENCODING),
-                    "non-symbolic TrueType output needs a named or dictionary encoding");
+            var encoding = font.getDictionaryObject(COSName.ENCODING);
+            boolean winAnsi = COSName.WIN_ANSI_ENCODING.equals(encoding)
+                    || (encoding instanceof COSDictionary dict
+                            && COSName.WIN_ANSI_ENCODING.equals(
+                                    dict.getDictionaryObject(COSName.BASE_ENCODING)));
+            assertTrue(winAnsi,
+                    "PDF/UA 7.21.6 requires WinAnsi for a non-symbolic TrueType substitute");
             COSArray widths = (COSArray) font.getDictionaryObject(COSName.WIDTHS);
             assertNotNull(widths, "missing /Widths must be synthesized");
             assertEquals(256, widths.size(), "/Widths must cover the simple-font code range");
@@ -1152,6 +1157,8 @@ class PdfFontEmbedderTest {
             assertTrue(PdfFontAuditor.inventory(doc).stream()
                             .anyMatch(font -> font.baseName().equals("ArialMT")),
                     "a font used by a soft-mask group must be part of the inventory");
+            assertTrue(PdfFontAuditor.hasNonEmbeddedFonts(doc),
+                    "PDF/X and PDF/UA font checks must see soft-mask fonts");
         }
     }
 
