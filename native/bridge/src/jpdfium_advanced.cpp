@@ -2439,7 +2439,7 @@ static bool resubset_embedded_sfnt(QPDF& pdf, QPDFObjectHandle& font, QPDFObject
     // Keep the original face: `subset` is destroyed when this function returns, so
     // reloading from it would leave a dangling face buffer. The original face stays
     // alive for the remainder of process_font() and still describes the glyphs.
-    if (!cid) {
+    if (!cid && !has_glyf) {
         std::string charset_str;
         char glyph_name[256];
         for (FT_UInt gid : target_glyphs) {

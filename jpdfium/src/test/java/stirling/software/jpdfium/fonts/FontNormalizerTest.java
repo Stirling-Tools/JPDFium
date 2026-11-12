@@ -47,6 +47,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeFalse;
@@ -597,6 +598,8 @@ class FontNormalizerTest {
                 assertTrue(font.getNameAsString(COSName.BASE_FONT)
                                 .matches("[A-Z]{6}\\+FaceTwo-Regular"),
                         "a re-subset collection font must carry a deterministic subset tag");
+                assertNull(font.getDictionaryObject(COSName.getPDFName("CharSet")),
+                        "PDF 32000-1 9.8.2 defines CharSet only for Type 1 subsets");
                 assertEquals("H", new PDFTextStripper().getText(loaded).trim(),
                         "the re-subset font program must still draw drawn glyphs");
             }
