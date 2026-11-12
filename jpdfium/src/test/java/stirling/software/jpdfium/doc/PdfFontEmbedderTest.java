@@ -1,6 +1,7 @@
 package stirling.software.jpdfium.doc;
 
 import stirling.software.jpdfium.PdfDocument;
+import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.panama.QpdfLib;
 
@@ -125,10 +126,25 @@ class PdfFontEmbedderTest {
         PdfFontEmbedder.Result result = PdfFontEmbedder.embedMissing(input);
 
         assertTrue(result.embedded().contains("ArialMT"), "the inherited font must embed: " + result);
-        try (PdfDocument doc = PdfDocument.open(result.pdf())) {
-            String text = doc.page(0).extractText();
+        try (PdfDocument doc = PdfDocument.open(result.pdf()); PdfPage page = doc.page(0)) {
+            String text = page.extractText();
             assertTrue(text.contains("A"), "the outer form CID must survive: " + text);
             assertTrue(text.contains("B"), "the nested form CID must survive: " + text);
+        }
+        try (PDDocument loaded = Loader.loadPDF(result.pdf())) {
+            COSBase mapping = identityCidDescendant(loaded)
+                    .getDictionaryObject(COSName.CID_TO_GID_MAP);
+            assertTrue(mapping instanceof COSStream,
+                    "the subset must publish an explicit /CIDToGIDMap stream");
+            byte[] bytes;
+            try (var in = ((COSStream) mapping).createInputStream()) {
+                bytes = in.readAllBytes();
+            }
+            assertTrue(bytes.length >= 6, "both nested CIDs need glyph entries: " + bytes.length);
+            int outer = ((bytes[2] & 0xFF) << 8) | (bytes[3] & 0xFF);
+            int inner = ((bytes[4] & 0xFF) << 8) | (bytes[5] & 0xFF);
+            assertTrue(outer > 0 && inner > 0 && outer != inner,
+                    "CID 1 and CID 2 must retain distinct glyphs: " + outer + ", " + inner);
         }
     }
 
