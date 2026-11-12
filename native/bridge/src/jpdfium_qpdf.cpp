@@ -1681,7 +1681,7 @@ void setCjkToUnicode(QPDF& qpdf, QPDFObjectHandle font, std::map<uint32_t, FT_UL
         "/CMapName /Adobe-Identity-UCS def /CMapType 2 def\n";
     if (rksj)
         cmap +=
-            "3 begincodespacerange\n<00> <80>\n<8140> <9FFC>\n<E040> <FCFC>\n"
+            "4 begincodespacerange\n<00> <80>\n<A0> <DF>\n<8140> <9FFC>\n<E040> <FCFC>\n"
             "endcodespacerange\n";
     else
         cmap += "2 begincodespacerange\n<00> <80>\n<A1A1> <FEFE>\nendcodespacerange\n";
