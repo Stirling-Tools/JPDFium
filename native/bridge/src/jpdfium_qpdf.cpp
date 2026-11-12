@@ -2865,8 +2865,9 @@ bool subsetEmbeddedCidFont(QPDF& qpdf, FT_Library lib, QPDFObjectHandle& font,
     if (descriptor.hasKey("/CIDSet")) {
         std::string map_view;
         if (!identity && mapBytes) {
-            map_view.assign(reinterpret_cast<const char*>(mapBytes->getBuffer()),
-                            mapBytes->getSize());
+            size_t map_size =
+                std::min<size_t>(mapBytes->getSize(), 2 * (static_cast<size_t>(kMaxCid) + 1));
+            map_view.assign(reinterpret_cast<const char*>(mapBytes->getBuffer()), map_size);
         }
         auto retainedCids = cidsForRetainedGlyphs(target, map_view, targetGlyphs);
         if (!retainedCids.empty()) updateCidSet(qpdf, descriptor, retainedCids);

@@ -186,7 +186,7 @@ class PdfFontEmbedderRoundTripTest {
                     String beforeText = a.extractText();
                     String afterText = b.extractText();
                     assertSameOrResolvedText(beforeText, afterText,
-                            pdf.getFileName() + " page " + i);
+                            pdf.getFileName() + " page " + i, gainedToUnicode);
                     if (gainedToUnicode) {
                         if (!beforeText.isEmpty()) {
                             assertFalse(afterText.isEmpty(),
@@ -293,7 +293,7 @@ class PdfFontEmbedderRoundTripTest {
         PDDocument doc;
         try {
             doc = Loader.loadPDF(pdf.toFile());
-        } catch (IOException | RuntimeException | LinkageError e) {
+        } catch (IOException | RuntimeException e) {
             assumeTrue(false, "PDFBox cannot load: " + e.getMessage());
             return null;
         }
@@ -353,7 +353,8 @@ class PdfFontEmbedderRoundTripTest {
         return matched == a.length();
     }
 
-    private static void assertSameOrResolvedText(String before, String after, String where) {
+    private static void assertSameOrResolvedText(
+            String before, String after, String where, boolean gainedToUnicode) {
         String a = before.replaceAll("\\s", "");
         String b = after.replaceAll("\\s", "");
         // Text PDFium could not resolve before embedding may become readable
@@ -362,7 +363,7 @@ class PdfFontEmbedderRoundTripTest {
         // already carried the unresolved marker.
         boolean unresolved = a.indexOf('?') >= 0 || a.indexOf('\uFFFD') >= 0;
         if (!unresolved && a.equals(b)) return;
-        if (!unresolved && b.length() > a.length()
+        if (!unresolved && gainedToUnicode && b.length() > a.length()
                 && !b.contains("\uFFFD") && isSubsequence(a, b)) {
             // Repair can recover characters PDFium silently omitted from the
             // source (sample_fonts_solidconvertor.pdf). Requiring the original
@@ -382,7 +383,12 @@ class PdfFontEmbedderRoundTripTest {
         while (i < b.length() && matched < a.length()) {
             char expected = a.charAt(matched);
             if (expected == '?' || expected == '\uFFFD') {
-                matched++;
+                // A repaired marker must produce at least one output scalar;
+                // otherwise a dropped character would look like success.
+                if (i < b.length()) {
+                    matched++;
+                    i++;
+                }
             } else if (b.charAt(i) == expected) {
                 matched++;
                 i++;
