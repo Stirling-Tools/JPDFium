@@ -13,6 +13,7 @@ import org.apache.pdfbox.cos.COSInteger;
 import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.cos.COSStream;
 import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.graphics.form.PDFormXObject;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
@@ -90,6 +91,44 @@ class PdfFontEmbedderTest {
         assertTrue(result.embedded().isEmpty());
         assertEquals(List.of("Helvetica"), result.unresolved());
         assertArrayEquals(Files.readAllBytes(input), Files.readAllBytes(output));
+    }
+
+    @Test
+    void repeatedDistinctFormsExhaustTheScanBudgetAndFailClosed(@TempDir Path temp) throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
+        Path input = manyFormPage(temp.resolve("many-forms.pdf"), 2_100);
+
+        PdfFontEmbedder.Result result =
+                PdfFontEmbedder.embedMissing(Files.readAllBytes(input), liberationSansDir(temp));
+
+        assertTrue(result.unresolved().contains("Helvetica"),
+                "a scan that exhausts its stream budget must not claim success");
+    }
+
+    private static Path manyFormPage(Path target, int forms) throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage();
+            doc.addPage(page);
+            PDResources resources = new PDResources();
+            resources.put(COSName.getPDFName("F1"),
+                    new PDType1Font(Standard14Fonts.FontName.HELVETICA));
+            page.setResources(resources);
+            PDFormXObject[] xobjects = new PDFormXObject[forms];
+            for (int i = 0; i < forms; i++) {
+                PDStream stream = new PDStream(doc);
+                try (OutputStream out = stream.createOutputStream()) {
+                    out.write("q Q\n".getBytes(StandardCharsets.ISO_8859_1));
+                }
+                PDFormXObject form = new PDFormXObject(stream);
+                form.setBBox(new PDRectangle(0, 0, 10, 10));
+                xobjects[i] = form;
+            }
+            try (PDPageContentStream content = new PDPageContentStream(doc, page)) {
+                for (PDFormXObject form : xobjects) content.drawForm(form);
+            }
+            doc.save(target.toFile());
+        }
+        return target;
     }
 
     private static Path helveticaPage(Path target) throws IOException {
@@ -1310,6 +1349,90 @@ class PdfFontEmbedderTest {
         assertTrue(restricted.statuses().stream().anyMatch(s ->
                         !s.resolved() && s.reason().contains("fsType")),
                 restricted.statuses().toString());
+    }
+
+    @Test
+    void type1PfbProgramsAreEmbedded(@TempDir Path temp) throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
+        Path ghostscript = Path.of("/opt/homebrew/share/ghostscript/fonts");
+        assumeTrue(Files.isDirectory(ghostscript), "no Ghostscript Type 1 fonts");
+        byte[] input = namedType1Pdf("NimbusSanL-Regu");
+
+        PdfFontEmbedder.Result result = PdfFontEmbedder.embedMissing(input, ghostscript);
+
+        assertTrue(result.embedded().contains("NimbusSanL-Regu"),
+                "a PFB program has no OS/2 fsType and must stay embeddable: "
+                        + result.statuses());
+        assertTrue(result.unresolved().isEmpty(), result.unresolved().toString());
+        try (PDDocument pdf = Loader.loadPDF(result.pdf())) {
+            COSDictionary font = pdf.getPage(0).getResources()
+                    .getFont(COSName.getPDFName("F1")).getCOSObject();
+            COSDictionary descriptor =
+                    (COSDictionary) font.getDictionaryObject(COSName.FONT_DESC);
+            assertNotNull(descriptor);
+            assertNotNull(descriptor.getDictionaryObject(COSName.FONT_FILE),
+                    "the PFB program must be installed as /FontFile");
+        }
+    }
+
+    @Test
+    void truncatedTrueTypeCollectionIsRejected() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
+        byte[] ttc = new byte[16];
+        ttc[0] = 't';
+        ttc[1] = 't';
+        ttc[2] = 'c';
+        ttc[3] = 'f';
+        ttc[7] = 1;              // one face
+        ttc[15] = (byte) 0xFF;   // face offset beyond the file
+        byte[] input = Files.readAllBytes(Path.of(PdfFontEmbedderTest.class
+                .getResource("/pdfs/general/minimal.pdf").toURI()));
+        assertThrows(IllegalArgumentException.class,
+                () -> PdfFontEmbedder.embed(input, Map.of("CorruptTTC", ttc)));
+    }
+
+    private static byte[] namedType1Pdf(String baseFont) throws IOException {
+        try (PDDocument pdf = new PDDocument()) {
+            PDPage page = new PDPage(PDRectangle.LETTER);
+            pdf.addPage(page);
+            COSDictionary descriptor = new COSDictionary();
+            descriptor.setItem(COSName.TYPE, COSName.FONT_DESC);
+            descriptor.setName(COSName.FONT_NAME, baseFont);
+            descriptor.setInt(COSName.FLAGS, 32);
+            COSDictionary font = new COSDictionary();
+            font.setItem(COSName.TYPE, COSName.FONT);
+            font.setItem(COSName.SUBTYPE, COSName.TYPE1);
+            font.setName(COSName.BASE_FONT, baseFont);
+            font.setItem(COSName.FONT_DESC, descriptor);
+            COSDictionary fonts = new COSDictionary();
+            fonts.setItem("F1", font);
+            COSDictionary resources = new COSDictionary();
+            resources.setItem(COSName.FONT, fonts);
+            page.setResources(new PDResources(resources));
+            page.setContents(new PDStream(pdf, new ByteArrayInputStream(
+                    "BT /F1 12 Tf 40 700 Td (Hello) Tj ET"
+                            .getBytes(StandardCharsets.US_ASCII))));
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            pdf.save(out);
+            return out.toByteArray();
+        }
+    }
+
+    @Test
+    void builtInSymbolicFontsAreLeftUnresolved() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
+        byte[] input = Files.readAllBytes(Path.of(PdfFontEmbedderTest.class
+                .getResource("/pdfs/general/pdfjs_ZapfDingbats.pdf").toURI()));
+
+        PdfFontEmbedder.Result result = PdfFontEmbedder.embedMissing(input);
+
+        assertFalse(result.embedded().stream()
+                        .anyMatch(name -> PdfFontEmbedder.key(name).startsWith("zapfdingbats")),
+                "built-in ZapfDingbats encoding must not be substituted: " + result);
+        assertTrue(result.statuses().stream().anyMatch(status ->
+                        status.baseName().equals("ZapfDingbats")
+                                && status.reason().contains("symbolic encoding")),
+                "statuses: " + result.statuses());
     }
 
     @Test

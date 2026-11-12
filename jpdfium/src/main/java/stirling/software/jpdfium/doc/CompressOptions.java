@@ -87,7 +87,8 @@ public final class CompressOptions {
     public int zopfliMaxInputBytes() { return zopfliMaxInputBytes; }
     /**
      * Whether to subset already-embedded TrueType/OpenType fonts in-place.
-     * Default: {@code true}.
+     * Default: {@code false}. This pass rewrites font programs, so callers opt
+     * in after deciding their text/render contract.
      */
     public boolean subsetFonts() { return subsetFonts; }
 
