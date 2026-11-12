@@ -441,7 +441,6 @@ public final class PdfFontAuditor {
     private static final class ResourceAggregate {
         private final String baseName;
         private boolean embedded = true;
-        private boolean type3;
         private final Set<Integer> pages = new TreeSet<>();
 
         ResourceAggregate(FontResource first) {
@@ -450,13 +449,20 @@ public final class PdfFontAuditor {
         }
 
         void add(FontResource resource) {
-            embedded &= resource.embedded();
-            type3 |= "Type3".equals(resource.subtype());
+            // A Type 3 font is itself embedded, but sharing its /BaseFont with an
+            // unembedded TrueType/Type1 font must not make that font look embedded.
+            boolean resourceEmbedded = resource.embedded()
+                    || "Type3".equals(resource.subtype())
+                    || "/Type3".equals(resource.subtype());
+            embedded &= resourceEmbedded;
             pages.addAll(resource.pages());
         }
 
         FontInfo build(FontInfo page) {
-            boolean effectiveEmbedded = this.embedded || type3;
+            // Type 3 resources are already counted as embedded by add(); an
+            // unembedded simple font with the same name must keep the aggregate
+            // non-embedded.
+            boolean effectiveEmbedded = this.embedded;
             if (page == null) {
                 // Resource-only fonts have no descriptor to read flags from. Zero is
                 // "no flags", not "unknown", so bit tests cannot see every bit set.
