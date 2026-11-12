@@ -37,7 +37,10 @@ import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
+import java.util.Base64;
+import java.util.zip.GZIPInputStream;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -56,6 +59,87 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 class FontNormalizerTest {
 
     private static final byte[] EMPTY_BYTES = new byte[0];
+    private static final String CFF_OTF_BASE64 =
+            "H4sIAAAAAAAC/42Tz2sTQRTHvzOzSWgOm9iKtvhrkQjWWpQetIggshp6kaxtQEGhXZpNckjakGwhJxFPgUL1pAhe/A88eNOC" +
+            "etGTePDUQ8GTIkUQlOyKsr6ZnQazB/XBzPu89+a9mX0zWyqXSxjBbQjk7WLR6l5dfAvwbwC2SgunZi79tAOAkYml5abb4nPs" +
+            "FcUrZLfqnls5XQt94kc0ztTJkdrmr4nf0yjUm353rCBTxTuajjfdbgtZRzqoJtIrbtNbnpiqU/0lGry12vHpHCRc5ltqWxrm" +
+            "3cfHFnPnv0OITzL6cXxrZ6BnaPUX/lxuAo5YKEdY0aycyapQlGFYsoCjZgj2md1DCv8jQ1UukKhTtgd7vUmst/Ret3QmQ2ZQ" +
+            "hRNnNAvkYGo2iA9pTiu/ADNGyGPipGZOfE6zwGHMaTaIq5rT0m9Xq2Wv4897tbWG29bW9LBpaRM25VZRhocOfMyTrmENDbhI" +
+            "xqb/GrUS0fhroW52rzyd0gZukh5FXt2bhYv0Fdcor4FVtKNIdS/2VXZ90YfoZfQsegJED6MH0f0/7iM7INkF8a9rNBgYY/lE" +
+            "Q6RvIjjAg4MiGDc218M7oZPazq33V0a/7gGnhP2JnmkzLnoUkyjiCj2sWSzgMrKMGZmxI1Nn7dKNWtAz+xtmsLO5L3SC3i8n" +
+            "M8w9xQXJ/Q3J/RNJf/hUcugof0GteZFcQ8eQf+4Pavj1eOzaUsu/gd664t9/Ga8s+AMAAA==";
+
+    private static final String TTC_FONTS_BASE64 =
+            "H4sIAAAAAAAC/+05e3xU5ZXn3DuvPIaZCSGZ8Alzh5vEaBICGUgJRjIkmSEYNBOSyEwQyORF0JAMzIBiVUJf4iAFW2oX0UK7" +
+            "9rfiixvAEm1dwna3Vis/6bZd19eC1r4sNNTW7lZIZs/3zU1IKNrHb3d/+4ffzL33vM/5zjnfvd/cicXauwCBD4mOTADXPIE7" +
+            "6GQA+5Ianx/skAow8yhRs5YE6htrNi/bRPjLhCtLGpurTnzwL6cJP0t4bX1jSemdL9wyH8BykfDW9vXhCL6DGkDKLYT3tG+O" +
+            "KTe8XvchuRoil9u7ImvX3xP+loP43wcwH10bjkbACSlk71GSt6/t2dKV82h5MQDOIb69uzPckeUsf4Ds30H8sm4i2KzG9wj/" +
+            "d8Jzu9fH7ijql79KOPmEgp6+9nDK65ZDhLfy+NeH74jIM6Qg4V4ef294feebD75O9rJryX5FpC8aSwzBg+T/c5wf2dgZGXl6" +
+            "yVJKyF0AcjVl6SSAsdS4DWQwg8trlUxG2SSnWIyygUiVJ0tOOjKwvNzhcXjmzpnqdrinOtyOk4bOC/uWySeN2z7capx/Idvw" +
+            "K55vA1laTpbMlOGV3jIrQrokm4wWkA0Gi1nOcKRLa0Lp6cJ0hpaBgQw8n4FDGbg7A1szcE4GlmTgKjE2bIDK0kpPeUkhec8m" +
+            "76UOjyejvJy+c+e4ZbesogfRbDITmH+1YdfXR+75xvekytekspGVKTlzj0q2Z666Ch8e7eARGn57VeNnRufiD30rqBceoygV" +
+            "ijINNnqzzbJssACkGdLSrWaKLmDGM2Y0Dybe9s6eunSL+T6zZDOjxWxOEUErVhyyombFA1bst2LEiq1WDFiR6Kv0MRb46lWr" +
+            "CldtKBxPXjKBlD+HSqCbDkN4xHT8uPThcWnnSNS4beRJqenDrdQYvFvMX6AIc/CiN+HMsSAiZJodaLGjw06ZNGOabLampqRY" +
+            "DZk5RjZ9B0M2dNfW2nKG1zLMYZjK8I8M32P4GsOXGA4yvI/tZQeZfAfDdQwXshtYC5OvYTidYTrD7hGGZxm+xfBlhs8zfILh" +
+            "wwzJ6l0Mb2N4C8M6hhUMCxlexTCN4UWGv2b4JsMfMPzOmDzsZLiV4XqGaxjeyLCEVTJpBkMbQ7I/LOy/IuwfYvgIw11c9m4m" +
+            "rRTS1zEspmkwtDJccIHhOYZvMDzJvH34bYZPMdzHkBx8WjioYyuZVC4CyhEB/VEE9JYIKDmBR8QE7hYTWCUmcD1DruBiKK1h" +
+            "W9l+dpydZglmAoYWp92QImdarWjJgEoPVYpOHqQSrtmwgb4TxsbJY/WqyWNMbM2VxSfLc4HCDY6MbNEga1avorNn1Sp+Er2i" +
+            "UmubTLzVp2Zll2VM5ZdPlZWhx/iLd3/vnD09N/HuaPiFkeJ8Z+Ufjn2wQElhs9Dygry16bXYwxep8y9ue+xwLxrktRe//OpX" +
+            "1OgD8mG+Sm9OnJWHjS9DFsyCm71zZ8CUKbZsk82Uq2ZMm0JLQbZYlEDIYpenB0Jy1u5cjOSiKxcTuXgmF4dyMRk4VBaCs5La" +
+            "G8rLnZWVE9qcIs8zmdRZksPuLs3K9lxNxMxsNT9/PmZmeUrL5s/LV2eZ5Pml37zz5An84qcfLZWko6YnZfPI63fcuzce/+r2" +
+            "LU93t2AmOqWylrYteOLC1INl9ti1GPnpP//49Kvff5HmsCJx1uA03AQZkAO3e/1THSZzDkB6utkhs+kmE8g5EAhZczDTkJOT" +
+            "YrNlBUI2e4ocCKVknWI4xPAAw90M+xlGGLYyDDCcw3C8xhPm5iyhsuiQficaW8rJ2XwqW3LzqWZ4FMe0q/P51MyY+dCeTTtz" +
+            "vhYefez8hQu/wrees+2+97N7Tfifz720urY4ATgTp2M6zhw54Yw/8cihvbTm47TwF1FVZNjsbZDpFmWgB9a080Y8Y8TTRhwy" +
+            "ombE/UbsN2LEiC4j2ox4fgLrgBF3G7HeiAmhckrQx4Und+eldoRk5fh0+KziR40vfzgv2SOGGZTfVOqSWm+Rw5QGJsh2WqaI" +
+            "xsjkjXHAibud2O/EiBNbnRhw4hwnnnbiqsuTOP7wQLukd0WGLHpgmsigYcaHvzn3Pv7sv957/vOPfG3njq98Y4c0c/Td0ffQ" +
+            "jQ5pzujw6NtnfvDKm//26il+b9zOn7IU2VRQvXbT1KlU9cxpNlOq3WCDaTQdvnovufQ45l3tyZrmKSvzlGZPEz4dXzQ9bjEU" +
+            "Rrpy83IrIpvlRRvjg3k7ulK/mXri6MjLYq+QCqrYPfDVYocSoCe99KhkgOTIo88d8CL+l9QifVdOlVfIFJPQk3L2nu/d27TG" +
+            "VvEBuCxC+PvePz7Er79wvnEQDImzdF/n+wyLbp+yCielcir3zWAwPgSPmXdCiiEKN9OxAl+AOIelx2nWZN+8aPQmqCYJAxjM" +
+            "X9B3OZdGKj1m/x53g5GsPWT0UEgseZV/CF1ShsUopZkMEh8GPd7xMXdxYzV4QYGNxh+NNqDHvAgPj8kYFtKTiHYOUKTvqWSx" +
+            "r5IFN5Niob0HrUM7USSSWgy1sAI6oQf6YGMiITSTtI4xWuLtxInEtxNPJb6e2JfYm/jqn8yEhnfJypZQsLmpcXlDoP6mG5fV" +
+            "3bC0donfV1Ndtdhbuej6iusWli/4VNn8uXNKZhcXFVydn5erznK7nJkOu22KNS01xWI2GQ2yhFCkaNjq0+Q8xeEPqz41XFtc" +
+            "pPic3TXFRT7V36opYUWjiyFfra0VJDWsKa2Klk+X8ARyq+Ylya7LJL1JSe+4JNqVCqjgLlRFO1mjKoPY0hAkeGeNGlK0cwK+" +
+            "UcCGfIFYCXG7SUNExaNVfJp/c3fc10ox4kBaarVa3ZlaXAQDqWkEphGkFaiRASxYhAKQCnwLBySwWLlbmqkv3KEFGoK+GuZ2" +
+            "h4qLlmpT1BrBgmphUjNVa2ZhUlnHQ4cdykDRUPz+QTu0tRamd6gd4VuCmhwm3bjsi8fv1RyF2jVqjXbNne86aeadWpFa49MK" +
+            "udW65eN+6i65pBtSnl1V4h8ATUc9d3YyJaxTTHn2D4CDmlSt4fKgmw/mp1zH435V8cdb4+HBRH+bqtjV+EB6ejzio3RDIEgm" +
+            "BhPP7WCa//6QZm/txoUhfer+5XXa1IaVQU3K8yvdYaLQt1J1L2Bux7hM4KPYQGmh5FCG3W6ehh2DXmgjROtvCCZxBdrYYfCW" +
+            "FIY0qZVzhsY405o5p3+MM67eqlJt6xqDcc2Qt7RD9VHGd4S1/jbqrlt5YVS7NuUPzK3GMxxKeUlIyCoU1dKOdYpmzKckkdZE" +
+            "BeobrhK3C2TKH5KXc4wc5DsylHKVzHA7PtXXqn83dzvJgEKJri1MNkJTUPPWEOAN6xXzDcwpIY1wKxVsXY0oplaiRrRMtWq8" +
+            "ujws37rGoFDR1bTMao1+FelaWolPrCvFF2+tSYbAbakNwWfBkzgzME9hRzwwD0I1XDirmros3xcPdnRprlbWQeuuSwkyt+YN" +
+            "UYVDarAzxNuOMnTNGSaaIyR6pSlY16jWNbQEF+iBJBncnCHPd5kZNciSZqgBNUueRQlKTA6RoJ0Iip8AtaqCzpo5z0KHnRIu" +
+            "qLxxqyqUIDIYk6YwtGsUX2eNLsfxSUaNvJ2qa8esmThKdqprmTvkTo7iIonYiu6YNCw8qbVjLLpNEcNC/VldK0g8l07e9EpQ" +
+            "7VRDareieQNBPjeeHpFlPRki53qtmiZhE5JFaQI3sccQnkzNX8gmJldbIvBxtPYy9tIxthK3qHWNcW5c1Q0CRb5UA97C3gUO" +
+            "Ju4FfEGrdO9V7LSkxYKOD3i9fDF3L+RG1KUdcbUxWCGk6X5yN7uT+8qAOqxrqiouoltb1YCK2xsGvLi9sSX4rJ2eKdubgocl" +
+            "lKpbq0IDucQLPqvQQ0NQJU7lRI4oHOGWlhNiEfLsWfql3C+4BkEQePsg7S2axoWIhtA+KCVp9qSjfOHIS8+59kFDkuMdkzYQ" +
+            "zZKk9QuaGAPAU+ZNNXot3hRvumSV2ABy0mGiPEfPvRSEI+loRTZAWssFeRD7B1K8LCnRTxLeZITbmy+5bm4JHkkHUhNnclTF" +
+            "B7WLs5uKTY8Vn9LBG+WuUHe8NcQXG2RRaeiLGqqLqEzqIgrElK6lqp1VWppaxemVnF6ZpJs43UwtillI6v1U+4CGvANWBt20" +
+            "JJXpL7K4/RyvVIhuKnH7z4oXuynYSkAsh2ZcpF+r0Eu7BBcupquLrteBBxcSfQFdiQ9eNFOmXeK8Hw3ex3FoBA+NIIxgav0F" +
+            "VC7gB4EC1/v+Atdv/de6zvsLXWuGtw5LtuH64TXDu4YPDRvTfvbuTNdP3/G7bO+g9x1/luvtM37XK2dOnxk+I3vPeMr8Z/xO" +
+            "12/OJVzn8JfNZ2t/3fxeKTT/6pe/bP5FLTT/HBKut64/3Xwa5eb/uF5uflNOuGw/cf1EEifvS07mf+Wf8PmhCteJQL7rO/9Y" +
+            "4Eo8i4HByGD/oDyYGPImBjNK/a5jlcfqj/Ud23ps/7FDx8zOb2Hk8IHD2mHZdhh3P4PaM2h7Bi22I5VHho/I/dpuTdK0Ie2U" +
+            "JpccqjwkHXhKe0oaeurUU1LJk5VPSvufwKHHTz0u1R/cdVAqOdh38PjBxEHDw/tyXYF92PcgHn8QH/TPcH1lT7bLtse1Z+ue" +
+            "XXsSe4xzHvA+IPU/gJFd/buk3btwaNepXVL9/Wvu77tf/oI/4dr/efzcZ+e6YtFKV5Qm0tdb4er1z3dNR2dzjsfZbPbIzSaa" +
+            "eivx1tBxi3+ua2VLrauFrlNLM5qNlB5DqdzcI2O6XCEvk3vku2TjcEPC29EgeRvmL/B7G/IK/K8EcKlfcdWS5SV0HPLjaf+w" +
+            "X+r3Y1bptGYH2prtpbZm2pU1I6DLZau0rbFttRlsthJbva3Ptst22pawmSuJNmyT+wDrAfuz0IiDuHugqbGwsG7QnKAnvDmw" +
+            "UsPtWl4jP3sbWjTTdg2aW1YGBxC/GPr8zp1QNaNOK20Maq0zQnVaBwFeDvQTYJ8xkAVVoWgsGttUyAcmAYgVFkajHEKOFSZ5" +
+            "AsLCKLFJjJQIiW2CaGE0htFoDKIxokdxNcHRKESJHkVSoSNaqNsft0QOVpMhOsWSLqJR0ouSnajuzrkajC/T74O7acc9DbaI" +
+            "86RhWEhr6XaABH83OeE8ugL+R0fytwschefhEByYxNoO99D5yUm04/BdeEJA+2Dnx5h9Fh7XoT2wF+79SLlb4bNk51E4OoHW" +
+            "StQt8HfkeRD+gX6azEIPeb1N574BL17ZFL6NL8KX4DGS/BIco/M++hHzael9+JK0HHqlV+Vt8Bm4j+a4H9fBLpJvhUdxJawm" +
+            "anKspt8yfZcZjcNu+CbcCf2XSMZtid+B9eIRivw+svMgrIMNVEnbxZmJ92Ge4edgHf0xHJddFPvT8IxQ2Tama66Vb5W+JUkj" +
+            "XybkAVhLRxhfozh3yovhf3GYthm6IdPwA95DiR+NbqXY36AKPUfZeIXYNoLoV54hheCnxe8+DiNMISwJSwR/R4dlyIeXdNgA" +
+            "M+G8DhthOk7RYRPMxAIdNsPv0a/DFiiQFupwClwltelwqvSv0j06nAYLjAEdTodbjNt12Aq3Gt/V4Skwz3QT1FDu19IRo+NO" +
+            "ql4H/QLtgDDhYYLaqZoR6qSNQqqbqAoUEPUaupbCHJhLhwJLSKqP+D2kr0A1/91KWvwcFnb7oBdmEydV8D7eXilBy/U4aoV+" +
+            "EUFLyUI72fATpZ249YR3Crm1sIn8hsniZF7xZdzryPZs8jBZSrlM6mbCNkJUj5nHNFvozf8z1peRRpvQvTRjha5ROvM8xgSn" +
+            "gyTWC/nbiNYHXR87V4XkOkVtosTpFFiHsMptN5NEo5AKCM1OosaEt14h1XQFj/XksYv028XMxyTbhW1e76TlPoK7BU2hu8gm" +
+            "UasoSXK9sblFyfNiOrcLvx269JUr3yii2yx83ijoHI8KXhXhUX1eyZwtFv7WE8ZzcTtFwv12Czgs8tkhtHn/9OqabdRRysf6" +
+            "UXTdsF6XXvr0kWwySq5TpOe7S5yjwm8v+VAIDosZKyJSHl3XZVEoImNhkf9kzdcTNyZk24neQ58t+mpaT/lJem3T18vtYvV1" +
+            "j8+d5N2zRGUv5SLZLV16dyqCGiG4T8Q+lr1iUREef6eIikNhsZrbSKNH+EnG0S16Iiwq2qlXOCaijU7ojGQfKCJibt0nuoGv" +
+            "4E49kyto7S+7osVktiZ2JK9Ej4g3OsF2r4i2Q9D6xjO7WX8nFhmfcY+4x9w2XpUu0WXJ7HUIa8Ufkd8ukZuY7rVPRNRBn2Sd" +
+            "kx3VR7qbRNWSqyjZw7E/yVxY5LdP14uI1R/TY1kvVkW36LsILIQS+twuPrNF901cK+36Spmtx1zyN+vxuCIigxNXxcbxWNZT" +
+            "jMv0Nd87vtY2TVi1Y5VopDvPMnGXiOj949czp1xmga+Vy++Uc8WdcvIskt24jvCYiCcqcjlbzGEt8evJwzLxhpTvzJ7n/7te" +
+            "ccjiDbADMJHQ36Sm6xxJYCninHwXfRU9TbHGv6yJdMQ7aPFWFcb5NeTTLPhFbX2RPihr74vE6LxlYw+Urd3YeRuUdXe2bYSy" +
+            "nnCsF8ouszFm5//9/+NKYPz/8SmG7xGujf0/fu3P+f/jyva/+P/x771+gsAf/0X/j+vv9X/nvaHgb32vTwn/C9/rj5654nv9" +
+            "T/Zi/7d7sSa6U/V9xF4syftze7Gk1F+/F7uy9U/2Yp/sxT7Zi32yF/tkL/ZX78X+G17WTN4QKAAA";
     @Test
     void resultRecordProperties() {
         var result = new FontNormalizer.Result(10, 3, 2, 1, 4);
@@ -410,6 +494,156 @@ class FontNormalizerTest {
         }
     }
 
+    @Test
+    void normalizePageSelectsMatchingFaceFromTrueTypeCollection() throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real native library");
+        byte[] pdf = collectionTrueTypePdf();
+
+        try (PdfDocument doc = PdfDocument.open(pdf)) {
+            FontNormalizer.Result result = FontNormalizer.normalizePage(doc, 0);
+            assertEquals(1, result.fontsProcessed());
+            assertEquals(1, result.widthsRepaired(),
+                    "the selected collection face must gain repaired /Widths");
+            assertTrue(result.resubset() >= 1,
+                    "a multi-face collection stream must be re-subset to the selected face");
+
+            byte[] repaired = doc.saveBytes();
+            try (PDDocument loaded = Loader.loadPDF(repaired)) {
+                COSDictionary font = firstFontDictionary(loaded);
+                assertNotNull(font);
+                COSArray widths = (COSArray) font.getDictionaryObject(COSName.WIDTHS);
+                assertNotNull(widths);
+                int firstChar = font.getInt(COSName.FIRST_CHAR);
+                assertEquals(500, widths.getInt('H' - firstChar),
+                        "FaceTwo's 1024/2048 advance proves the second TTC face was selected");
+                assertTrue(font.getNameAsString(COSName.BASE_FONT)
+                                .matches("[A-Z]{6}\\+FaceTwo-Regular"),
+                        "a re-subset collection font must carry a deterministic subset tag");
+                assertEquals("H", new PDFTextStripper().getText(loaded).trim(),
+                        "the re-subset font program must still draw drawn glyphs");
+            }
+
+            FontNormalizer.Result second = FontNormalizer.normalizePage(doc, 0);
+            assertEquals(0, second.toUnicodeFixed());
+            assertEquals(0, second.widthsRepaired());
+            assertEquals(0, second.type1Converted());
+            assertEquals(0, second.resubset());
+        }
+    }
+
+    @Test
+    void normalizePageConvertsCffInSfntToBareType1C() throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real native library");
+        byte[] pdf = cffInSfntType1Pdf();
+
+        try (PdfDocument doc = PdfDocument.open(pdf)) {
+            FontNormalizer.Result result = FontNormalizer.normalizePage(doc, 0);
+            assertEquals(1, result.fontsProcessed());
+            assertEquals(1, result.type1Converted(),
+                    "CFF-in-SFNT under /Type1 must become a bare Type1C stream");
+
+            byte[] repaired = doc.saveBytes();
+            try (PDDocument loaded = Loader.loadPDF(repaired)) {
+                COSDictionary font = firstFontDictionary(loaded);
+                assertNotNull(font);
+                COSDictionary descriptor =
+                        (COSDictionary) font.getDictionaryObject(COSName.FONT_DESC);
+                assertNotNull(descriptor);
+                assertFalse(descriptor.containsKey(COSName.FONT_FILE));
+                assertFalse(descriptor.containsKey(COSName.FONT_FILE2));
+                COSStream cff = (COSStream) descriptor.getDictionaryObject(COSName.FONT_FILE3);
+                assertNotNull(cff, "converted font must keep /FontFile3");
+                assertEquals("Type1C", cff.getNameAsString(COSName.SUBTYPE));
+
+                byte[] cffBytes;
+                try (InputStream in = cff.createInputStream()) {
+                    cffBytes = in.readAllBytes();
+                }
+                FontNormalizer.FontClassification classification =
+                        FontNormalizer.classify(cffBytes);
+                assertFalse(classification.sfnt(), "converted program must be a bare CFF");
+                assertTrue(classification.numGlyphs() > 1);
+                assertEquals("H", new PDFTextStripper().getText(loaded).trim(),
+                        "the converted bare Type1C font program must still draw drawn glyphs");
+            }
+
+            FontNormalizer.Result second = FontNormalizer.normalizePage(doc, 0);
+            assertEquals(0, second.toUnicodeFixed());
+            assertEquals(0, second.widthsRepaired());
+            assertEquals(0, second.type1Converted());
+            assertEquals(0, second.resubset());
+        }
+    }
+
+    @Test
+    void normalizeAllRepairsCidSetBitsetFromDrawnCids() throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real native library");
+        // A valid /CIDSet that marks CID 0, the drawn CID 36, and the unreferenced
+        // CID 50. Subsetting is skipped for the already-tagged font, so the
+        // normalizer must preserve this stream instead of replacing it with the
+        // drawn-only CID set.
+        byte[] validCidSet = new byte[] {(byte) 0x80, 0, 0, 0, 0x08, 0, 0x20};
+        byte[] pdf = cidTrueTypePdf("ABCDEF+LiberationSans", validCidSet);
+
+        try (PdfDocument doc = PdfDocument.open(pdf)) {
+            FontNormalizer.Result first = FontNormalizer.normalizeAll(doc);
+            assertEquals(0, first.resubset(),
+                    "an already subset-tagged font must not be re-subset");
+
+            byte[] repaired = doc.saveBytes();
+            try (PDDocument loaded = Loader.loadPDF(repaired)) {
+                COSDictionary descendant = cidDescendant(loaded);
+                assertNotNull(descendant);
+                COSDictionary descriptor =
+                        (COSDictionary) descendant.getDictionaryObject(COSName.FONT_DESC);
+                assertNotNull(descriptor);
+                assertArrayEquals(validCidSet, streamBytes(descriptor, COSName.CID_SET),
+                        "/CIDSet must be preserved and not overwritten with drawn-only CIDs");
+            }
+
+            FontNormalizer.Result second = FontNormalizer.normalizeAll(doc);
+            assertEquals(0, second.toUnicodeFixed());
+            assertEquals(0, second.widthsRepaired());
+            assertEquals(0, second.type1Converted());
+            assertEquals(0, second.resubset());
+        }
+    }
+
+    @Test
+    void singlePurposeNormalizerCallsDoNotRewriteCidSetOrInvalidatePages() throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real native library");
+        // Start from a fully normalized CID PDF so ToUnicode and widths are already correct
+        byte[] basePdf;
+        try (PdfDocument initial = PdfDocument.open(cidTrueTypePdf("ABCDEF+LiberationSans", null))) {
+            FontNormalizer.normalizeAll(initial);
+            basePdf = initial.saveBytes();
+        }
+        // Inject a stale /CIDSet stream into the descriptor
+        byte[] pdfWithStaleCidSet;
+        try (PDDocument doc = Loader.loadPDF(basePdf)) {
+            COSDictionary descendant = cidDescendant(doc);
+            assertNotNull(descendant);
+            COSDictionary descriptor = (COSDictionary) descendant.getDictionaryObject(COSName.FONT_DESC);
+            assertNotNull(descriptor);
+            COSStream stale = new PDStream(doc, new ByteArrayInputStream(new byte[] {0})).getCOSObject();
+            descriptor.setItem(COSName.CID_SET, stale);
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            doc.save(out);
+            pdfWithStaleCidSet = out.toByteArray();
+        }
+
+        try (PdfDocument doc = PdfDocument.open(pdfWithStaleCidSet)) {
+            PdfPage page = doc.page(0);
+            int tuc = FontNormalizer.fixToUnicode(doc, 0);
+            assertEquals(0, tuc, "fixToUnicode should not report repairs when ToUnicode is already valid");
+            assertEquals(0, page.rotation(), "page must remain valid; /CIDSet was not touched by single-purpose call");
+
+            int widths = FontNormalizer.repairWidths(doc, 0);
+            assertEquals(0, widths, "repairWidths should not report repairs when widths are already valid");
+            assertEquals(0, page.rotation(), "page must remain valid; /CIDSet was not touched by single-purpose call");
+        }
+    }
+
     /**
      * Builds a one-page PDF whose text uses an embedded simple TrueType font.
      * Optionally removes the font dictionary entries that the normalizer repairs.
@@ -660,14 +894,14 @@ class FontNormalizerTest {
      * {@code /ToUnicode} and the descendant's {@code /W} removed. CID and GID are identical.
      */
     private static byte[] cidTrueTypePdf() throws IOException {
-        return cidTrueTypePdf("LiberationSans", false);
+        return cidTrueTypePdf("LiberationSans", null);
     }
 
     /**
      * Builds an Identity-H CIDFontType2 PDF. {@code baseFont} may carry a subset
-     * tag, and {@code withCidSet} adds a deliberately wrong /CIDSet stream.
+     * tag, and {@code cidSet} adds an existing /CIDSet stream when non-null.
      */
-    private static byte[] cidTrueTypePdf(String baseFont, boolean withCidSet)
+    private static byte[] cidTrueTypePdf(String baseFont, byte[] cidSet)
             throws IOException {
         byte[] program = liberationSansBytes();
         try (PDDocument doc = new PDDocument()) {
@@ -688,9 +922,9 @@ class FontNormalizerTest {
                     .getCOSObject();
             fontFile.setInt(COSName.LENGTH1, program.length);
             descriptor.setItem(COSName.FONT_FILE2, fontFile);
-            if (withCidSet) {
+            if (cidSet != null) {
                 COSStream stale = new PDStream(doc,
-                        new ByteArrayInputStream(new byte[] {0})).getCOSObject();
+                        new ByteArrayInputStream(cidSet)).getCOSObject();
                 descriptor.setItem(COSName.CID_SET, stale);
             }
 
@@ -760,6 +994,117 @@ class FontNormalizerTest {
             }
         }
         return null;
+    }
+
+    /**
+     * Builds a one-page PDF whose embedded TrueType program is a two-face
+     * collection. The PDF font names {@code FaceTwo-Regular}, whose 'H' advance
+     * (500) differs from {@code FaceOne-Regular} (700), so repaired widths prove
+     * which face FreeType selected.
+     */
+    private static byte[] collectionTrueTypePdf() throws IOException {
+        byte[] ttc = gunzipBase64(TTC_FONTS_BASE64);
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(PDRectangle.LETTER);
+            doc.addPage(page);
+
+            COSDictionary descriptor = new COSDictionary();
+            descriptor.setItem(COSName.TYPE, COSName.FONT_DESC);
+            descriptor.setName(COSName.FONT_NAME, "FaceTwo-Regular");
+            descriptor.setInt(COSName.FLAGS, 32);
+            descriptor.setItem(COSName.FONT_BBOX, new COSArray());
+            descriptor.setInt(COSName.ITALIC_ANGLE, 0);
+            descriptor.setInt(COSName.ASCENT, 800);
+            descriptor.setInt(COSName.DESCENT, -200);
+            descriptor.setInt(COSName.CAP_HEIGHT, 700);
+            descriptor.setInt(COSName.STEM_V, 80);
+            COSStream fontFile = new PDStream(doc, new ByteArrayInputStream(ttc))
+                    .getCOSObject();
+            fontFile.setInt(COSName.LENGTH1, ttc.length);
+            descriptor.setItem(COSName.FONT_FILE2, fontFile);
+
+            COSDictionary font = new COSDictionary();
+            font.setItem(COSName.TYPE, COSName.FONT);
+            font.setItem(COSName.SUBTYPE, COSName.getPDFName("TrueType"));
+            font.setName(COSName.BASE_FONT, "FaceTwo-Regular");
+            font.setItem(COSName.ENCODING, COSName.WIN_ANSI_ENCODING);
+            font.setItem(COSName.FONT_DESC, descriptor);
+
+            COSDictionary fonts = new COSDictionary();
+            fonts.setItem(COSName.getPDFName("F1"), font);
+            COSDictionary resources = new COSDictionary();
+            resources.setItem(COSName.FONT, fonts);
+            page.setResources(new PDResources(resources));
+            page.setContents(new PDStream(doc, new ByteArrayInputStream(
+                    "BT /F1 12 Tf 72 700 Td (H) Tj ET"
+                            .getBytes(StandardCharsets.US_ASCII))));
+
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            doc.save(out);
+            return out.toByteArray();
+        }
+    }
+
+    /**
+     * Builds a PDF whose /Type1 font carries a CFF-in-SFNT (/Subtype /OpenType)
+     * program, a shape the normalizer must rewrite as bare Type1C CFF.
+     */
+    private static byte[] cffInSfntType1Pdf() throws IOException {
+        byte[] otf = gunzipBase64(CFF_OTF_BASE64);
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(PDRectangle.LETTER);
+            doc.addPage(page);
+
+            COSDictionary descriptor = new COSDictionary();
+            descriptor.setItem(COSName.TYPE, COSName.FONT_DESC);
+            descriptor.setName(COSName.FONT_NAME, "CffTest-Regular");
+            descriptor.setInt(COSName.FLAGS, 32);
+            descriptor.setItem(COSName.FONT_BBOX, new COSArray());
+            descriptor.setInt(COSName.ITALIC_ANGLE, 0);
+            descriptor.setInt(COSName.ASCENT, 800);
+            descriptor.setInt(COSName.DESCENT, -200);
+            descriptor.setInt(COSName.CAP_HEIGHT, 700);
+            descriptor.setInt(COSName.STEM_V, 80);
+            COSStream fontFile = new PDStream(doc, new ByteArrayInputStream(otf))
+                    .getCOSObject();
+            fontFile.setItem(COSName.SUBTYPE, COSName.getPDFName("OpenType"));
+            descriptor.setItem(COSName.FONT_FILE3, fontFile);
+
+            COSDictionary font = new COSDictionary();
+            font.setItem(COSName.TYPE, COSName.FONT);
+            font.setItem(COSName.SUBTYPE, COSName.TYPE1);
+            font.setName(COSName.BASE_FONT, "CffTest-Regular");
+            font.setItem(COSName.ENCODING, COSName.WIN_ANSI_ENCODING);
+            font.setItem(COSName.FONT_DESC, descriptor);
+
+            COSDictionary fonts = new COSDictionary();
+            fonts.setItem(COSName.getPDFName("F1"), font);
+            COSDictionary resources = new COSDictionary();
+            resources.setItem(COSName.FONT, fonts);
+            page.setResources(new PDResources(resources));
+            page.setContents(new PDStream(doc, new ByteArrayInputStream(
+                    "BT /F1 12 Tf 72 700 Td (H) Tj ET"
+                            .getBytes(StandardCharsets.US_ASCII))));
+
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            doc.save(out);
+            return out.toByteArray();
+        }
+    }
+
+    private static byte[] gunzipBase64(String value) throws IOException {
+        byte[] compressed = Base64.getDecoder().decode(value);
+        try (GZIPInputStream in = new GZIPInputStream(new ByteArrayInputStream(compressed))) {
+            return in.readAllBytes();
+        }
+    }
+
+    private static byte[] streamBytes(COSDictionary dictionary, COSName key) throws IOException {
+        COSStream stream = (COSStream) dictionary.getDictionaryObject(key);
+        assertNotNull(stream, "missing stream " + key.getName());
+        try (InputStream in = stream.createInputStream()) {
+            return in.readAllBytes();
+        }
     }
 
     private static boolean hasToUnicodeStream(byte[] pdf) throws IOException {
