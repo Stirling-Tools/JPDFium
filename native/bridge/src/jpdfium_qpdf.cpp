@@ -4015,7 +4015,7 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
                                                                          : program.kind;
             bool glyf = program.kind == ProgramKind::TrueType;
             bool trueTypeFont = current == "/TrueType" || current == "/CIDFontType2";
-            bool pinSimpleMapping = !cid && (!hasProgram || glyf != trueTypeFont);
+            bool pinSimpleMapping = !cid && (glyf != trueTypeFont || (!hasProgram && onlyMissing));
             if (glyf != trueTypeFont) {
                 target.replaceKey("/Subtype", QPDFObjectHandle::newName(
                                                   cid ? (glyf ? "/CIDFontType2" : "/CIDFontType0")
