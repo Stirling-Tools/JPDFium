@@ -62,9 +62,11 @@ public final class FontNormalizer {
      *
      * <p>Finds font dictionaries through the page resources (including nested
      * form XObjects, annotation appearances, and patterns), repairs a missing or
-     * empty {@code /ToUnicode} map from the embedded program's cmap, and rebuilds
+     * empty {@code /ToUnicode} map from the embedded program's cmap, and repairs
      * simple-font {@code /Widths} or CID {@code /W} entries from FreeType's
-     * unscaled advance widths. Both repairs share one qpdf load/write cycle.
+     * unscaled advance widths. Missing or malformed simple widths are rebuilt;
+     * positive producer widths are preserved. Both repairs share one qpdf
+     * load/write cycle.
      *
      * <p>Fonts without an embedded program are skipped, since there is no cmap or
      * advance-width source to read. Use
@@ -165,9 +167,10 @@ public final class FontNormalizer {
      * <p>For simple fonts ({@code /TrueType}, {@code /Type1}, {@code /MMType1})
      * the native bridge recomputes {@code /FirstChar}, {@code /LastChar}, and
      * {@code /Widths} from each glyph's unscaled horizontal advance, normalised to
-     * 1000 units per em. Existing widths are replaced only when the array is
-     * missing, has the wrong length, or disagrees with the program. CID fonts
-     * without a {@code /W} array gain a compact GID-keyed array. Fonts with no
+     * 1000 units per em. Missing, non-numeric, or non-positive widths are
+     * repaired; positive producer widths are preserved because they may encode
+     * deliberate tracking or justification. CID fonts without a {@code /W} array
+     * gain entries for drawn CIDs plus zero-advance glyphs. Fonts with no
      * readable embedded program are skipped; embed them with
      * {@link stirling.software.jpdfium.doc.PdfFontEmbedder} first.
      *

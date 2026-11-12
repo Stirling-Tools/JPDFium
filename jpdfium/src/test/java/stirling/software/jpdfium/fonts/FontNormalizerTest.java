@@ -305,6 +305,40 @@ class FontNormalizerTest {
     }
 
     @Test
+    void repairWidthsPreservesPlausibleProducerWidth() throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real native library");
+        byte[] pdf = withIntegerWidth(embeddedTrueTypePdf(false, false), 'H', 700);
+        try (PdfDocument doc = PdfDocument.open(pdf)) {
+            assertEquals(0, FontNormalizer.repairWidths(doc, 0),
+                    "a positive producer width must not be overwritten merely for differing");
+            byte[] unchanged = doc.saveBytes();
+            try (PDDocument loaded = Loader.loadPDF(unchanged)) {
+                COSDictionary font = firstFontDictionary(loaded);
+                assertNotNull(font);
+                COSArray widths = (COSArray) font.getDictionaryObject(COSName.WIDTHS);
+                assertNotNull(widths);
+                int firstChar = font.getInt(COSName.FIRST_CHAR);
+                assertEquals(700, widths.getInt('H' - firstChar),
+                        "the producer's tracking width must survive the repair pass");
+            }
+        }
+    }
+
+    private static byte[] withIntegerWidth(byte[] pdf, char code, int width) throws IOException {
+        try (PDDocument doc = Loader.loadPDF(pdf)) {
+            COSDictionary font = firstFontDictionary(doc);
+            assertNotNull(font);
+            COSArray widths = (COSArray) font.getDictionaryObject(COSName.WIDTHS);
+            assertNotNull(widths);
+            int firstChar = font.getInt(COSName.FIRST_CHAR);
+            widths.set(code - firstChar, COSInteger.get(width));
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            doc.save(out);
+            return out.toByteArray();
+        }
+    }
+
+    @Test
     void fixToUnicodeReplacesBoilerplateOnlyCMap() throws Exception {
         assumeTrue(NativeRuntime.isFull(), "needs real native library");
         byte[] pdf = withBoilerplateToUnicode(embeddedTrueTypePdf(false, false));
@@ -407,6 +441,31 @@ class FontNormalizerTest {
                         "/Differences /Euro must map to the Euro sign");
                 assertEquals("\u2022", font.toUnicode(129),
                         "/Differences /bullet must map to the bullet");
+            }
+        }
+    }
+
+    @Test
+    void normalizeAllProcessesDistinctFontsOnEveryPage() throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real native library");
+        byte[] pdf = twoPageEmbeddedFontsPdf();
+        try (PdfDocument doc = PdfDocument.open(pdf)) {
+            FontNormalizer.Result result = FontNormalizer.normalizeAll(doc);
+            assertEquals(2, result.fontsProcessed(),
+                    "the all-page pass must visit both pages: " + result);
+            assertEquals(2, result.widthsRepaired(),
+                    "each page's distinct font needs its own width repair: " + result);
+
+            byte[] repaired = doc.saveBytes();
+            try (PDDocument loaded = Loader.loadPDF(repaired)) {
+                for (int page = 0; page < 2; page++) {
+                    COSDictionary font = loaded.getPage(page).getResources()
+                            .getFont(COSName.getPDFName("F1")).getCOSObject();
+                    assertNotNull(font.getDictionaryObject(COSName.WIDTHS),
+                            "page " + page + " font must carry /Widths");
+                    assertNotNull(font.getDictionaryObject(COSName.TO_UNICODE),
+                            "page " + page + " font must carry /ToUnicode");
+                }
             }
         }
     }
@@ -613,6 +672,34 @@ class FontNormalizerTest {
             assertEquals(0, second.widthsRepaired());
             assertEquals(0, second.type1Converted());
             assertEquals(0, second.resubset());
+        }
+    }
+
+    @Test
+    void normalizeAllWritesCidSetForRetainedSubsetGlyphs() throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real native library");
+        byte[] pdf = cidTrueTypePdf("LiberationSans", new byte[] {(byte) 0x80});
+        try (PdfDocument doc = PdfDocument.open(pdf)) {
+            FontNormalizer.Result result = FontNormalizer.normalizeAll(doc);
+            assertEquals(1, result.resubset(), "an untagged CID font must be re-subset");
+
+            byte[] repaired = doc.saveBytes();
+            try (PDDocument loaded = Loader.loadPDF(repaired)) {
+                COSDictionary descendant = cidDescendant(loaded);
+                assertNotNull(descendant);
+                COSDictionary descriptor =
+                        (COSDictionary) descendant.getDictionaryObject(COSName.FONT_DESC);
+                assertNotNull(descriptor);
+                byte[] cidSet = streamBytes(descriptor, COSName.CID_SET);
+                assertEquals(5, cidSet.length,
+                        "CIDSet must stop at the highest retained CID, not describe the full program");
+                assertEquals((byte) 0x80, cidSet[0], "CID 0 (.notdef) must be present");
+                assertEquals((byte) 0x08, cidSet[4], "CID 36 is the only drawn glyph");
+                for (int i = 1; i < 4; i++)
+                    assertEquals(0, cidSet[i], "undrawn CID " + i + " must not be present");
+                assertEquals("A", new PDFTextStripper().getText(loaded).strip(),
+                        "re-subsetting must preserve extracted text");
+            }
         }
     }
 
@@ -867,7 +954,7 @@ class FontNormalizerTest {
             assertTrue(65 >= firstChar && 72 - firstChar < widths.size(),
                     "fixture widths must cover codes 65 and 72");
             widths.set(65 - firstChar, COSInteger.get(777));
-            widths.set(72 - firstChar, COSInteger.get(1));
+            widths.set(72 - firstChar, COSInteger.get(0));
 
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             doc.save(out);
@@ -941,6 +1028,48 @@ class FontNormalizerTest {
      * Builds a one-page PDF with an Identity-H CIDFontType2 backed by Liberation Sans, with
      * {@code /ToUnicode} and the descendant's {@code /W} removed. CID and GID are identical.
      */
+    private static byte[] twoPageEmbeddedFontsPdf() throws IOException {
+        byte[] program = liberationSansBytes();
+        try (PDDocument doc = new PDDocument()) {
+            for (int pageIndex = 0; pageIndex < 2; pageIndex++) {
+                String baseFont = pageIndex == 0 ? "PageOne-Regular" : "PageTwo-Regular";
+                PDPage page = new PDPage(PDRectangle.LETTER);
+                doc.addPage(page);
+                COSDictionary descriptor = new COSDictionary();
+                descriptor.setItem(COSName.TYPE, COSName.FONT_DESC);
+                descriptor.setName(COSName.FONT_NAME, baseFont);
+                descriptor.setInt(COSName.FLAGS, 32);
+                descriptor.setItem(COSName.FONT_BBOX, new COSArray());
+                descriptor.setInt(COSName.ITALIC_ANGLE, 0);
+                descriptor.setInt(COSName.ASCENT, 900);
+                descriptor.setInt(COSName.DESCENT, -200);
+                descriptor.setInt(COSName.CAP_HEIGHT, 700);
+                descriptor.setInt(COSName.STEM_V, 80);
+                COSStream fontFile = new PDStream(doc, new ByteArrayInputStream(program))
+                        .getCOSObject();
+                fontFile.setInt(COSName.LENGTH1, program.length);
+                descriptor.setItem(COSName.FONT_FILE2, fontFile);
+                COSDictionary font = new COSDictionary();
+                font.setItem(COSName.TYPE, COSName.FONT);
+                font.setItem(COSName.SUBTYPE, COSName.TRUE_TYPE);
+                font.setName(COSName.BASE_FONT, baseFont);
+                font.setItem(COSName.ENCODING, COSName.WIN_ANSI_ENCODING);
+                font.setItem(COSName.FONT_DESC, descriptor);
+                COSDictionary fonts = new COSDictionary();
+                fonts.setItem(COSName.getPDFName("F1"), font);
+                COSDictionary resources = new COSDictionary();
+                resources.setItem(COSName.FONT, fonts);
+                page.setResources(new PDResources(resources));
+                page.setContents(new PDStream(doc, new ByteArrayInputStream(
+                        "BT /F1 12 Tf 72 700 Td (H) Tj ET"
+                                .getBytes(StandardCharsets.US_ASCII))));
+            }
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            doc.save(out);
+            return out.toByteArray();
+        }
+    }
+
     private static byte[] cidTrueTypePdf() throws IOException {
         return cidTrueTypePdf("LiberationSans", null);
     }
