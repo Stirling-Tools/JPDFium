@@ -1818,7 +1818,16 @@ std::map<uint32_t, uint32_t> parseToUnicode(QPDFObjectHandle const& font) {
         return bytes == 4 && UnicodeScalar::decode(value) != 0;
     };
     auto skipSpace = [&](size_t& pos) {
-        while (pos < text.size() && std::isspace(uint8_t(text[pos]))) ++pos;
+        while (pos < text.size()) {
+            unsigned char c = uint8_t(text[pos]);
+            if (std::isspace(c)) {
+                ++pos;
+            } else if (c == '%') {
+                while (pos < text.size() && text[pos] != '\n' && text[pos] != '\r') ++pos;
+            } else {
+                break;
+            }
+        }
     };
 
     auto parseChars = [&](size_t pos, size_t end) {
