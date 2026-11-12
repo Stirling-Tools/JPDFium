@@ -136,6 +136,46 @@ public final class QpdfLib {
                     "jpdfium_qpdf_inspect_fonts_file",
                     FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
 
+    private static final MethodHandle SUBSET_FONTS_HANDLE = Symbols.downcallOptionalUnguarded(
+            "jpdfium_qpdf_subset_fonts",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS, ADDRESS, ADDRESS));
+
+    /** Result of an in-place embedded-font subsetting pass. */
+    public record FontSubsetResult(byte[] pdf, int fontsSubset) {}
+
+    /** True when this native build can subset already-embedded fonts. */
+    public static boolean isSubsetFontsSupported() {
+        return SUBSET_FONTS_HANDLE != null;
+    }
+
+    /**
+     * Subset already-embedded TrueType/OpenType fonts in-place.
+     *
+     * @return the rewritten PDF and the number of subsetted fonts, or a result with
+     *     {@code pdf == null} and {@code fontsSubset == 0} when nothing needed subsetting
+     */
+    public static FontSubsetResult subsetFonts(byte[] input) {
+        if (SUBSET_FONTS_HANDLE == null || input == null || input.length == 0) {
+            return new FontSubsetResult(null, 0);
+        }
+        Semaphore held = acquireSlotOrThrow("font subsetting");
+        try (QpdfCall call = new QpdfCall()) {
+            MemorySegment count = call.arena.allocate(JAVA_INT);
+            int rc = (int) SUBSET_FONTS_HANDLE.invokeExact(call.copyBytes(input),
+                    (long) input.length, call.outPtr, call.outLen, count);
+            int fonts = count.get(JAVA_INT, 0);
+            if (rc == 1) return new FontSubsetResult(null, 0);
+            if (rc == 0) return new FontSubsetResult(call.copyAndFree("qpdfSubsetFonts"), fonts);
+            throw new JPDFiumException("qpdf font subsetting failed (rc=" + rc + ")");
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            if (t instanceof JPDFiumException jpe) throw jpe;
+            throw new JPDFiumException("qpdf font subsetting failed", t);
+        } finally {
+            releaseSlot(held);
+        }
+    }
+
     /** True when this native build can embed font programs. */
     public static boolean isFontReplacementSupported() {
         return EMBED_FONTS_HANDLE != null;
