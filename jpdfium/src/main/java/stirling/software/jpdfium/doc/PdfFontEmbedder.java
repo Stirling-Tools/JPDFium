@@ -127,6 +127,8 @@ public final class PdfFontEmbedder {
     }
 
     private static final int TTCF = 0x74746366;
+    private static final String[] STRIPPED_SUFFIXES = {"Regular", "Roman", "Book", "Normal"};
+    private static final String[] FONT_EXTENSIONS = {"ttf", "otf", "ttc", "otc", "pfb", "pfa", "t1"};
     private static final Pattern TYPE1_NAME = Pattern.compile("/FontName\\s*/(\\S+)");
     private static final List<String> CJK_FAMILY_HINTS = List.of(
             "heisei", "mincho", "gothic", "simsun", "simhei", "fangsong", "kaiti",
@@ -520,7 +522,7 @@ public final class PdfFontEmbedder {
         boolean trimmed = true;
         while (trimmed) {
             trimmed = false;
-            for (String suffix : new String[] {"Regular", "Roman", "Book", "Normal"}) {
+            for (String suffix : STRIPPED_SUFFIXES) {
                 int separator = end - suffix.length() - 1;
                 if (separator >= start
                         && (name.charAt(separator) == '-' || name.charAt(separator) == ',')
@@ -573,13 +575,22 @@ public final class PdfFontEmbedder {
         if (key.isEmpty()) return null;
         Face exact = index.get(key);
         if (exact != null && (!embeddableOnly || exact.embeddable())) return exact;
-        if (CJK_FAMILY_HINTS.stream().anyMatch(key::contains)) {
-            Face cjk = index.get("notosansscregular");
-            if (cjk != null && (!embeddableOnly || cjk.embeddable())) return cjk;
+        for (String hint : CJK_FAMILY_HINTS) {
+            if (key.contains(hint)) {
+                Face cjk = index.get("notosansscregular");
+                if (cjk != null && (!embeddableOnly || cjk.embeddable())) return cjk;
+                break;
+            }
         }
         for (List<String> group : METRIC_COMPATIBLE) {
-            String family = group.stream().filter(key::startsWith)
-                    .max((a, b) -> a.length() - b.length()).orElse(null);
+            String family = null;
+            int familyLength = -1;
+            for (String member : group) {
+                if (member.length() > familyLength && key.startsWith(member)) {
+                    family = member;
+                    familyLength = member.length();
+                }
+            }
             if (family == null) continue;
             String style = styleOf(key.substring(family.length()));
             for (String member : group) {
@@ -604,6 +615,19 @@ public final class PdfFontEmbedder {
         return bold ? (italic ? "bolditalic" : "bold") : (italic ? "italic" : "");
     }
 
+    private static boolean isFontExtension(String name) {
+        int dot = name.lastIndexOf('.');
+        if (dot < 0 || dot == name.length() - 1) return false;
+        int length = name.length() - dot - 1;
+        for (String extension : FONT_EXTENSIONS) {
+            if (length == extension.length()
+                    && name.regionMatches(true, dot + 1, extension, 0, length)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static Map<String, Face> index(List<Path> dirs) {
         boolean bundledFirst = dirs.isEmpty();
         Map<String, Face> index = new HashMap<>();
@@ -622,7 +646,7 @@ public final class PdfFontEmbedder {
                                 if ((attrs.isRegularFile()
                                                 || (attrs.isSymbolicLink()
                                                     && Files.isRegularFile(file)))
-                                        && name.matches(".*\\.(ttf|otf|ttc|otc|pfb|pfa|t1)")) {
+                                        && isFontExtension(name)) {
                                     files.add(file);
                                 }
                                 return FileVisitResult.CONTINUE;
@@ -743,7 +767,9 @@ public final class PdfFontEmbedder {
         for (int i = 0, n = b.getShort(face + 4) & 0xFFFF; i < n; i++) {
             int record = face + 12 + 16 * i;
             if (b.getInt(record) == 0x4F532F32) {
-                return b.getShort(b.getInt(record + 8) + 8) & 0xFFFF;
+                int tableOffset = b.getInt(record + 8);
+                if (tableOffset < 0 || tableOffset > b.capacity() - 10) return 0;
+                return b.getShort(tableOffset + 8) & 0xFFFF;
             }
         }
         return 0;
