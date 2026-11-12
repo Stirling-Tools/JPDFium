@@ -3898,10 +3898,10 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
                     for (uint32_t code : scan.codes) {
                         if (code > 0xFFFF) continue;
                         uint32_t cidFromCode = 0;
-                        bool found = japan1Rksj ? japan1CidForCode(static_cast<uint16_t>(code), cidFromCode)
-                                     : korea1Ksc
-                                         ? korea1CidForCode(static_cast<uint16_t>(code), cidFromCode)
-                                         : gb1CidForCode(static_cast<uint16_t>(code), cidFromCode);
+                        bool found =
+                            japan1Rksj  ? japan1CidForCode(static_cast<uint16_t>(code), cidFromCode)
+                            : korea1Ksc ? korea1CidForCode(static_cast<uint16_t>(code), cidFromCode)
+                                        : gb1CidForCode(static_cast<uint16_t>(code), cidFromCode);
                         if (!found) continue;
                         if (auto it = cidUnicode.find(cidFromCode); it != cidUnicode.end())
                             codeUnicode[code] = it->second;
