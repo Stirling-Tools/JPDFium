@@ -3,6 +3,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstdint>
 #include <cstdlib>
@@ -43,7 +44,7 @@ constexpr uint16_t kWinAnsiHigh[32] = {
     0x2039, 0x152,  0x2022, 0x17D,  0x2022, 0x2022, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022,
     0x2013, 0x2014, 0x2DC,  0x2122, 0x161,  0x203A, 0x153,  0x2022, 0x17E,  0x178};
 
-enum class BaseEncoding { Standard, WinAnsi, MacRoman };
+enum class BaseEncoding : uint8_t { Standard, WinAnsi, MacRoman };
 
 inline uint32_t baseEncodingUnicode(BaseEncoding enc, int code) {
     if (code < 0x20 || code > 0xFF) return 0;
@@ -80,6 +81,24 @@ inline bool allHex(std::string const& value, size_t start, size_t end) {
     return true;
 }
 
+// AGL uXXXX/uniXXXX names require uppercase hex, but older producers emitted
+// lowercase names such as u00e9. Accept a lowercase escape only when it
+// contains a decimal digit; that keeps u00e9 working while leaving ordinary
+// all-letter names such as "uface" alone.
+inline bool allUpperHex(std::string const& value, size_t start, size_t end) {
+    for (size_t i = start; i < end; ++i) {
+        char c = value[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F'))) return false;
+    }
+    return true;
+}
+
+inline bool hasDecimalDigit(std::string const& value, size_t start, size_t end) {
+    for (size_t i = start; i < end; ++i)
+        if (value[i] >= '0' && value[i] <= '9') return true;
+    return false;
+}
+
 inline bool isSurrogate(uint32_t value) {
     return value >= 0xD800 && value <= 0xDFFF;
 }
@@ -91,11 +110,12 @@ inline bool isSurrogate(uint32_t value) {
 inline uint32_t unicodeForGlyphName(std::string const& raw_name) {
     std::string name = detail::stripGlyphVariant(raw_name);
     if (name.size() == 1) return static_cast<uint8_t>(name[0]);
-    if (name.size() >= 5 && name.size() <= 7 && name[0] == 'u') {
-        if (detail::allHex(name, 1, name.size())) {
-            uint32_t value = static_cast<uint32_t>(std::strtoul(name.c_str() + 1, nullptr, 16));
-            if (value <= 0x10FFFF && !detail::isSurrogate(value)) return value;
-        }
+    if (name.size() >= 5 && name.size() <= 7 && name[0] == 'u' &&
+        detail::allHex(name, 1, name.size())) {
+        const uint32_t value = static_cast<uint32_t>(std::strtoul(name.c_str() + 1, nullptr, 16));
+        const bool unambiguous = detail::allUpperHex(name, 1, name.size()) ||
+                                 detail::hasDecimalDigit(name, 1, name.size());
+        if (unambiguous && value <= 0x10FFFF && !detail::isSurrogate(value)) return value;
     }
     if (name.size() == 7 && name.compare(0, 3, "uni") == 0) {
         if (detail::allHex(name, 3, 7)) {
@@ -130,6 +150,17 @@ inline std::vector<uint32_t> unicodeSequenceForGlyphName(std::string const& raw_
         }
         return sequence;
     }
+    // AGL sequence names such as dalethatafpatah.
+    auto const* seq_first = std::begin(kAdobeGlyphSequences);
+    auto const* seq_last = std::end(kAdobeGlyphSequences);
+    auto seq_it = std::lower_bound(seq_first, seq_last, name,
+                                   [](AdobeGlyphSequence const& entry, std::string const& value) {
+                                       return std::strcmp(entry.name, value.c_str()) < 0;
+                                   });
+    if (seq_it != seq_last && name == seq_it->name) {
+        return std::vector<uint32_t>(seq_it->unicode.begin(),
+                                     seq_it->unicode.begin() + seq_it->length);
+    }
     // Ligature names: resolve each '_'-separated component.
     if (name.find('_') != std::string::npos) {
         std::vector<uint32_t> sequence;
@@ -149,6 +180,17 @@ inline std::vector<uint32_t> unicodeSequenceForGlyphName(std::string const& raw_
     uint32_t value = unicodeForGlyphName(name);
     if (!value) return {};
     return {value};
+}
+
+inline const char* adobeGlyphNameForUnicode(uint32_t unicode) {
+    if (!unicode) return nullptr;
+    auto const* first = std::begin(kAdobeGlyphByUnicode);
+    auto const* last = std::end(kAdobeGlyphByUnicode);
+    auto it = std::lower_bound(
+        first, last, unicode,
+        [](AdobeGlyphName const& entry, uint32_t value) { return entry.unicode < value; });
+    if (it != last && it->unicode == unicode) return it->name;
+    return nullptr;
 }
 
 }  // namespace jpdfium_font_encoding
