@@ -104,6 +104,55 @@ class PdfFontEmbedderTest {
     }
 
     @Test
+    void embedsGb1GbeucCidFontWithAUnicodeFallback() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
+        var url = getClass().getResource("/pdfs/general/gb_euc_h_sample.pdf");
+        assertNotNull(url, "GB-EUC-H fixture missing");
+        byte[] input = Files.readAllBytes(Path.of(url.toURI()));
+
+        PdfFontEmbedder.Result result = PdfFontEmbedder.embedMissing(input);
+
+        assertTrue(result.embedded().contains("SimSun"),
+                "predefined-CMap CID font must embed, got " + result);
+        try (PDDocument doc = Loader.loadPDF(result.pdf())) {
+            String text = new org.apache.pdfbox.text.PDFTextStripper().getText(doc);
+            assertTrue(text.contains("中文测试"),
+                    "the embedded fallback must preserve Chinese text, got: " + text);
+        }
+        try (stirling.software.jpdfium.PdfDocument doc =
+                        stirling.software.jpdfium.PdfDocument.open(result.pdf());
+                stirling.software.jpdfium.PdfPage page = doc.page(0)) {
+            assertTrue(page.extractText().contains("中文测试"),
+                    "PDFium must extract Chinese after embedding, got: " + page.extractText());
+        }
+    }
+
+    @Test
+    void embedsKorea1KsceucCidFontWhenFallbackAvailable() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
+        var url = getClass().getResource("/pdfs/general/ksc_euc_h_sample.pdf");
+        assertNotNull(url, "KSC-EUC-H fixture missing");
+        byte[] input = Files.readAllBytes(Path.of(url.toURI()));
+
+        PdfFontEmbedder.Result result = PdfFontEmbedder.embedMissing(input);
+        assertFalse(result.statuses().stream().anyMatch(s -> s.reason().contains("predefined CMap")),
+                "KSC-EUC-H must be supported and never blocked as unsupported CMap");
+        if (result.embedded().contains("Batang")) {
+            try (PDDocument doc = Loader.loadPDF(result.pdf())) {
+                String text = new org.apache.pdfbox.text.PDFTextStripper().getText(doc);
+                assertTrue(text.contains("한국어 테스트"),
+                        "the embedded fallback must preserve Korean text, got: " + text);
+            }
+            try (stirling.software.jpdfium.PdfDocument doc =
+                            stirling.software.jpdfium.PdfDocument.open(result.pdf());
+                    stirling.software.jpdfium.PdfPage page = doc.page(0)) {
+                assertTrue(page.extractText().contains("한국어 테스트"),
+                        "PDFium must extract Korean after embedding, got: " + page.extractText());
+            }
+        }
+    }
+
+    @Test
     void fileBackedEmbeddingCopiesTheInputWhenNoFontMatches(@TempDir Path temp) throws Exception {
         assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
         Path input = helveticaPage(temp.resolve("input.pdf"));
@@ -1008,6 +1057,58 @@ class PdfFontEmbedderTest {
         font.setItem(COSName.ENCODING, encoding);
         font.setItem(COSName.FONT_DESC, new COSDictionary());
         return font;
+    }
+
+    @Test
+    void missingTrueTypeWithoutEncodingKeepsBuiltInMappingAndAddsToUnicode() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
+        byte[] input = missingSimpleTrueTypePdf("ArialMT");
+
+        PdfFontEmbedder.Result result = PdfFontEmbedder.embedMissing(input);
+
+        assertTrue(result.embedded().contains("ArialMT"), "Arial substitute must be installed: " + result);
+        try (PDDocument pdf = Loader.loadPDF(result.pdf())) {
+            COSDictionary font = pdf.getPage(0).getResources()
+                    .getFont(COSName.getPDFName("F1")).getCOSObject();
+            assertTrue(font.getDictionaryObject(COSName.TO_UNICODE) instanceof COSStream,
+                    "a font without /Encoding needs a ToUnicode map");
+            COSArray widths = (COSArray) font.getDictionaryObject(COSName.WIDTHS);
+            assertNotNull(widths, "missing /Widths must be synthesized");
+            assertEquals(256, widths.size(), "/Widths must cover the simple-font code range");
+            assertTrue(widths.getInt(0x48) > 0, "code H must have a positive advance");
+        }
+        try (PdfDocument pdf = PdfDocument.open(result.pdf())) {
+            assertEquals("Hello", pdf.page(0).extractText().strip(),
+                    "built-in code mapping must preserve the text");
+        }
+    }
+
+    private static byte[] missingSimpleTrueTypePdf(String baseFont) throws IOException {
+        try (PDDocument pdf = new PDDocument()) {
+            PDPage page = new PDPage(PDRectangle.LETTER);
+            pdf.addPage(page);
+            COSDictionary descriptor = new COSDictionary();
+            descriptor.setItem(COSName.TYPE, COSName.getPDFName("FontDescriptor"));
+            descriptor.setName(COSName.FONT_NAME, baseFont);
+            descriptor.setInt(COSName.FLAGS, 32);
+
+            COSDictionary font = new COSDictionary();
+            font.setItem(COSName.TYPE, COSName.FONT);
+            font.setName(COSName.SUBTYPE, "TrueType");
+            font.setName(COSName.BASE_FONT, baseFont);
+            font.setItem(COSName.FONT_DESC, descriptor);
+
+            COSDictionary fonts = new COSDictionary();
+            fonts.setItem("F1", font);
+            COSDictionary resources = new COSDictionary();
+            resources.setItem(COSName.FONT, fonts);
+            page.setResources(new PDResources(resources));
+            page.setContents(new PDStream(pdf, new ByteArrayInputStream(
+                    "BT /F1 12 Tf 72 700 Td (Hello) Tj ET".getBytes(StandardCharsets.US_ASCII))));
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            pdf.save(out);
+            return out.toByteArray();
+        }
     }
 
     @Test

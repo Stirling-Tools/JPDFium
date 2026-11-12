@@ -131,7 +131,8 @@ public final class PdfFontEmbedder {
     private static final Pattern TYPE1_NAME = Pattern.compile("/FontName\\s*/(\\S+)");
     private static final List<String> CJK_FAMILY_HINTS = List.of(
             "heisei", "mincho", "gothic", "simsun", "simhei", "fangsong", "kaiti",
-            "batang", "gulim", "kozgothic", "msmincho", "msgothic");
+            "batang", "gulim", "dotum", "gungsuh", "nanum", "malgun", "baekmuk", "song", "kai",
+            "kozgothic", "msmincho", "msgothic");
 
     private static final List<List<String>> METRIC_COMPATIBLE = List.of(
             List.of("liberationsans", "helvetica", "arial", "nimbussans", "nimbussanl", "arimo", "freesans"),
@@ -152,6 +153,8 @@ public final class PdfFontEmbedder {
             List.of("notosanssc", "xiaobiaosong"),
             List.of("notosanssc", "ºúìå", "ëîìå", "âëîgb2312", "âëî"),
             List.of("notosanssc", "arialunicode"),
+            List.of("applegothic", "batang", "gulim", "dotum", "gungsuh", "nanumgothic", "malgungothic",
+                    "baekmukdotum"),
             List.of("notosansarabic", "traditionalarabic"),
             List.of("liberationsans", "swiss742"),
             List.of("notosanssc", "gonotocurrent"));
@@ -337,9 +340,9 @@ public final class PdfFontEmbedder {
 
     /**
      * The native bridge can rewrite {@code /CIDToGIDMap} and {@code /ToUnicode} for
-     * Identity-encoded CID fonts and for the Adobe-Japan1 {@code 90ms-RKSJ-H} CMap, whose
-     * code-to-CID and CID-to-Unicode mappings are bundled. Other predefined CMaps or an
-     * existing CID-to-GID stream carry an ordering that a substitute program does not
+     * Identity-encoded CID fonts and for predefined CJK CMaps (Adobe-Japan1 {@code 90ms-RKSJ-H},
+     * Adobe-Korea1 {@code KSC-EUC-H}, Adobe-GB1 {@code GB-EUC-H}), whose code-to-CID and
+     * CID-to-Unicode mappings are bundled. Other predefined CMaps or an existing CID-to-GID stream carry an ordering that a substitute program does not
      * share; embedding them would keep the document renderable but change its text.
      */
     private static String substitutionBlocker(PdfFontAuditor.FontResource resource) {
@@ -374,7 +377,9 @@ public final class PdfFontEmbedder {
         }
         boolean identityEncoding = "Identity-H".equals(resource.encoding())
                 || "Identity-V".equals(resource.encoding())
-                || "90ms-RKSJ-H".equals(resource.encoding());
+                || "90ms-RKSJ-H".equals(resource.encoding())
+                || "KSC-EUC-H".equals(resource.encoding())
+                || "GB-EUC-H".equals(resource.encoding());
         if (!identityEncoding) {
             return "CID encoding: predefined CMap " + resource.encoding()
                     + " cannot be rewritten without a verified code-to-glyph mapping";
@@ -921,11 +926,14 @@ public final class PdfFontEmbedder {
         int numTables = buf.getShort(4) & 0xFFFF;
         if (numTables < 1 || 12 + numTables * 16 > fontData.length) return fontData;
         int cmapRecordOffset = -1;
+        int headOffset = -1;
         for (int i = 0; i < numTables; i++) {
             int rec = 12 + i * 16;
-            if (buf.getInt(rec) == 0x636D6170) {
+            int tableTag = buf.getInt(rec);
+            if (tableTag == 0x636D6170) {
                 cmapRecordOffset = rec;
-                break;
+            } else if (tableTag == 0x68656164) {
+                headOffset = buf.getInt(rec + 8);
             }
         }
         if (cmapRecordOffset < 0) return fontData;
@@ -979,7 +987,27 @@ public final class PdfFontEmbedder {
             }
         }
         out.putInt(cmapRecordOffset + 4, checksum);
+        if (headOffset >= 0 && headOffset + 12 <= modified.length) {
+            fontChecksum(modified, headOffset + 8);
+        }
         return modified;
+    }
+
+    private static void fontChecksum(byte[] font, int adjustmentOffset) {
+        ByteBuffer view = ByteBuffer.wrap(font);
+        view.putInt(adjustmentOffset, 0);
+        int sum = 0;
+        for (int off = 0; off < font.length; off += 4) {
+            int word = 0;
+            for (int b = 0; b < 4 && off + b < font.length; b++) {
+                word = (word << 8) | (font[off + b] & 0xFF);
+            }
+            if (font.length - off < 4) {
+                word <<= (4 - (font.length - off)) * 8;
+            }
+            sum += word;
+        }
+        view.putInt(adjustmentOffset, 0xB1B0AFBA - sum);
     }
 
     private static byte[] extractFace(byte[] collection, int face) {

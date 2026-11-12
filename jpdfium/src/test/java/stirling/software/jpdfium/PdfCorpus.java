@@ -46,6 +46,8 @@ public final class PdfCorpus {
         entry("TAMReview.pdf"),
         entry("Pages-tree-refs.pdf"),
         entry("90ms_rksj_h_sample.pdf"),
+        entry("ksc_euc_h_sample.pdf"),
+        entry("gb_euc_h_sample.pdf"),
 
         entry("ArabicCIDTrueType.pdf"),
         entry("XiaoBiaoSong.pdf"),

@@ -32,6 +32,7 @@ public final class CompressOptions {
     private final int zopfliIterations;      // Rust: zopfli iteration count
     private final int zopfliMaxInputBytes;   // Rust: skip zopfli above this size, 0 = unlimited
     private final boolean subsetFonts;       // Subset already-embedded TrueType/OpenType fonts
+    private final boolean reSubsetTaggedFonts; // Re-subset fonts that already carry a subset tag
 
     private CompressOptions(Builder b) {
         this.imageQuality = b.imageQuality;
@@ -46,6 +47,7 @@ public final class CompressOptions {
         this.zopfliIterations = b.zopfliIterations;
         this.zopfliMaxInputBytes = b.zopfliMaxInputBytes;
         this.subsetFonts = b.subsetFonts;
+        this.reSubsetTaggedFonts = b.reSubsetTaggedFonts;
     }
 
     public int imageQuality() { return imageQuality; }
@@ -91,6 +93,11 @@ public final class CompressOptions {
      * in after deciding their text/render contract.
      */
     public boolean subsetFonts() { return subsetFonts; }
+    /**
+     * Whether to re-subset fonts that already carry a subset tag (e.g. {@code ABCDEF+FontName}).
+     * Default: {@code false}.
+     */
+    public boolean reSubsetTaggedFonts() { return reSubsetTaggedFonts; }
 
     /**
      * @deprecated the option was removed; the lossless path no longer recompresses
@@ -121,6 +128,7 @@ public final class CompressOptions {
         private int zopfliIterations = 15;
         private int zopfliMaxInputBytes = 0;
         private boolean subsetFonts = false;
+        private boolean reSubsetTaggedFonts = false;
 
         private Builder() {}
 
@@ -203,6 +211,15 @@ public final class CompressOptions {
          */
         public Builder subsetFonts(boolean v) {
             this.subsetFonts = v;
+            return this;
+        }
+
+        /**
+         * Whether to re-subset fonts that already carry a subset tag (e.g. {@code ABCDEF+FontName}).
+         * Default {@code false}.
+         */
+        public Builder reSubsetTaggedFonts(boolean v) {
+            this.reSubsetTaggedFonts = v;
             return this;
         }
 
