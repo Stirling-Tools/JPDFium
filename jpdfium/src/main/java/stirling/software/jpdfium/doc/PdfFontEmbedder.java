@@ -988,7 +988,7 @@ public final class PdfFontEmbedder {
             }
         }
         out.putInt(cmapRecordOffset + 4, checksum);
-        if (headOffset >= 12 && headOffset + 54 <= modified.length) {
+        if (headOffset >= 12 && headOffset <= modified.length - 54) {
             updateChecksumAdjustment(modified, headOffset + 8);
         }
         return modified;
