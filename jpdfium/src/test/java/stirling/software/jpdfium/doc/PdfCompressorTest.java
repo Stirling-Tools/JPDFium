@@ -5,6 +5,8 @@ import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
 import org.apache.pdfbox.pdmodel.font.PDType0Font;
+import org.apache.pdfbox.pdmodel.font.PDTrueTypeFont;
+import org.apache.pdfbox.pdmodel.font.encoding.WinAnsiEncoding;
 import org.apache.pdfbox.text.PDFTextStripper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
@@ -116,6 +118,55 @@ class PdfCompressorTest {
             int diff = differingPixels(before, render(out.bytes(), 0));
             assertEquals(0, diff,
                     "rendering before and after font subsetting must match identically");
+        }
+    }
+
+    private static Path simpleTrueTypePdf(Path temp) throws Exception {
+        Path src = temp.resolve("simple-font.pdf");
+        try (InputStream font = PdfCompressorTest.class.getResourceAsStream(
+                        "/org/apache/pdfbox/resources/ttf/LiberationSans-Regular.ttf");
+                PDDocument pdf = new PDDocument()) {
+            assertNotNull(font, "PDFBox no longer bundles LiberationSans");
+            PDPage page = new PDPage();
+            pdf.addPage(page);
+            PDTrueTypeFont typeface = PDTrueTypeFont.load(
+                    pdf, font, WinAnsiEncoding.INSTANCE);
+            try (PDPageContentStream content = new PDPageContentStream(pdf, page)) {
+                content.beginText();
+                content.setFont(typeface, 24);
+                content.newLineAtOffset(72, 700);
+                content.showText("Hello World");
+                content.endText();
+            }
+            pdf.save(src.toFile());
+        }
+        return src;
+    }
+
+    @Test
+    void compressSubsetsSimpleTrueTypeFont(@TempDir Path temp) throws Exception {
+        assumeTrue(QpdfLib.isSubsetFontsSupported(), "native font subsetting unavailable");
+        Path src = simpleTrueTypePdf(temp);
+        long originalSize = Files.size(src);
+        BufferedImage before = render(Files.readAllBytes(src), 0);
+
+        try (PdfDocument doc = PdfDocument.open(src)) {
+            PdfCompressor.CompressResultWithBytes out = PdfCompressor.compress(doc,
+                    CompressOptions.builder().preset(CompressPreset.WEB).subsetFonts(true).build());
+            assertTrue(out.result().actions().contains("Subsetted 1 embedded font(s)"),
+                    "expected one subsetted simple font, actions=" + out.result().actions());
+            assertTrue(out.bytes().length < originalSize / 2,
+                    "simple subset output should be less than half the source: "
+                            + out.bytes().length + " vs " + originalSize);
+            assertTrue(out.bytes().length < originalSize / 10,
+                    "compact simple subsets should approach service output, not retain "
+                            + "every glyph slot: " + out.bytes().length + " vs " + originalSize);
+            try (PDDocument reopened = Loader.loadPDF(out.bytes())) {
+                assertEquals("Hello World", new PDFTextStripper().getText(reopened).strip(),
+                        "the simple subset must keep the original text");
+            }
+            assertEquals(0, differingPixels(before, render(out.bytes(), 0)),
+                    "simple subsetting must render identically");
         }
     }
 

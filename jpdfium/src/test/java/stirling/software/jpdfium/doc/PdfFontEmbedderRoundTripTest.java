@@ -29,6 +29,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -182,11 +183,21 @@ class PdfFontEmbedderRoundTripTest {
                     continue;
                 }
                 try (a; PdfPage b = after.page(i)) {
-                    if (!gainedToUnicode) {
-                        assertSameOrResolvedText(a.extractText(), b.extractText(), pdf.getFileName() + " page " + i);
-                    } else {
-                        String txt = b.extractText();
-                        assertFalse(txt.contains("\uFFFD"), pdf.getFileName() + " page " + i + " text contains U+FFFD after gaining ToUnicode");
+                    String beforeText = a.extractText();
+                    String afterText = b.extractText();
+                    assertSameOrResolvedText(beforeText, afterText,
+                            pdf.getFileName() + " page " + i);
+                    if (gainedToUnicode) {
+                        if (!beforeText.isEmpty()) {
+                            assertFalse(afterText.isEmpty(),
+                                    pdf.getFileName() + " page " + i
+                                            + " lost text after gaining ToUnicode");
+                        }
+                        if (!beforeText.contains("\uFFFD")) {
+                            assertFalse(afterText.contains("\uFFFD"),
+                                    pdf.getFileName() + " page " + i
+                                            + " introduced U+FFFD after gaining ToUnicode");
+                        }
                     }
                     BufferedImage ia = renderable(a);
                     if (ia == null) continue;
@@ -278,11 +289,11 @@ class PdfFontEmbedderRoundTripTest {
         return usable;
     }
 
-    private static PDDocument load(Path pdf) throws java.io.IOException {
+    private static PDDocument load(Path pdf) throws IOException {
         PDDocument doc;
         try {
             doc = Loader.loadPDF(pdf.toFile());
-        } catch (java.io.IOException | RuntimeException e) {
+        } catch (IOException | RuntimeException | LinkageError e) {
             assumeTrue(false, "PDFBox cannot load: " + e.getMessage());
             return null;
         }
@@ -293,13 +304,13 @@ class PdfFontEmbedderRoundTripTest {
         return doc;
     }
 
-    private static byte[] save(PDDocument doc) throws java.io.IOException {
+    private static byte[] save(PDDocument doc) throws IOException {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         doc.save(out, org.apache.pdfbox.pdfwriter.compress.CompressParameters.NO_COMPRESSION);
         return out.toByteArray();
     }
 
-    private static void assertEmbeddedStylesMatch(byte[] pdf, java.util.Collection<String> embeddedNames) throws java.io.IOException {
+    private static void assertEmbeddedStylesMatch(byte[] pdf, Collection<String> embeddedNames) throws IOException {
         try (PDDocument doc = Loader.loadPDF(pdf)) {
             for (COSObject object : doc.getDocument().getObjectsByType(COSName.FONT)) {
                 if (!(object.getObject() instanceof COSDictionary font)) continue;
@@ -317,24 +328,29 @@ class PdfFontEmbedderRoundTripTest {
                     if (ttf.getName() != null) {
                         String expectedStyle = style(name);
                         String actualStyle = style(ttf.getName());
-                        if (!expectedStyle.isEmpty() && actualStyle.isEmpty()) {
-                            continue;
-                        }
                         assertEquals(expectedStyle, actualStyle, name + " embedded as " + ttf.getName());
                     }
-                } catch (java.io.IOException unparsableByPdfBox) {
+                } catch (IOException unparsableByPdfBox) {
                 }
             }
         }
     }
 
-    private static long fontsWithToUnicode(byte[] pdf) throws java.io.IOException {
+    private static long fontsWithToUnicode(byte[] pdf) throws IOException {
         try (PDDocument doc = Loader.loadPDF(pdf)) {
             return doc.getDocument().getObjectsByType(COSName.FONT).stream()
                     .map(COSObject::getObject)
                     .filter(o -> o instanceof COSDictionary d && d.containsKey(COSName.TO_UNICODE))
                     .count();
         }
+    }
+
+    private static boolean isSubsequence(String a, String b) {
+        int matched = 0;
+        for (int i = 0; i < b.length() && matched < a.length(); i++) {
+            if (b.charAt(i) == a.charAt(matched)) matched++;
+        }
+        return matched == a.length();
     }
 
     private static void assertSameOrResolvedText(String before, String after, String where) {
@@ -345,19 +361,43 @@ class PdfFontEmbedderRoundTripTest {
         // position; a replacement is only acceptable where the original text
         // already carried the unresolved marker.
         boolean unresolved = a.indexOf('?') >= 0 || a.indexOf('\uFFFD') >= 0;
+        if (!unresolved && a.equals(b)) return;
+        if (!unresolved && b.length() > a.length()
+                && !b.contains("\uFFFD") && isSubsequence(a, b)) {
+            // Repair can recover characters PDFium silently omitted from the
+            // source (sample_fonts_solidconvertor.pdf). Requiring the original
+            // text to remain an ordered subsequence still catches dropped text.
+            return;
+        }
         if (!unresolved) {
             assertEquals(a, b, where + " text");
             return;
         }
-        assertEquals(a.length(), b.length(), where + " text length");
-        for (int i = 0; i < a.length(); i++) {
-            char c = a.charAt(i);
-            assertTrue(c == b.charAt(i) || c == '?' || c == '\uFFFD',
-                    where + " text differs at " + i + ": " + a + " vs " + b);
+        assertFalse(b.isEmpty(), where + " text became empty after resolving");
+        // Resolving a replacement can expand one marker into several scalars
+        // (for example a ligature or a surrogate pair). Require every resolved
+        // character to survive in order rather than requiring an equal length.
+        int matched = 0;
+        int i = 0;
+        while (i < b.length() && matched < a.length()) {
+            char expected = a.charAt(matched);
+            if (expected == '?' || expected == '\uFFFD') {
+                matched++;
+            } else if (b.charAt(i) == expected) {
+                matched++;
+                i++;
+            } else {
+                i++;
+            }
         }
+        while (matched < a.length()
+                && (a.charAt(matched) == '?' || a.charAt(matched) == '\uFFFD')) {
+            matched++;
+        }
+        assertEquals(a.length(), matched, where + " lost resolved text: " + a + " vs " + b);
     }
 
-        private static String style(String name) {
+    private static String style(String name) {
         String lower = name.replaceFirst("^[A-Z]{6}\\+", "").toLowerCase(java.util.Locale.ROOT);
         return (lower.matches(".*(bold|black|heavy|negrita|negreta|fett|grassetto|gras).*") ? "bold" : "")
                 + (lower.matches(".*(italic|oblique|cursiva|kursiv|corsivo|italique|cursiva).*") ? "italic" : "");

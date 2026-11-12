@@ -325,6 +325,18 @@ public final class PdfFontAuditor {
      * @return fonts in file order, or an empty list when the native build cannot inventory
      */
     public static List<FontResource> inventory(PdfDocument doc) {
+        // Prefer the original file so a large file-backed document is never
+        // serialized just to list its font resources.
+        Path sourcePath = doc.sourcePath();
+        if (!doc.isContentModified()
+                && sourcePath != null
+                && QpdfLib.isFileFontInventorySupported()) {
+            String json = QpdfLib.inspectFonts(sourcePath);
+            if (json != null) {
+                List<FontResource> parsed = parseInventory(json);
+                if (!parsed.isEmpty()) return parsed;
+            }
+        }
         // sourceBytes() is the open-time snapshot. After an in-memory edit it no longer
         // describes the document, so inventory the serialized current state instead.
         byte[] source = doc.sourceBytes();

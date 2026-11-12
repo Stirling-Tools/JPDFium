@@ -250,13 +250,16 @@ void ClampPatternSteps(QPDFObjectHandle pattern) {
     if (!type.isInteger() || type.getIntValueAsInt() != 1) return;
     for (const char* key : {"/XStep", "/YStep"}) {
         QPDFObjectHandle value = pattern.getKey(key);
+        auto needsClamp = [](double candidate) {
+            return !std::isfinite(candidate) || candidate <= 0.0 || candidate > 32767.0;
+        };
         double step = value.isNumber() ? value.getNumericValue() : 1.0;
-        if (!std::isfinite(step) || step <= 0.0) {
-            step = 1.0;
-        } else if (step > 32767.0) {
-            step = 32767.0;
-        }
-        if (!value.isNumber() || value.getNumericValue() != step) {
+        if (!value.isNumber() || needsClamp(step)) {
+            if (!std::isfinite(step) || step <= 0.0) {
+                step = 1.0;
+            } else if (step > 32767.0) {
+                step = 32767.0;
+            }
             pattern.replaceKey(key, QPDFObjectHandle::newReal(step, 4));
         }
     }
