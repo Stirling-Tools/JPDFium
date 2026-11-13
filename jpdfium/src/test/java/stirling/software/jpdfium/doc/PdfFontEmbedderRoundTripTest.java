@@ -401,9 +401,10 @@ class PdfFontEmbedderRoundTripTest {
                 i++;
             }
         }
-        while (matched < a.length()
+        while (matched < a.length() && i < b.length()
                 && (a.charAt(matched) == '?' || a.charAt(matched) == '\uFFFD')) {
             matched++;
+            i++;
         }
         assertEquals(a.length(), matched, where + " lost resolved text: " + a + " vs " + b);
     }
