@@ -350,8 +350,9 @@ public final class PdfFontEmbedder {
 
     /**
      * The native bridge can rewrite {@code /CIDToGIDMap} and {@code /ToUnicode} for
-     * Identity-encoded CID fonts and for predefined CJK CMaps (Adobe-Japan1 {@code 90ms-RKSJ-H},
-     * Adobe-Korea1 {@code KSC-EUC-H}, Adobe-GB1 {@code GB-EUC-H}), whose code-to-CID and
+     * Identity-encoded CID fonts and for predefined CJK CMaps (Adobe-Japan1 {@code 90ms-RKSJ-H}
+     * and {@code 90msp-RKSJ-H}, Adobe-Korea1 {@code KSC-EUC-H}, Adobe-GB1 {@code GB-EUC-H}),
+     * whose code-to-CID and
      * CID-to-Unicode mappings are bundled. Other predefined CMaps or an existing CID-to-GID stream carry an ordering that a substitute program does not
      * share; embedding them would keep the document renderable but change its text.
      */
@@ -388,6 +389,7 @@ public final class PdfFontEmbedder {
         boolean identityEncoding = "Identity-H".equals(resource.encoding())
                 || "Identity-V".equals(resource.encoding())
                 || "90ms-RKSJ-H".equals(resource.encoding())
+                || "90msp-RKSJ-H".equals(resource.encoding())
                 || "KSC-EUC-H".equals(resource.encoding())
                 || "GB-EUC-H".equals(resource.encoding());
         if (!identityEncoding) {
