@@ -119,13 +119,15 @@ public final class PdfTextSearcher {
             i++;
         }
         if (i >= end) throw new NumberFormatException("empty number");
-        int result = 0;
+        long limit = negative ? 2_147_483_648L : 2_147_483_647L;
+        long result = 0;
         for (; i < end; i++) {
             char c = s.charAt(i);
             if (c < '0' || c > '9') throw new NumberFormatException("not a digit");
             result = result * 10 + (c - '0');
+            if (result > limit) throw new NumberFormatException("integer overflow");
         }
-        return negative ? -result : result;
+        return (int) (negative ? -result : result);
     }
 
     /**
