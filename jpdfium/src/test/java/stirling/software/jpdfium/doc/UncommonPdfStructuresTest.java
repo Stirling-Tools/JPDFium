@@ -62,6 +62,23 @@ class UncommonPdfStructuresTest {
         }
     }
 
+    @Test
+    void cjkDualWritingModeAndHexEscapedBaseFont() throws Exception {
+        try (PdfDocument doc = PdfDocument.open(fixture("cjk-dual-writing-mode.pdf"))) {
+            assertEquals(1, doc.pageCount());
+            PdfFontAuditor.AuditReport audit = PdfFontAuditor.audit(doc);
+            assertTrue(audit.totalFontCount() >= 1);
+            assertTrue(audit.fonts().stream().anyMatch(f -> f.baseName().contains("MS-Gothic")));
+            BufferedImage page = new PdfRenderer(doc).renderImageWithDPI(0, 96);
+            assertTrue(page.getWidth() > 0 && page.getHeight() > 0);
+            byte[] saved = doc.saveBytes();
+            try (PdfDocument reopened = PdfDocument.open(saved)) {
+                assertEquals(1, reopened.pageCount());
+                assertEquals(audit.totalFontCount(), PdfFontAuditor.audit(reopened).totalFontCount());
+            }
+        }
+    }
+
     private static Path fixture(String name) throws Exception {
         URL url = UncommonPdfStructuresTest.class.getResource("/pdfs/general/" + name);
         assertNotNull(url, name + " test resource missing");
