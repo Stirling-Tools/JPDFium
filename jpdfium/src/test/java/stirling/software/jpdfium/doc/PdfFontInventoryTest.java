@@ -5,7 +5,10 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.lang.foreign.MemorySegment;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -14,6 +17,13 @@ import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.PDResources;
+import org.apache.pdfbox.pdmodel.common.PDRectangle;
+import org.apache.pdfbox.pdmodel.common.PDStream;
+import org.apache.pdfbox.cos.COSDictionary;
+import org.apache.pdfbox.cos.COSName;
 import org.junit.jupiter.api.Test;
 
 import stirling.software.jpdfium.PdfDocument;
@@ -85,6 +95,32 @@ class PdfFontInventoryTest {
 
         assertTrue(fonts.containsKey("ºÚÌå"), "mojibake name missing: " + fonts.keySet());
         assertFalse(fonts.keySet().stream().anyMatch(name -> name.indexOf('\uFFFD') >= 0));
+    }
+
+    @Test
+    void fontDictionaryWithoutTypeIsInventoried() throws Exception {
+        assumeTrue(PdfFontAuditor.inventoryAvailable(), "font inventory not in this native build");
+        byte[] pdf;
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(PDRectangle.LETTER);
+            doc.addPage(page);
+            COSDictionary font = new COSDictionary();
+            font.setName(COSName.SUBTYPE, "TrueType");
+            font.setName(COSName.BASE_FONT, "ArialMT");
+            COSDictionary fonts = new COSDictionary();
+            fonts.setItem("F1", font);
+            COSDictionary resources = new COSDictionary();
+            resources.setItem(COSName.FONT, fonts);
+            page.setResources(new PDResources(resources));
+            page.setContents(new PDStream(doc, new ByteArrayInputStream(
+                    "BT /F1 12 Tf 72 700 Td (H) Tj ET".getBytes(StandardCharsets.US_ASCII))));
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            doc.save(out);
+            pdf = out.toByteArray();
+        }
+
+        assertTrue(byName(PdfFontAuditor.inventoryBytes(pdf)).containsKey("ArialMT"),
+                "a reachable font dictionary without /Type must stay in the inventory");
     }
 
     @Test
