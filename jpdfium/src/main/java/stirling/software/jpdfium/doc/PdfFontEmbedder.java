@@ -7,7 +7,9 @@ import java.io.InputStreamReader;
 import java.io.StringReader;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.charset.CharacterCodingException;
 import java.nio.charset.Charset;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
@@ -277,19 +279,22 @@ public final class PdfFontEmbedder {
             if (face != null && !face.embeddable()) face = null;
             if (face == null) {
                 if (index == null) index = indexFor(fontDirs);
-                face = index.get(key);
-                if (face != null && !face.embeddable()) face = null;
+                for (String candidate : nameKeys(name)) {
+                    face = index.get(candidate);
+                    if (face != null && face.embeddable()) break;
+                    face = null;
+                }
             }
             if (face == null && bundled != null) {
-                face = resolve(bundled, key);
+                face = resolveName(bundled, name);
             }
             if (face == null) {
                 if (index == null) index = indexFor(fontDirs);
-                face = resolve(index, key);
+                face = resolveName(index, name);
             }
             if (face == null) {
                 if (index == null) index = indexFor(fontDirs);
-                Face restricted = restricted(index, key);
+                Face restricted = restrictedName(index, name);
                 statuses.add(restricted == null
                         ? new FontStatus(name, "", -1, false, "no matching font")
                         : new FontStatus(name, source(restricted), restricted.fsType(), false,
@@ -430,11 +435,11 @@ public final class PdfFontEmbedder {
                         "available");
             }
         }
-        face = resolve(index, key);
+        face = resolveName(index, baseName);
         if (face != null) {
             return new FontStatus(baseName, source(face), face.fsType(), true, "available");
         }
-        Face restricted = restricted(index, key);
+        Face restricted = restrictedName(index, baseName);
         return restricted == null
                 ? new FontStatus(baseName, "", -1, false, "no matching font")
                 : new FontStatus(baseName, source(restricted), restricted.fsType(), false,
@@ -491,7 +496,7 @@ public final class PdfFontEmbedder {
         Map<Face, byte[]> operationPrograms = new HashMap<>();
         for (String name : missing) {
             if (blockers.containsKey(name)) continue;
-            Face face = resolve(index, key(name));
+            Face face = resolveName(index, name);
             if (face == null) continue;
             byte[] data = program(face, operationPrograms);
             if (!embeddableProgram(programFsType(face, data))) continue;
@@ -508,6 +513,43 @@ public final class PdfFontEmbedder {
     /** File-backed variant of {@link #embedMissing(byte[], Path...)}. */
     public static Result embedMissing(Path input, Path... fontDirs) throws IOException {
         return embedMissing(Files.readAllBytes(input), fontDirs);
+    }
+
+    private static Face resolveName(Map<String, Face> index, String name) {
+        for (String candidate : nameKeys(name)) {
+            Face face = resolve(index, candidate);
+            if (face != null) return face;
+        }
+        return null;
+    }
+
+    private static Face restrictedName(Map<String, Face> index, String name) {
+        for (String candidate : nameKeys(name)) {
+            Face face = restricted(index, candidate);
+            if (face != null) return face;
+        }
+        return null;
+    }
+
+    static List<String> nameKeys(String name) {
+        List<String> keys = new ArrayList<>(2);
+        String direct = key(name);
+        if (!direct.isEmpty()) keys.add(direct);
+        boolean latin1 = !name.isEmpty() && name.chars().allMatch(c -> c <= 0xFF);
+        if (latin1) {
+            try {
+                String decoded = StandardCharsets.UTF_8.newDecoder()
+                        .onMalformedInput(CodingErrorAction.REPORT)
+                        .onUnmappableCharacter(CodingErrorAction.REPORT)
+                        .decode(ByteBuffer.wrap(name.getBytes(StandardCharsets.ISO_8859_1)))
+                        .toString();
+                String decodedKey = key(decoded);
+                if (!decodedKey.isEmpty() && !keys.contains(decodedKey)) keys.add(decodedKey);
+            } catch (CharacterCodingException ignored) {
+                // Not a UTF-8 byte sequence after the Latin-1 round trip.
+            }
+        }
+        return keys;
     }
 
     static String key(String name) {

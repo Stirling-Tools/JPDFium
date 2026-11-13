@@ -1534,6 +1534,12 @@ class PdfFontEmbedderTest {
     }
 
     @Test
+    void utf8NameBytesProduceDecodedLookupKey() {
+        assertTrue(PdfFontEmbedder.nameKeys("Caf\u00c3\u00a9").contains("café"),
+                "UTF-8 name bytes must also resolve as decoded text");
+    }
+
+    @Test
     void missingFontReportsNoCandidate() {
         PdfFontEmbedder.FontStatus status = PdfFontEmbedder.diagnose("DefinitelyNotAFontFamily");
         assertFalse(status.resolved());
