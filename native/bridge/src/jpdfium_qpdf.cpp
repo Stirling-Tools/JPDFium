@@ -4036,8 +4036,10 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
             bool identityCidMap = cidMap.isNull() || cidMap.isNameAndEquals("/Identity");
             bool identityEncoding = font.getKey("/Encoding").isNameAndEquals("/Identity-H") ||
                                     font.getKey("/Encoding").isNameAndEquals("/Identity-V");
+            QPDFObjectHandle cjkEncoding = font.getKey("/Encoding");
             bool japan1Rksj = cid && !hasProgram && onlyMissing &&
-                              font.getKey("/Encoding").isNameAndEquals("/90ms-RKSJ-H");
+                              (cjkEncoding.isNameAndEquals("/90ms-RKSJ-H") ||
+                               cjkEncoding.isNameAndEquals("/90msp-RKSJ-H"));
             bool korea1Ksc = cid && !hasProgram && onlyMissing &&
                              font.getKey("/Encoding").isNameAndEquals("/KSC-EUC-H");
             bool gb1Gb = cid && !hasProgram && onlyMissing &&
