@@ -144,6 +144,88 @@ class PdfFontEmbedderTest {
         }
     }
 
+    @Test
+    void embedsJapan1VerticalRksjCidFont() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
+        var url = getClass().getResource("/pdfs/general/90ms_rksj_h_sample.pdf");
+        assertNotNull(url, "90ms-RKSJ-H fixture missing");
+        byte[] input = Files.readAllBytes(Path.of(url.toURI()));
+        for (String verticalCMap : List.of("90ms-RKSJ-V", "90msp-RKSJ-V")) {
+            byte[] vertical = withCidEncoding(input, "90ms-RKSJ-H", verticalCMap);
+            PdfFontEmbedder.Result result = PdfFontEmbedder.embedMissing(vertical);
+            assertTrue(result.embedded().contains("HeiseiMin-W3"),
+                    verticalCMap + " must embed, got " + result);
+            try (PDDocument doc = Loader.loadPDF(result.pdf())) {
+                String text = new PDFTextStripper().getText(doc).replaceAll("\\s+", "");
+                assertTrue(text.contains("日本語テスト"),
+                        verticalCMap + " must preserve Japanese text");
+            }
+        }
+    }
+
+    @Test
+    void embedsVerticalKoreaAndGbPredefinedCMaps() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
+        var gbUrl = getClass().getResource("/pdfs/general/gb_euc_h_sample.pdf");
+        assertNotNull(gbUrl, "GB-EUC-H fixture missing");
+        byte[] gbInput = Files.readAllBytes(Path.of(gbUrl.toURI()));
+        byte[] gbVertical = withCidEncoding(gbInput, "GB-EUC-H", "GB-EUC-V");
+        PdfFontEmbedder.Result gbResult = PdfFontEmbedder.embedMissing(gbVertical);
+        assertTrue(gbResult.embedded().contains("SimSun"),
+                "GB-EUC-V must embed, got " + gbResult);
+        try (PDDocument doc = Loader.loadPDF(gbResult.pdf())) {
+            String text = new PDFTextStripper().getText(doc).replaceAll("\\s+", "");
+            assertTrue(text.contains("中文测试"),
+                    "GB-EUC-V must preserve Chinese text");
+        }
+
+        assumeTrue(PdfFontEmbedder.diagnose("Batang").resolved(),
+                "no Korean-capable substitute installed");
+        var kscUrl = getClass().getResource("/pdfs/general/ksc_euc_h_sample.pdf");
+        assertNotNull(kscUrl, "KSC-EUC-H fixture missing");
+        byte[] kscInput = Files.readAllBytes(Path.of(kscUrl.toURI()));
+        byte[] kscVertical = withCidEncoding(kscInput, "KSC-EUC-H", "KSC-EUC-V");
+        PdfFontEmbedder.Result kscResult = PdfFontEmbedder.embedMissing(kscVertical);
+        assertTrue(kscResult.embedded().contains("Batang"),
+                "KSC-EUC-V must embed, got " + kscResult);
+        try (PDDocument doc = Loader.loadPDF(kscResult.pdf())) {
+            String text = new PDFTextStripper().getText(doc).replaceAll("\\s+", "");
+            assertTrue(text.contains("한국어테스트"),
+                    "KSC-EUC-V must preserve Korean text");
+        }
+    }
+
+    @Test
+    void embedsJapan1RksjWithNonAsciiBaseFontWithoutToUnicode() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
+        var url = getClass().getResource("/pdfs/general/90ms_rksj_h_sample.pdf");
+        assertNotNull(url, "90ms-RKSJ-H fixture missing");
+        byte[] input = Files.readAllBytes(Path.of(url.toURI()));
+        byte[] modified;
+        try (PDDocument doc = Loader.loadPDF(input)) {
+            for (PDPage page : doc.getPages()) {
+                for (COSName name : page.getResources().getFontNames()) {
+                    COSDictionary font = page.getResources().getFont(name).getCOSObject();
+                    COSArray descendants = (COSArray) font.getDictionaryObject(COSName.DESCENDANT_FONTS);
+                    if (descendants != null && descendants.size() > 0) {
+                        font.removeItem(COSName.TO_UNICODE);
+                        font.setItem(COSName.BASE_FONT, COSName.getPDFName("\uFF2D\uFF33 \u30B4\u30B7\u3083\u30AF"));
+                        COSDictionary desc = (COSDictionary) descendants.getObject(0);
+                        desc.removeItem(COSName.TO_UNICODE);
+                        desc.setItem(COSName.BASE_FONT, COSName.getPDFName("\uFF2D\uFF33 \u30B4\u30B7\u3083\u30AF"));
+                    }
+                }
+            }
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            doc.save(out);
+            modified = out.toByteArray();
+        }
+
+        PdfFontEmbedder.Result result = PdfFontEmbedder.embedMissing(modified);
+        assertFalse(result.statuses().stream().anyMatch(s -> s.reason().contains("legacy non-ASCII")),
+                "bundled CJK CMap must not be blocked by non-ASCII BaseFont check: " + result);
+    }
+
     private static byte[] withPageContent(byte[] pdf, String content) throws IOException {
         try (PDDocument doc = Loader.loadPDF(pdf)) {
             doc.getPage(0).setContents(new PDStream(doc,
