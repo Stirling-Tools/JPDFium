@@ -4046,14 +4046,18 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
             bool identityEncoding = font.getKey("/Encoding").isNameAndEquals("/Identity-H") ||
                                     font.getKey("/Encoding").isNameAndEquals("/Identity-V");
             QPDFObjectHandle cjkEncoding = font.getKey("/Encoding");
-            bool japan1Proportional =
-                cid && !hasProgram && onlyMissing && cjkEncoding.isNameAndEquals("/90msp-RKSJ-H");
+            bool japan1Proportional = cid && !hasProgram && onlyMissing &&
+                                      (cjkEncoding.isNameAndEquals("/90msp-RKSJ-H") ||
+                                       cjkEncoding.isNameAndEquals("/90msp-RKSJ-V"));
             bool japan1Rksj = cid && !hasProgram && onlyMissing &&
-                              (cjkEncoding.isNameAndEquals("/90ms-RKSJ-H") || japan1Proportional);
+                              (cjkEncoding.isNameAndEquals("/90ms-RKSJ-H") ||
+                               cjkEncoding.isNameAndEquals("/90ms-RKSJ-V") || japan1Proportional);
             bool korea1Ksc = cid && !hasProgram && onlyMissing &&
-                             font.getKey("/Encoding").isNameAndEquals("/KSC-EUC-H");
+                             (cjkEncoding.isNameAndEquals("/KSC-EUC-H") ||
+                              cjkEncoding.isNameAndEquals("/KSC-EUC-V"));
             bool gb1Gb = cid && !hasProgram && onlyMissing &&
-                         font.getKey("/Encoding").isNameAndEquals("/GB-EUC-H");
+                         (cjkEncoding.isNameAndEquals("/GB-EUC-H") ||
+                          cjkEncoding.isNameAndEquals("/GB-EUC-V"));
             bool predefinedCjk = japan1Rksj || korea1Ksc || gb1Gb;
             std::map<uint32_t, uint32_t> cidUnicode;
             std::map<uint32_t, uint32_t> codeUnicode;

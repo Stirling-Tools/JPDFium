@@ -350,14 +350,15 @@ public final class PdfFontEmbedder {
 
     /**
      * The native bridge can rewrite {@code /CIDToGIDMap} and {@code /ToUnicode} for
-     * Identity-encoded CID fonts and for predefined CJK CMaps (Adobe-Japan1 {@code 90ms-RKSJ-H}
-     * and {@code 90msp-RKSJ-H}, Adobe-Korea1 {@code KSC-EUC-H}, Adobe-GB1 {@code GB-EUC-H}),
-     * whose code-to-CID and
+     * Identity-encoded CID fonts and for predefined CJK CMaps (Adobe-Japan1 {@code 90ms-RKSJ-H},
+     * {@code 90ms-RKSJ-V}, {@code 90msp-RKSJ-H}, {@code 90msp-RKSJ-V}, Adobe-Korea1 {@code KSC-EUC-H},
+     * {@code KSC-EUC-V}, Adobe-GB1 {@code GB-EUC-H}, {@code GB-EUC-V}), whose code-to-CID and
      * CID-to-Unicode mappings are bundled. Other predefined CMaps or an existing CID-to-GID stream carry an ordering that a substitute program does not
      * share; embedding them would keep the document renderable but change its text.
      */
     private static String substitutionBlocker(PdfFontAuditor.FontResource resource) {
-        if (!resource.hasToUnicode() && !isAscii(resource.baseName())) {
+        boolean supportedCjk = isSupportedCjkPredefinedCMap(resource.encoding());
+        if (!resource.hasToUnicode() && !isAscii(resource.baseName()) && !supportedCjk) {
             // Legacy CJK producers put GBK/Shift-JIS bytes in /BaseFont and rely on the
             // original font's glyph order. A substitute would change both text extraction
             // and the drawn glyphs because there is no /ToUnicode to preserve.
@@ -388,10 +389,7 @@ public final class PdfFontEmbedder {
         }
         boolean identityEncoding = "Identity-H".equals(resource.encoding())
                 || "Identity-V".equals(resource.encoding())
-                || "90ms-RKSJ-H".equals(resource.encoding())
-                || "90msp-RKSJ-H".equals(resource.encoding())
-                || "KSC-EUC-H".equals(resource.encoding())
-                || "GB-EUC-H".equals(resource.encoding());
+                || supportedCjk;
         if (!identityEncoding) {
             return "CID encoding: predefined CMap " + resource.encoding()
                     + " cannot be rewritten without a verified code-to-glyph mapping";
@@ -403,6 +401,17 @@ public final class PdfFontEmbedder {
                     + " carries a glyph order a substitute program does not share";
         }
         return null;
+    }
+
+    private static boolean isSupportedCjkPredefinedCMap(String encoding) {
+        return "90ms-RKSJ-H".equals(encoding)
+                || "90ms-RKSJ-V".equals(encoding)
+                || "90msp-RKSJ-H".equals(encoding)
+                || "90msp-RKSJ-V".equals(encoding)
+                || "KSC-EUC-H".equals(encoding)
+                || "KSC-EUC-V".equals(encoding)
+                || "GB-EUC-H".equals(encoding)
+                || "GB-EUC-V".equals(encoding);
     }
 
     private static boolean isAscii(String value) {
