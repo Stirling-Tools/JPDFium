@@ -68,17 +68,19 @@ public final class NativeJsonParser {
         int length = json.length();
         boolean negative = json.charAt(index) == '-';
         if (negative) index++;
-        int value = 0;
+        long limit = negative ? 2_147_483_648L : 2_147_483_647L;
+        long value = 0;
         boolean digits = false;
         while (index < length) {
             char c = json.charAt(index);
             if (c < '0' || c > '9') break;
             value = value * 10 + (c - '0');
+            if (value > limit) throw new NumberFormatException("integer overflow");
             digits = true;
             index++;
         }
         if (!digits) return 0;
-        return negative ? -value : value;
+        return (int) (negative ? -value : value);
     }
 
     /** Extract a long field from a single JSON object string. Returns 0 if missing. */
@@ -93,12 +95,21 @@ public final class NativeJsonParser {
         while (index < length) {
             char c = json.charAt(index);
             if (c < '0' || c > '9') break;
-            value = value * 10L + (c - '0');
+            int digit = c - '0';
+            if (negative) {
+                if (value < (Long.MIN_VALUE + digit) / 10)
+                    throw new NumberFormatException("long overflow");
+                value = value * 10L - digit;
+            } else {
+                if (value > (Long.MAX_VALUE - digit) / 10)
+                    throw new NumberFormatException("long overflow");
+                value = value * 10L + digit;
+            }
             digits = true;
             index++;
         }
         if (!digits) return 0L;
-        return negative ? -value : value;
+        return value;
     }
 
     /** Extract a boolean field from a single JSON object string. Returns false if missing. */

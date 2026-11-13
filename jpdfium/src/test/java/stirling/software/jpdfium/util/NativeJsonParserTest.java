@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -126,6 +127,18 @@ class NativeJsonParserTest {
                 7, NativeJsonParser.intField("{\"note\":\"the count: 5\",\"count\":7}", "count"));
         assertEquals(
                 4, NativeJsonParser.intField("{\"note\":\"say \\\"count\\\":1\",\"count\":4}", "count"));
+    }
+
+    @Test
+    void rejectsOverflowingIntegers() {
+        assertThrows(NumberFormatException.class,
+                () -> NativeJsonParser.intField("{\"c\":2147483648}", "c"));
+        assertThrows(NumberFormatException.class,
+                () -> NativeJsonParser.intField("{\"c\":-2147483649}", "c"));
+        assertThrows(NumberFormatException.class,
+                () -> NativeJsonParser.longField("{\"size\":9223372036854775808}", "size"));
+        assertThrows(NumberFormatException.class,
+                () -> NativeJsonParser.longField("{\"size\":-9223372036854775809}", "size"));
     }
 
     @Test

@@ -122,6 +122,36 @@ class PdfFontEmbedderTest {
             assertTrue(new PDFTextStripper().getText(doc).contains("日本語テスト"),
                     "90msp-RKSJ-H must preserve Japanese text");
         }
+
+        byte[] ascii = withPageContent(proportional,
+                "BT /F1 14 Tf 72 700 Td (A) Tj ET");
+        PdfFontEmbedder.Result asciiResult = PdfFontEmbedder.embedMissing(ascii);
+        try (PDDocument doc = Loader.loadPDF(asciiResult.pdf())) {
+            assertEquals("A", new PDFTextStripper().getText(doc).strip(),
+                    "90msp-RKSJ-H ASCII must map through CID 34");
+            COSDictionary font = doc.getPage(0).getResources()
+                    .getFont(COSName.getPDFName("F1")).getCOSObject();
+            COSArray descendants = (COSArray) font.getDictionaryObject(COSName.DESCENDANT_FONTS);
+            COSDictionary descendant = (COSDictionary) descendants.getObject(0);
+            COSBase mapping = descendant.getDictionaryObject(COSName.CID_TO_GID_MAP);
+            assertTrue(mapping instanceof COSStream, "ASCII mapping needs a CIDToGIDMap stream");
+            byte[] bytes;
+            try (var in = ((COSStream) mapping).createInputStream()) {
+                bytes = in.readAllBytes();
+            }
+            int gid = ((bytes[34 * 2] & 0xFF) << 8) | (bytes[34 * 2 + 1] & 0xFF);
+            assertTrue(gid > 0, "90msp-RKSJ-H code A must map to the glyph at CID 34");
+        }
+    }
+
+    private static byte[] withPageContent(byte[] pdf, String content) throws IOException {
+        try (PDDocument doc = Loader.loadPDF(pdf)) {
+            doc.getPage(0).setContents(new PDStream(doc,
+                    new ByteArrayInputStream(content.getBytes(StandardCharsets.US_ASCII))));
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            doc.save(out);
+            return out.toByteArray();
+        }
     }
 
     private static byte[] withCidEncoding(byte[] pdf, String from, String to) throws IOException {

@@ -37,6 +37,13 @@ class PdfTextSearcherTest {
     }
 
     @Test
+    void overflowedMatchesAreSkipped() {
+        List<PdfTextSearcher.SearchMatch> matches = PdfTextSearcher.parseMatchesJson(
+                "[{\"start\":2147483648,\"len\":1}]", 0);
+        assertTrue(matches.isEmpty());
+    }
+
+    @Test
     void parseMultipleMatches() {
         String json = "[{\"start\":0,\"len\":4},{\"start\":10,\"len\":2}]";
         List<PdfTextSearcher.SearchMatch> matches = PdfTextSearcher.parseMatchesJson(json, 0);

@@ -1542,7 +1542,7 @@ FT_UInt glyphForCode(FT_Face face, int code, bool symbolic, SimpleEncoding const
     return 0;
 }
 
-bool addWidths(QPDFObjectHandle font, FT_Face face, bool symbolic) {
+QPDFObjectHandle buildWidths(QPDFObjectHandle const& font, FT_Face face, bool symbolic) {
     auto enc = parseEncoding(font);
     auto widths = QPDFObjectHandle::newArray();
     bool any_positive = false;
@@ -1557,11 +1557,13 @@ bool addWidths(QPDFObjectHandle font, FT_Face face, bool symbolic) {
         if (w > 0) any_positive = true;
         widths.appendItem(QPDFObjectHandle::newInteger(w));
     }
-    if (!any_positive) return false;
+    return any_positive ? widths : QPDFObjectHandle();
+}
+
+void applyWidths(QPDFObjectHandle& font, QPDFObjectHandle const& widths) {
     font.replaceKey("/FirstChar", QPDFObjectHandle::newInteger(0));
     font.replaceKey("/LastChar", QPDFObjectHandle::newInteger(255));
     font.replaceKey("/Widths", widths);
-    return true;
 }
 
 bool reachesSameGlyphs(FT_Library lib, std::string const& subset, FT_Face original,
@@ -2287,10 +2289,14 @@ bool sameFont(QPDFObjectHandle const& a, QPDFObjectHandle const& b) {
     }
 }
 
-enum class CidEncoding { TwoByte, SingleByte, Rksj, KscEuc, GbEuc };
+enum class CidEncoding { TwoByte, SingleByte, Rksj, RksjProp, KscEuc, GbEuc };
 
-bool japan1CidForCode(uint16_t code, uint32_t& cid) {
+bool japan1CidForCode(uint16_t code, uint32_t& cid, bool proportional = false) {
     // Codes in the printable ASCII block map linearly; skip the table search.
+    if (proportional && code >= 0x0020 && code <= 0x007E) {
+        cid = 1 + (code - 0x0020);
+        return true;
+    }
     if (code >= 0x0020 && code <= 0x007D) {
         cid = 231 + (code - 0x0020);
         return true;
@@ -2417,7 +2423,8 @@ void collectStringCids(std::string_view bytes, std::set<uint32_t>& cids, std::se
         }
         return;
     }
-    if (encoding == CidEncoding::Rksj) {
+    if (encoding == CidEncoding::Rksj || encoding == CidEncoding::RksjProp) {
+        bool proportional = encoding == CidEncoding::RksjProp;
         for (size_t i = 0; i < bytes.size();) {
             unsigned char lead = static_cast<unsigned char>(bytes[i]);
             uint16_t code = lead;
@@ -2433,7 +2440,7 @@ void collectStringCids(std::string_view bytes, std::set<uint32_t>& cids, std::se
                 ++i;
             }
             uint32_t cid = 0;
-            if (!japan1CidForCode(code, cid)) {
+            if (!japan1CidForCode(code, cid, proportional)) {
                 complete = false;
                 return;
             }
@@ -3073,7 +3080,9 @@ CidScanResult usedCidsForFont(QPDF& qpdf, QPDFObjectHandle const& target,
                               FontUsageIndex const* index = nullptr) {
     if (index && index->complete) {
         if (auto const* found = index->find(target)) return *found;
-        return {};
+        // Direct dictionaries can be rewritten after indexing; only indirect
+        // fonts have a stable key that proves the font was not reached.
+        if (target.isIndirect()) return {};
     }
     CidScanResult result;
     int budget = 2048;
@@ -4037,9 +4046,10 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
             bool identityEncoding = font.getKey("/Encoding").isNameAndEquals("/Identity-H") ||
                                     font.getKey("/Encoding").isNameAndEquals("/Identity-V");
             QPDFObjectHandle cjkEncoding = font.getKey("/Encoding");
+            bool japan1Proportional =
+                cid && !hasProgram && onlyMissing && cjkEncoding.isNameAndEquals("/90msp-RKSJ-H");
             bool japan1Rksj = cid && !hasProgram && onlyMissing &&
-                              (cjkEncoding.isNameAndEquals("/90ms-RKSJ-H") ||
-                               cjkEncoding.isNameAndEquals("/90msp-RKSJ-H"));
+                              (cjkEncoding.isNameAndEquals("/90ms-RKSJ-H") || japan1Proportional);
             bool korea1Ksc = cid && !hasProgram && onlyMissing &&
                              font.getKey("/Encoding").isNameAndEquals("/KSC-EUC-H");
             bool gb1Gb = cid && !hasProgram && onlyMissing &&
@@ -4053,9 +4063,10 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
             if (cid && !hasProgram && onlyMissing) {
                 if (!identityCidMap) continue;
                 if (predefinedCjk) {
-                    CidEncoding enc = japan1Rksj  ? CidEncoding::Rksj
-                                      : korea1Ksc ? CidEncoding::KscEuc
-                                                  : CidEncoding::GbEuc;
+                    CidEncoding enc = japan1Proportional ? CidEncoding::RksjProp
+                                      : japan1Rksj       ? CidEncoding::Rksj
+                                      : korea1Ksc        ? CidEncoding::KscEuc
+                                                         : CidEncoding::GbEuc;
                     auto scan = usedCidsForFont(*qpdf, font, enc);
                     usedCids = scan.cids;
                     if (!scan.complete || usedCids.empty()) continue;
@@ -4074,7 +4085,8 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
                         if (code > 0xFFFF) continue;
                         uint32_t cidFromCode = 0;
                         bool found =
-                            japan1Rksj  ? japan1CidForCode(static_cast<uint16_t>(code), cidFromCode)
+                            japan1Rksj  ? japan1CidForCode(static_cast<uint16_t>(code), cidFromCode,
+                                                           japan1Proportional)
                             : korea1Ksc ? korea1CidForCode(static_cast<uint16_t>(code), cidFromCode)
                                         : gb1CidForCode(static_cast<uint16_t>(code), cidFromCode);
                         if (!found) continue;
@@ -4126,9 +4138,11 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
             bool symbolic = builtInMapping &&
                             (isSymbolName || (flags.isInteger() && (flags.getIntValue() & 4) != 0));
             bool mapBuiltIn = builtInMapping && symbolic;
-            if (!cid && (onlyMissing || !target.getKey("/Widths").isArray()) &&
-                !addWidths(target, program.face, mapBuiltIn))
-                continue;
+            QPDFObjectHandle pendingWidths;
+            if (!cid && (onlyMissing || !target.getKey("/Widths").isArray())) {
+                pendingWidths = buildWidths(target, program.face, mapBuiltIn);
+                if (!pendingWidths.isInitialized()) continue;
+            }
             if (descriptor.isIndirect()) {
                 // A descriptor can be shared by a font that is not being
                 // replaced. Always isolate it before installing a program so
@@ -4158,6 +4172,7 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
                 }
                 if (!covered) continue;
             }
+            if (pendingWidths.isInitialized()) applyWidths(target, pendingWidths);
             target.replaceKey("/Type", QPDFObjectHandle::newName("/Font"));
             if (cid) font.replaceKey("/Type", QPDFObjectHandle::newName("/Font"));
             if (!descriptor.isDictionary()) {
