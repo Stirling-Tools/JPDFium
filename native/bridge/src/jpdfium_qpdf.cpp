@@ -5095,7 +5095,8 @@ std::string inspectFonts(QPDF& qpdf) {
                 }
             }
         }
-        for (auto& directFont : directFonts) {
+        for (size_t directIndex = 0; directIndex < directFonts.size(); ++directIndex) {
+            QPDFObjectHandle directFont = directFonts[directIndex];
             std::string key = directFont.unparse();
             if (!reachableDirect.contains(key)) continue;
             auto subtype = directFont.getKey("/Subtype");
@@ -5125,7 +5126,7 @@ std::string inspectFonts(QPDF& qpdf) {
         if (!dict.isDictionary()) return false;
         auto type = dict.getKey("/Type");
         auto subtype = dict.getKey("/Subtype");
-        if (!type.isName() || type.getName() != "/Font") return false;
+        if (type.isName() && type.getName() != "/Font") return false;
         // CID descendants are part of their Type 0 parent; reporting both would
         // duplicate the same program (or its absence).
         return !subtype.isName() ||
