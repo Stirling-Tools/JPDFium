@@ -107,6 +107,41 @@ class PdfFontEmbedderTest {
     }
 
     @Test
+    void embedsJapan1ProportionalRksjCidFont() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
+        var url = getClass().getResource("/pdfs/general/90ms_rksj_h_sample.pdf");
+        assertNotNull(url, "90ms-RKSJ-H fixture missing");
+        byte[] input = Files.readAllBytes(Path.of(url.toURI()));
+        byte[] proportional = withCidEncoding(input, "90ms-RKSJ-H", "90msp-RKSJ-H");
+
+        PdfFontEmbedder.Result result = PdfFontEmbedder.embedMissing(proportional);
+
+        assertTrue(result.embedded().contains("HeiseiMin-W3"),
+                "the proportional predefined CMap must embed, got " + result);
+        try (PDDocument doc = Loader.loadPDF(result.pdf())) {
+            assertTrue(new PDFTextStripper().getText(doc).contains("日本語テスト"),
+                    "90msp-RKSJ-H must preserve Japanese text");
+        }
+    }
+
+    private static byte[] withCidEncoding(byte[] pdf, String from, String to) throws IOException {
+        try (PDDocument doc = Loader.loadPDF(pdf)) {
+            for (PDPage page : doc.getPages()) {
+                for (COSName name : page.getResources().getFontNames()) {
+                    COSDictionary font = page.getResources().getFont(name).getCOSObject();
+                    COSBase encoding = font.getDictionaryObject(COSName.ENCODING);
+                    if (encoding instanceof COSName value && value.getName().equals(from)) {
+                        font.setItem(COSName.ENCODING, COSName.getPDFName(to));
+                    }
+                }
+            }
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            doc.save(out);
+            return out.toByteArray();
+        }
+    }
+
+    @Test
     void embedsGb1GbeucCidFontWithAUnicodeFallback() throws Exception {
         assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
         var url = getClass().getResource("/pdfs/general/gb_euc_h_sample.pdf");
