@@ -1,59 +1,17 @@
 name: Bug report
-description: Report a defect in JPDFium that you can reproduce.
+description: Report a reproducible defect in JPDFium.
 title: "[Bug]: "
 labels: ["bug"]
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks for the report. A minimal reproduction gets fixed fastest.
-
-        For security issues, use the private advisory link instead of this form,
-        as described in [SECURITY.md](https://github.com/Stirling-Tools/JPDFium/blob/main/SECURITY.md).
-
-  - type: input
-    id: version
-    attributes:
-      label: JPDFium version
-      description: The `com.stirling:jpdfium` version you depend on, from your BOM or build file.
-      placeholder: "1.2.0"
-    validations:
-      required: true
-
-  - type: dropdown
-    id: jdk
-    attributes:
-      label: JDK
-      description: JPDFium requires Java 25.
-      options:
-        - Temurin 25
-        - Oracle JDK 25
-        - OpenJDK 25
-        - Other, stated below
-    validations:
-      required: true
-
-  - type: dropdown
-    id: platform
-    attributes:
-      label: Platform module
-      description: The `jpdfium-natives-*` module on the runtime classpath.
-      options:
-        - jpdfium-natives-linux-x64
-        - jpdfium-natives-linux-arm64
-        - jpdfium-natives-linux-musl-x64
-        - jpdfium-natives-linux-musl-arm64
-        - jpdfium-natives-darwin-x64
-        - jpdfium-natives-darwin-arm64
-        - jpdfium-natives-windows-x64
-        - jpdfium-natives-windows-arm64
-    validations:
-      required: true
+        A minimal reproduction gets fixed fastest. For security issues, use the [private advisory form](https://github.com/Stirling-Tools/JPDFium/security/advisories/new) instead.
 
   - type: textarea
     id: problem
     attributes:
-      label: What happened
+      label: What happened?
       description: What you did, what you expected, and what happened instead.
     validations:
       required: true
@@ -61,28 +19,31 @@ body:
   - type: textarea
     id: reproduction
     attributes:
-      label: Minimal reproduction
-      description: |
-        The smallest code or sample PDF that shows the problem.
-        Include how the JVM was started (`--enable-native-access` matters) and
-        any `-Djpdfium.*` properties in use.
+      label: Reproduction
+      description: Minimal code, steps, or sample PDF that triggers the problem.
+      placeholder: |
+        Code or steps:
+        JVM flags (for example --enable-native-access):
+        -Djpdfium.* properties:
       render: text
-    validations:
-      required: true
 
   - type: textarea
     id: output
     attributes:
-      label: Stack trace or error output
-      description: Paste any exception or native error output. Redact document contents if needed.
+      label: Error output
+      description: Stack trace or native error output, if any.
       render: text
-    validations:
-      required: false
 
-  - type: textarea
-    id: context
+  - type: input
+    id: version
     attributes:
-      label: Additional context
-      description: Anything else that helps, such as a workaround you found.
-    validations:
-      required: false
+      label: JPDFium version
+      description: From your BOM or build file, if it is not the latest release.
+      placeholder: "1.2.0"
+
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: JDK and `jpdfium-natives-*` module on the runtime classpath.
+      placeholder: "Temurin 25, jpdfium-natives-linux-x64"
