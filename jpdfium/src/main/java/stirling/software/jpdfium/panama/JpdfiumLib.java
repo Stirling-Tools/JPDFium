@@ -64,6 +64,7 @@ public final class JpdfiumLib {
     public static final int ERR_REDACT_UNVERIFIABLE =  -8;
     /** The native call modified content and then failed; the document no longer matches disk. */
     public static final int ERR_CONTENT_MUTATED    = -10;
+    public static final int ERR_ALLOC              = -11;
 
     // Image placement positions (match JPDFIUM_POSITION_* constants and Position enum ordinals)
     public static final int POSITION_TOP_LEFT      = 0;
@@ -346,6 +347,8 @@ public final class JpdfiumLib {
                     "Redaction could not run or could not be verified; no silent fallback was applied - " + ctx);
             case ERR_CONTENT_MUTATED   -> new JPDFiumException(
                     "Content was modified before the operation failed - " + ctx, ERR_CONTENT_MUTATED);
+            case ERR_ALLOC             -> new JPDFiumException(
+                    "Native output allocation failed - " + ctx, ERR_ALLOC);
             default                    -> new JPDFiumException("Native error " + rc + " - " + ctx);
         };
     }

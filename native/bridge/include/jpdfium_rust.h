@@ -118,6 +118,32 @@ JPDFIUM_EXPORT int32_t jpdfium_rust_encode_cmyk_jpeg(const uint8_t* cmyk, int64_
                                                      int32_t width, int32_t height, int32_t quality,
                                                      uint8_t** out_ptr, int64_t* out_len);
 
+// Encode interleaved 8-bit gray (components=1) or RGB (components=3) pixels as
+// a baseline JPEG with optimized Huffman tables and, for RGB, 4:2:0 chroma.
+// Optimized tables shrink the stream 5-10% without changing DCT coefficients.
+JPDFIUM_EXPORT int32_t jpdfium_rust_encode_jpeg(const uint8_t* pixels, int64_t pixels_len,
+                                                int32_t width, int32_t height, int32_t components,
+                                                int32_t quality, uint8_t** out_ptr,
+                                                int64_t* out_len);
+
+// As jpdfium_rust_encode_jpeg, with progressive=1 for progressive JPEG.
+JPDFIUM_EXPORT int32_t jpdfium_rust_encode_jpeg_ex(const uint8_t* pixels, int64_t pixels_len,
+                                                   int32_t width, int32_t height,
+                                                   int32_t components, int32_t quality,
+                                                   int32_t progressive, uint8_t** out_ptr,
+                                                   int64_t* out_len);
+
+// Encode packed 1-bit pixels (MSB first) as CCITT Group 4 for /CCITTFaxDecode.
+JPDFIUM_EXPORT int32_t jpdfium_rust_encode_ccitt_g4(const uint8_t* pixels, int64_t pixels_len,
+                                                    int32_t width, int32_t height, int32_t invert,
+                                                    uint8_t** out_ptr, int64_t* out_len);
+
+// Encode packed 1-bit pixels (MSB first) as a PDF JBIG2 page/global pair.
+JPDFIUM_EXPORT int32_t jpdfium_rust_encode_jbig2(const uint8_t* pixels, int64_t pixels_len,
+                                                 int32_t width, int32_t height, int32_t invert,
+                                                 uint8_t** page_out, int64_t* page_len,
+                                                 uint8_t** globals_out, int64_t* globals_len);
+
 // Free a buffer allocated by any jpdfium_rust_* function.
 //
 // Must be called to release memory returned in out_ptr by the Rust functions.

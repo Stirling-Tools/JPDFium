@@ -9,6 +9,7 @@ import stirling.software.jpdfium.panama.ImageObjBindings;
 import stirling.software.jpdfium.panama.JpdfiumH;
 import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.PageEditBindings;
+import stirling.software.jpdfium.panama.RustBridgeBindings;
 import stirling.software.jpdfium.panama.Symbols;
 
 import java.awt.Graphics2D;
@@ -18,6 +19,7 @@ import java.awt.image.ComponentSampleModel;
 import java.awt.image.DataBufferByte;
 import java.awt.image.DataBufferInt;
 import java.awt.image.SinglePixelPackedSampleModel;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.lang.foreign.Arena;
 import java.lang.foreign.FunctionDescriptor;
@@ -27,6 +29,9 @@ import java.lang.foreign.MemorySegment;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
+import java.util.zip.Deflater;
+
+import javax.imageio.ImageIO;
 
 import static java.lang.foreign.ValueLayout.ADDRESS;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
@@ -35,14 +40,18 @@ import static java.lang.foreign.ValueLayout.JAVA_INT;
 import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
 /**
- * In-process image downsampling: images above {@code maxImageDpi} are resampled from their native
- * pixels and re-embedded via {@code FPDFImageObj_SetBitmap}, with no external binary.
+ * In-process image downsampling and JPEG re-encoding: images above a DPI or
+ * pixel-edge limit are resampled from their native pixels, and 8-bit
+ * gray/RGB images are re-encoded as JPEG when that produces a smaller stream,
+ * all via PDFium with no external binary.
  */
 public final class PdfImageOptimizer {
 
     private PdfImageOptimizer() {}
 
     private static final int FPDF_PAGEOBJ_IMAGE = 3;
+    private static final int FPDF_PAGEOBJ_FORM = 5;
+    private static final int MAX_FORM_DEPTH = 8;
     private static final int FPDF_BITMAP_GRAY = 1;
     private static final int FPDF_BITMAP_BGR = 2;
     private static final int FPDF_BITMAP_BGRx = 3;
@@ -126,15 +135,31 @@ public final class PdfImageOptimizer {
                         MemorySegment obj =
                                 (MemorySegment) PageEditBindings.FPDFPage_GetObject.invokeExact(rawPage, i);
                         if (obj.equals(MemorySegment.NULL)) continue;
-                        if ((int) PageEditBindings.FPDFPageObj_GetType.invokeExact(obj)
-                                == FPDF_PAGEOBJ_IMAGE) {
-                            return true;
-                        }
+                        if (containsImage(obj, 0)) return true;
                     } catch (Throwable t) {
                         NativeRuntime.rethrowFatal(t);
                     }
                 }
             }
+        }
+        return false;
+    }
+
+    private static boolean containsImage(MemorySegment obj, int depth) throws Throwable {
+        int type = (int) PageEditBindings.FPDFPageObj_GetType.invokeExact(obj);
+        if (type == FPDF_PAGEOBJ_IMAGE) return true;
+        if (type != FPDF_PAGEOBJ_FORM || depth >= MAX_FORM_DEPTH
+                || !PageEditBindings.formTraversalAvailable()) {
+            return false;
+        }
+        int children = (int) PageEditBindings.FPDFFormObj_CountObjects.invokeExact(obj);
+        if (children < 0) {
+            throw new JPDFiumException("FPDFFormObj_CountObjects returned " + children);
+        }
+        for (int i = 0; i < children; i++) {
+            MemorySegment child = PageEditBindings.formObject(obj, i);
+            if (child == null || child.equals(MemorySegment.NULL)) continue;
+            if (containsImage(child, depth + 1)) return true;
         }
         return false;
     }
@@ -156,7 +181,42 @@ public final class PdfImageOptimizer {
      * {@code jpegQuality} ({@code <= 0} keeps the flate path). Returns the number rewritten.
      */
     public static int optimize(PdfDocument doc, int maxImageDpi, int jpegQuality) {
-        if (!isSupported() || maxImageDpi <= 0) return 0;
+        return optimize(doc, maxImageDpi, jpegQuality, 0, false, false, false);
+    }
+
+    /**
+     * Full image pass: downsample by effective DPI and/or longest-edge pixel cap, then
+     * re-encode as JPEG at {@code jpegQuality} when that is smaller than the current stream.
+     *
+     * @param maxImageDpi images above this effective DPI are downsampled; {@code <= 0} disables it
+     * @param jpegQuality JPEG quality for re-encoding; {@code <= 0} disables JPEG output
+     * @param maxImageEdgePx images whose longest edge exceeds this many pixels are downsampled
+     *     regardless of DPI; {@code <= 0} disables it. This is the only usable size signal for
+     *     comic pages laid out as 1 image pixel = 1 PDF point, which report 72 DPI everywhere.
+     * @param convertPngToJpeg re-encode 8-bit gray/RGB images that are not already JPEG
+     * @return number of image objects rewritten
+     */
+    public static int optimize(PdfDocument doc, int maxImageDpi, int jpegQuality,
+            int maxImageEdgePx, boolean convertPngToJpeg) {
+        return optimize(doc, maxImageDpi, jpegQuality, maxImageEdgePx, convertPngToJpeg, false, true);
+    }
+
+    /**
+     * Full image pass with an explicit JPEG scan mode.
+     *
+     * @param jpegProgressive write progressive JPEG instead of baseline
+     */
+    public static int optimize(PdfDocument doc, int maxImageDpi, int jpegQuality,
+            int maxImageEdgePx, boolean convertPngToJpeg, boolean jpegProgressive) {
+        return optimize(doc, maxImageDpi, jpegQuality, maxImageEdgePx, convertPngToJpeg,
+                jpegProgressive, true);
+    }
+
+    private static int optimize(PdfDocument doc, int maxImageDpi, int jpegQuality,
+            int maxImageEdgePx, boolean convertPngToJpeg, boolean jpegProgressive,
+            boolean allowQualityOnly) {
+        if (!isSupported()) return 0;
+        if (maxImageDpi <= 0 && maxImageEdgePx <= 0 && jpegQuality <= 0) return 0;
         MemorySegment rawDoc = doc.rawHandle();
         int rewritten = 0;
 
@@ -181,17 +241,8 @@ public final class PdfImageOptimizer {
                         continue;
                     }
                     if (obj.equals(MemorySegment.NULL)) continue;
-
-                    int type;
-                    try {
-                        type = (int) PageEditBindings.FPDFPageObj_GetType.invokeExact(obj);
-                    } catch (Throwable t) {
-                        NativeRuntime.rethrowFatal(t);
-                        continue;
-                    }
-                    if (type != FPDF_PAGEOBJ_IMAGE) continue;
-
-                    if (optimizeImage(rawDoc, rawPage, obj, maxImageDpi, jpegQuality)) {
+                    if (optimizeTree(rawDoc, rawPage, obj, maxImageDpi, jpegQuality,
+                            maxImageEdgePx, convertPngToJpeg, jpegProgressive, allowQualityOnly, 0)) {
                         pageChanged = true;
                         rewritten++;
                     }
@@ -211,34 +262,143 @@ public final class PdfImageOptimizer {
         return rewritten;
     }
 
+    private static boolean optimizeTree(MemorySegment rawDoc, MemorySegment rawPage,
+            MemorySegment obj, int maxImageDpi, int jpegQuality, int maxImageEdgePx,
+            boolean convertPngToJpeg, boolean jpegProgressive, boolean allowQualityOnly,
+            int depth) {
+        try {
+            int type = (int) PageEditBindings.FPDFPageObj_GetType.invokeExact(obj);
+            if (type == FPDF_PAGEOBJ_IMAGE) {
+                return optimizeImage(rawDoc, rawPage, obj, maxImageDpi, jpegQuality,
+                        maxImageEdgePx, convertPngToJpeg, jpegProgressive, allowQualityOnly);
+            }
+            if (type != FPDF_PAGEOBJ_FORM || depth >= MAX_FORM_DEPTH
+                    || !PageEditBindings.formConversionAvailable()) {
+                return false;
+            }
+            int children = (int) PageEditBindings.FPDFFormObj_CountObjects.invokeExact(obj);
+            if (children < 0) {
+                throw new JPDFiumException("FPDFFormObj_CountObjects returned " + children);
+            }
+            boolean changed = false;
+            for (int i = 0; i < children; i++) {
+                MemorySegment child = PageEditBindings.formObject(obj, i);
+                if (child == null || child.equals(MemorySegment.NULL)) continue;
+                if (optimizeTree(rawDoc, rawPage, child, maxImageDpi, jpegQuality,
+                        maxImageEdgePx, convertPngToJpeg, jpegProgressive, allowQualityOnly,
+                        depth + 1)) {
+                    changed = true;
+                }
+            }
+            if (changed) {
+                int ok = (int) PageEditBindings.FPDFFormObj_MarkDirty.invokeExact(obj);
+                if (ok == 0) throw new JPDFiumException("FPDFFormObj_MarkDirty failed");
+            }
+            return changed;
+        } catch (JPDFiumException e) {
+            throw e;
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            return false;
+        }
+    }
+
     /** Image-object metadata read before any pixels are decoded. */
     private record ImageMeta(int width, int height, int bpp, int colorspace, float dpi) {}
 
+    // Quality-only re-encoding (no resize) below this encoded size saves too little
+    // to pay for a decode + encode cycle and generation loss.
+    private static final long MIN_REENCODE_BYTES = 8L * 1024;
+
     // Returns true when the image object was rewritten.
     private static boolean optimizeImage(MemorySegment rawDoc, MemorySegment rawPage,
-                                         MemorySegment imgObj, int maxImageDpi, int jpegQuality) {
+                                         MemorySegment imgObj, int maxImageDpi, int jpegQuality,
+                                         int maxImageEdgePx, boolean convertPngToJpeg,
+                                         boolean jpegProgressive, boolean allowQualityOnly) {
         ImageMeta meta = readMeta(imgObj, rawPage);
-        if (meta == null || meta.dpi() <= 0f || meta.dpi() <= maxImageDpi) return false;
+        if (meta == null || meta.width() <= 0 || meta.height() <= 0) return false;
+
+        double scale = 1.0;
+        if (maxImageDpi > 0 && meta.dpi() > 0f && meta.dpi() > maxImageDpi) {
+            scale = Math.min(scale, (double) maxImageDpi / meta.dpi());
+        }
+        if (maxImageEdgePx > 0) {
+            int longestEdge = Math.max(meta.width(), meta.height());
+            if (longestEdge > maxImageEdgePx) {
+                scale = Math.min(scale, (double) maxImageEdgePx / longestEdge);
+            }
+        }
+        int targetW = Math.max(1, (int) Math.round(meta.width() * scale));
+        int targetH = Math.max(1, (int) Math.round(meta.height() * scale));
+        boolean resize = targetW < meta.width() || targetH < meta.height();
+
+        boolean jpegOriginal = isJpegOriginal(imgObj);
+        long rawLength = rawLength(imgObj);
+        boolean wantJpeg = jpegQuality > 0 && (jpegOriginal || convertPngToJpeg);
+        // Below the resize threshold a JPEG is only re-encoded when it is large enough
+        // for the saving to matter; resized images always go through the encoder.
+        boolean reencode = wantJpeg
+                && (resize || (allowQualityOnly && rawLength >= MIN_REENCODE_BYTES));
+        if (!resize && !reencode) return false;
+
         // Skip anything that cannot round-trip safely through a PDFium bitmap:
         // 1-bit scans go blurry, and CMYK/ICC/Indexed/Separation/Lab would lose
         // their colour space. Only 8-bit DeviceGray/DeviceRGB are re-embedded.
         if (!roundTrippable(meta)) return false;
+        if (hasTransparency(imgObj)) return false;
 
         ImageSource src = readSource(rawDoc, rawPage, imgObj, meta);
         if (src == null || src.width() <= 0 || src.height() <= 0) return false;
 
-        double scale = (double) maxImageDpi / meta.dpi();
-        int targetW = Math.max(1, (int) Math.round(src.width() * scale));
-        int targetH = Math.max(1, (int) Math.round(src.height() * scale));
-        if (targetW >= src.width() || targetH >= src.height()) return false;
+        BufferedImage result = resize ? scale(src.image(), targetW, targetH) : src.image();
 
-        BufferedImage scaled = scale(src.image(), targetW, targetH);
-        if (jpegQuality > 0 && isJpegOriginal(imgObj)) {
-            byte[] jpeg = encodeJpeg(scaled, jpegQuality);
-            if (jpeg != null && embedJpegInline(imgObj, jpeg)) return true;
-            // Fall through to the bitmap path if JPEG encoding or embedding fails.
+        if (reencode) {
+            byte[] jpeg = encodeJpeg(result, jpegQuality, jpegProgressive);
+            if (jpeg != null && adoptJpeg(jpeg.length, rawLength, resize)
+                    && embedJpegInline(imgObj, jpeg)) {
+                return true;
+            }
+            // Fall through to the bitmap path only when the pixels actually shrank.
         }
-        return embedBitmap(imgObj, scaled);
+        return resize && bitmapLikelySmaller(result, rawLength) && embedBitmap(imgObj, result);
+    }
+
+    // The bitmap fallback writes uncompressed/Flate pixels. Estimate its encoded
+    // size before replacing the stream so a failed JPEG encode cannot inflate the PDF.
+    private static boolean bitmapLikelySmaller(BufferedImage image, long rawLength) {
+        if (rawLength <= 0) return false;
+        byte[] pixels = image.getType() == BufferedImage.TYPE_BYTE_GRAY
+                ? grayBytes(image) : rgbBytes(image);
+        if (pixels == null || pixels.length == 0) return false;
+        Deflater deflater = new Deflater(6);
+        try {
+            deflater.setInput(pixels);
+            deflater.finish();
+            byte[] buffer = new byte[8192];
+            long total = 0;
+            while (!deflater.finished()) {
+                total += deflater.deflate(buffer);
+                if (total >= rawLength) return false;
+            }
+            return total < rawLength;
+        } finally {
+            deflater.end();
+        }
+    }
+
+    // A resize is adopted whenever the JPEG is smaller than the original stream: the
+    // pixel count itself already dropped. Without a resize the encoder must save at
+    // least 5% (and 512 bytes) to justify re-encoding an existing JPEG.
+    private static boolean adoptJpeg(long newLength, long rawLength, boolean resized) {
+        if (newLength <= 0) return false;
+        if (rawLength <= 0) return resized;
+        if (resized) return newLength < rawLength;
+        return newLength + 512 < rawLength && newLength * 100 < rawLength * 95;
+    }
+
+    // Encoded length of the image's current stream, or -1 when PDFium cannot report it.
+    private static long rawLength(MemorySegment imgObj) {
+        return ImageObjBindings.imageDataRawLength(imgObj);
     }
 
     // Reads width/height/bpp/colorspace/dpi without decoding pixels, so an
@@ -276,6 +436,18 @@ public final class PdfImageOptimizer {
         };
     }
 
+    // FPDFImageObj_HasTransparency covers SMask/alpha. Re-encoding such an image
+    // as an opaque JPEG would make formerly transparent pixels visible.
+    private static boolean hasTransparency(MemorySegment imgObj) {
+        if (ImageObjBindings.FPDFImageObj_HasTransparency == null) return true;
+        try {
+            return (int) ImageObjBindings.FPDFImageObj_HasTransparency.invokeExact(imgObj) == 1;
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            return true;
+        }
+    }
+
     // Native-resolution pixels, in preference order: PDFium's own bitmap, the
     // decoded colour data, then a page rasterization as a last resort.
     private static ImageSource readSource(MemorySegment rawDoc, MemorySegment rawPage,
@@ -304,19 +476,33 @@ public final class PdfImageOptimizer {
         ImageSource decoded = decodedSource(imgObj, meta);
         if (decoded != null) return decoded;
 
-        try {
-            MemorySegment bmp = (MemorySegment) ImageObjBindings.FPDFImageObj_GetRenderedBitmap
-                    .invokeExact(rawDoc, rawPage, imgObj);
-            if (bmp.equals(MemorySegment.NULL)) return null;
-            try {
-                return bitmapToSource(bmp);
-            } finally {
-                try {
-                    PageEditBindings.FPDFBitmap_Destroy.invokeExact(bmp);
-                } catch (Throwable t) {
-                    NativeRuntime.rethrowFatal(t);
-                }
+        // Inline JPEGs with an indirect colour-space resource cannot always be
+        // decoded by PDFium without page context. The raw DCT stream is already
+        // at native resolution, so decode that directly instead of rendering.
+        ImageSource jpeg = rawJpegSource(imgObj, meta);
+        if (jpeg != null) return jpeg;
+
+        // The rendered fallback applies the image matrix, so feeding those pixels
+        // back into the original object would transform it twice. Skip the rewrite.
+        return null;
+    }
+
+    private static ImageSource rawJpegSource(MemorySegment imgObj, ImageMeta meta) {
+        if (!isJpegOriginal(imgObj)) return null;
+        long size = ImageObjBindings.imageDataRawLength(imgObj);
+        if (size <= 0 || size > Integer.MAX_VALUE) return null;
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment buf = arena.allocate(size);
+            long written = (long) ImageObjBindings.FPDFImageObj_GetImageDataRaw
+                    .invokeExact(imgObj, buf, size);
+            if (written <= 0) return null;
+            byte[] bytes = buf.asSlice(0, written).toArray(JAVA_BYTE);
+            BufferedImage image = ImageIO.read(new ByteArrayInputStream(bytes));
+            if (image == null) return null;
+            if (image.getWidth() != meta.width() || image.getHeight() != meta.height()) {
+                return null;
             }
+            return new ImageSource(image, image.getWidth(), image.getHeight());
         } catch (Throwable t) {
             NativeRuntime.rethrowFatal(t);
             return null;
@@ -524,6 +710,109 @@ public final class PdfImageOptimizer {
     }
 
     private static BufferedImage scale(BufferedImage src, int width, int height) {
+        if (src.getWidth() == width && src.getHeight() == height) return src;
+        BufferedImage nativeScaled = scaleWithRust(src, width, height);
+        if (nativeScaled != null) return nativeScaled;
+        // Halve repeatedly before the final draw: a single bilinear step from a
+        // 3000 px scan to 1000 px aliases detail that Ghostscript's averaging
+        // downsampler keeps. Progressive reduction costs a couple of copies and
+        // only runs for images that are being rewritten anyway.
+        BufferedImage current = src;
+        int w = src.getWidth();
+        int h = src.getHeight();
+        while (w > width * 2 && h > height * 2) {
+            w = Math.max(width, w / 2);
+            h = Math.max(height, h / 2);
+            current = drawScaled(current, w, h);
+        }
+        return drawScaled(current, width, height);
+    }
+
+    /**
+     * Lanczos3 resampling through the Rust SIMD kernel. It keeps substantially
+     * more high-frequency detail than the Java bilinear fallback at the same
+     * target size, so the resulting JPEG survives a lower edge cap.
+     */
+    private static BufferedImage scaleWithRust(BufferedImage src, int width, int height) {
+        if (!RustBridgeBindings.isSupported()) return null;
+        boolean gray = src.getType() == BufferedImage.TYPE_BYTE_GRAY;
+        byte[] pixels = gray ? grayBytes(src) : rgbBytes(src);
+        if (pixels == null) return null;
+        byte[] scaled = RustBridgeBindings.rustResizePixels(
+                pixels, src.getWidth(), src.getHeight(), gray ? 1 : 3, width, height);
+        if (scaled == null || scaled.length < width * height * (gray ? 1 : 3)) return null;
+        return gray ? grayImage(scaled, width, height) : rgbImage(scaled, width, height);
+    }
+
+    private static byte[] grayBytes(BufferedImage img) {
+        if (img.getType() != BufferedImage.TYPE_BYTE_GRAY
+                || !(img.getRaster().getDataBuffer() instanceof DataBufferByte dbb)) {
+            return null;
+        }
+        int width = img.getWidth();
+        int height = img.getHeight();
+        int rowStride = ((ComponentSampleModel) img.getRaster().getSampleModel())
+                .getScanlineStride();
+        byte[] bytes = dbb.getData();
+        if (rowStride == width) return bytes;
+        byte[] tight = new byte[width * height];
+        for (int y = 0; y < height; y++) {
+            System.arraycopy(bytes, y * rowStride, tight, y * width, width);
+        }
+        return tight;
+    }
+
+    private static byte[] rgbBytes(BufferedImage img) {
+        int width = img.getWidth();
+        int height = img.getHeight();
+        byte[] out = new byte[width * height * 3];
+        if (img.getType() == BufferedImage.TYPE_INT_RGB
+                && img.getRaster().getDataBuffer() instanceof DataBufferInt dbi
+                && img.getRaster().getSampleModel() instanceof SinglePixelPackedSampleModel sp) {
+            int[] px = dbi.getData();
+            int rowStride = sp.getScanlineStride();
+            int o = 0;
+            for (int y = 0; y < height; y++) {
+                int i = y * rowStride;
+                for (int x = 0; x < width; x++, i++, o += 3) {
+                    int p = px[i];
+                    out[o] = (byte) (p >> 16);
+                    out[o + 1] = (byte) (p >> 8);
+                    out[o + 2] = (byte) p;
+                }
+            }
+            return out;
+        }
+        int[] px = img.getRGB(0, 0, width, height, null, 0, width);
+        for (int i = 0, o = 0; i < px.length; i++, o += 3) {
+            int p = px[i];
+            out[o] = (byte) (p >> 16);
+            out[o + 1] = (byte) (p >> 8);
+            out[o + 2] = (byte) p;
+        }
+        return out;
+    }
+
+    private static BufferedImage rgbImage(byte[] pixels, int width, int height) {
+        BufferedImage img = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+        int[] px = ((DataBufferInt) img.getRaster().getDataBuffer()).getData();
+        for (int i = 0, o = 0; i < px.length; i++, o += 3) {
+            px[i] = 0xFF000000
+                    | ((pixels[o] & 0xFF) << 16)
+                    | ((pixels[o + 1] & 0xFF) << 8)
+                    | (pixels[o + 2] & 0xFF);
+        }
+        return img;
+    }
+
+    private static BufferedImage grayImage(byte[] pixels, int width, int height) {
+        BufferedImage img = new BufferedImage(width, height, BufferedImage.TYPE_BYTE_GRAY);
+        byte[] dst = ((DataBufferByte) img.getRaster().getDataBuffer()).getData();
+        System.arraycopy(pixels, 0, dst, 0, Math.min(dst.length, pixels.length));
+        return img;
+    }
+
+    private static BufferedImage drawScaled(BufferedImage src, int width, int height) {
         int type = src.getType();
         if (type == BufferedImage.TYPE_CUSTOM) {
             type = BufferedImage.TYPE_INT_RGB;
@@ -692,10 +981,34 @@ public final class PdfImageOptimizer {
         }
     }
 
-    private static byte[] encodeJpeg(BufferedImage img, int quality) {
+    private static byte[] encodeJpeg(BufferedImage img, int quality, boolean progressive) {
+        int q = Math.min(100, Math.max(1, quality));
+        // The Rust encoder uses optimized Huffman tables, trellis quantization and
+        // deringing; its coefficients can differ from ImageIO at the same quality.
+        boolean gray = img.getType() == BufferedImage.TYPE_BYTE_GRAY;
+        byte[] pixels = gray ? grayBytes(img) : rgbBytes(img);
+        byte[] best = null;
+        if (pixels != null) {
+            best = RustBridgeBindings.rustEncodeJpeg(
+                    pixels, img.getWidth(), img.getHeight(), gray ? 1 : 3, q, progressive);
+        }
+        // Optional libvips codec (jpdfium-vips on the classpath) writes JPEG
+        // with its own optimized/trellis tables. Keep whichever stream is
+        // smaller; both are valid baseline JPEG for PDFium.
+        if (!progressive && ImageCodecs.hasCodec()) {
+            try {
+                byte[] vips = ImageCodecs.encode(img, ImageFormat.JPEG, q);
+                if (vips != null && (best == null || vips.length < best.length)) {
+                    best = vips;
+                }
+            } catch (IOException | RuntimeException ignored) {
+                // Keep the Rust/ImageIO result.
+            }
+        }
+        if (best != null) return best;
+        if (progressive) return null;
         try {
-            return ImageCodecs.encode(
-                    img, ImageFormat.JPEG, Math.min(100, Math.max(1, quality)));
+            return ImageCodecs.encode(img, ImageFormat.JPEG, q);
         } catch (IOException | RuntimeException e) {
             return null;
         }

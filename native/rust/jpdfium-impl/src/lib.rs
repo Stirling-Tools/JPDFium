@@ -582,8 +582,128 @@ unsafe fn encode_cmyk_jpeg(
     JPDFIUM_OK
 }
 
-/// Whether this library was built with the Rust-powered features (always 1
-/// here; the C++ stub bridge answers 0 so callers can probe capability).
+/// Encode interleaved 8-bit gray (1 byte/px) or RGB (3 bytes/px) pixels as a
+/// baseline JPEG with optimized Huffman tables. RGB uses 4:2:0 chroma.
+///
+/// The encoder uses optimized Huffman tables, trellis quantization and
+/// deringing; its output can differ from ImageIO at the same quality setting.
+///
+/// # Safety
+/// `pixels` must point to `pixels_len` readable bytes; the out pointers must be valid.
+#[no_mangle]
+pub unsafe extern "C" fn jpdfium_rust_encode_jpeg(
+    pixels: *const u8,
+    pixels_len: i64,
+    width: i32,
+    height: i32,
+    components: i32,
+    quality: i32,
+    out_ptr: *mut *mut u8,
+    out_len: *mut i64,
+) -> i32 {
+    jpdfium_rust_encode_jpeg_ex(
+        pixels, pixels_len, width, height, components, quality, 0, out_ptr, out_len,
+    )
+}
+
+/// As [`jpdfium_rust_encode_jpeg`], with a progressive-scan flag.
+///
+/// # Safety
+/// `pixels` must point to `pixels_len` readable bytes; the out pointers must be valid.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn jpdfium_rust_encode_jpeg_ex(
+    pixels: *const u8,
+    pixels_len: i64,
+    width: i32,
+    height: i32,
+    components: i32,
+    quality: i32,
+    progressive: i32,
+    out_ptr: *mut *mut u8,
+    out_len: *mut i64,
+) -> i32 {
+    if out_ptr.is_null() || out_len.is_null() {
+        return JPDFIUM_ERR_INVALID;
+    }
+    *out_ptr = std::ptr::null_mut();
+    *out_len = 0;
+
+    // Contain a panic so it cannot unwind across the C ABI boundary.
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        encode_jpeg(
+            pixels, pixels_len, width, height, components, quality, progressive != 0, out_ptr,
+            out_len,
+        )
+    }))
+    .unwrap_or(JPDFIUM_ERR_GENERIC)
+}
+
+/// Encoding body, separated so the exported wrapper can contain panics.
+///
+/// # Safety
+/// `pixels` must point to `pixels_len` readable bytes; the out pointers must be valid.
+#[allow(clippy::too_many_arguments)]
+unsafe fn encode_jpeg(
+    pixels: *const u8,
+    pixels_len: i64,
+    width: i32,
+    height: i32,
+    components: i32,
+    quality: i32,
+    progressive: bool,
+    out_ptr: *mut *mut u8,
+    out_len: *mut i64,
+) -> i32 {
+    let color = match components {
+        1 => mozjpeg_rs::Subsampling::Gray,
+        3 => mozjpeg_rs::Subsampling::S420,
+        _ => return JPDFIUM_ERR_INVALID,
+    };
+    if pixels.is_null() || width <= 0 || height <= 0 || width > 65535 || height > 65535 {
+        return JPDFIUM_ERR_INVALID;
+    }
+
+    let needed = width as usize * height as usize * components as usize;
+    if pixels_len < 0 || needed > pixels_len as usize {
+        return JPDFIUM_ERR_INVALID;
+    }
+
+    let data = slice::from_raw_parts(pixels, needed);
+    let quality = quality.clamp(1, 100) as u8;
+
+    // Baseline is the default for maximum reader compatibility; progressive
+    // saves 4-5% more on scans. Both presets enable trellis quantization,
+    // deringing and optimized Huffman tables.
+    let preset = if progressive {
+        mozjpeg_rs::Preset::ProgressiveBalanced
+    } else {
+        mozjpeg_rs::Preset::BaselineBalanced
+    };
+    let encoder = mozjpeg_rs::Encoder::new(preset)
+        .quality(quality)
+        .subsampling(color)
+        .trellis(mozjpeg_rs::TrellisConfig::default())
+        .optimize_huffman(true)
+        .overshoot_deringing(true);
+    let encoded = if components == 1 {
+        encoder.encode_gray(data, width as u32, height as u32)
+    } else {
+        encoder.encode_rgb(data, width as u32, height as u32)
+    };
+    let buffer = match encoded {
+        Ok(bytes) if !bytes.is_empty() => bytes,
+        _ => return JPDFIUM_ERR_GENERIC,
+    };
+
+    let ptr = malloc_copy(&buffer);
+    if ptr.is_null() {
+        return JPDFIUM_ERR_GENERIC;
+    }
+    *out_ptr = ptr;
+    *out_len = buffer.len() as i64;
+    JPDFIUM_OK
+}
 #[no_mangle]
 pub extern "C" fn jpdfium_has_rust() -> i32 {
     1
@@ -720,4 +840,192 @@ pub unsafe extern "C" fn jpdfium_rust_free(ptr: *mut u8) {
     if !ptr.is_null() {
         libc::free(ptr as *mut libc::c_void);
     }
+}
+
+/// Encode a packed 1-bit image as CCITT Group 4 (T.6) for PDF
+/// `/CCITTFaxDecode` with `/K -1`.
+///
+/// `pixels` is row-major, MSB-first, one bit per pixel. A set bit is white by
+/// default (DeviceGray convention); `invert` flips that interpretation. The
+/// caller supplies the final `/BlackIs1` value to match.
+///
+/// # Safety
+/// `pixels` must point to `pixels_len` readable bytes; the out pointers must be valid.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn jpdfium_rust_encode_ccitt_g4(
+    pixels: *const u8,
+    pixels_len: i64,
+    width: i32,
+    height: i32,
+    invert: i32,
+    out_ptr: *mut *mut u8,
+    out_len: *mut i64,
+) -> i32 {
+    if out_ptr.is_null() || out_len.is_null() {
+        return JPDFIUM_ERR_INVALID;
+    }
+    *out_ptr = std::ptr::null_mut();
+    *out_len = 0;
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        encode_ccitt_g4(pixels, pixels_len, width, height, invert != 0, out_ptr, out_len)
+    }))
+    .unwrap_or(JPDFIUM_ERR_GENERIC)
+}
+
+/// Encoding body for [`jpdfium_rust_encode_ccitt_g4`].
+///
+/// # Safety
+/// `pixels` must point to `pixels_len` readable bytes; the out pointers must be valid.
+unsafe fn encode_ccitt_g4(
+    pixels: *const u8,
+    pixels_len: i64,
+    width: i32,
+    height: i32,
+    invert: bool,
+    out_ptr: *mut *mut u8,
+    out_len: *mut i64,
+) -> i32 {
+    if pixels.is_null()
+        || width <= 0
+        || height <= 0
+        || width > 64 * 1024
+        || height > 64 * 1024
+        || (width as i64) * (height as i64) > 64 * 1024 * 1024
+    {
+        return JPDFIUM_ERR_INVALID;
+    }
+    let row_bytes = (width as usize).div_ceil(8);
+    let needed = row_bytes * height as usize;
+    if pixels_len < 0 || needed > pixels_len as usize {
+        return JPDFIUM_ERR_INVALID;
+    }
+    let data = slice::from_raw_parts(pixels, needed);
+    let writer = fax::VecWriter::with_capacity(needed / 8 + 64);
+    let mut encoder = fax::encoder::Encoder::new(writer);
+    for y in 0..height as usize {
+        let row = &data[y * row_bytes..(y + 1) * row_bytes];
+        let line = (0..width as usize).map(|x| {
+            let bit = (row[x / 8] >> (7 - (x % 8))) & 1;
+            let white = if invert { bit == 0 } else { bit == 1 };
+            if white { fax::Color::White } else { fax::Color::Black }
+        });
+        if encoder.encode_line(line, width as u32).is_err() {
+            return JPDFIUM_ERR_GENERIC;
+        }
+    }
+    let writer = match encoder.finish() {
+        Ok(writer) => writer,
+        Err(_) => return JPDFIUM_ERR_GENERIC,
+    };
+    let buffer = writer.finish();
+    let ptr = malloc_copy(&buffer);
+    if ptr.is_null() {
+        return JPDFIUM_ERR_GENERIC;
+    }
+    *out_ptr = ptr;
+    *out_len = buffer.len() as i64;
+    JPDFIUM_OK
+}
+
+/// Encode a packed 1-bit image as a PDF JBIG2 fragment pair.
+///
+/// `pixels` is row-major, MSB-first, one bit per pixel; a set bit means white
+/// (DeviceGray). The returned `page` is the image stream; `globals`, when
+/// non-empty, is the `/JBIG2Globals` stream.
+///
+/// # Safety
+/// `pixels` must point to `pixels_len` readable bytes; all out pointers must be valid.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn jpdfium_rust_encode_jbig2(
+    pixels: *const u8,
+    pixels_len: i64,
+    width: i32,
+    height: i32,
+    invert: i32,
+    page_out: *mut *mut u8,
+    page_len: *mut i64,
+    globals_out: *mut *mut u8,
+    globals_len: *mut i64,
+) -> i32 {
+    if page_out.is_null() || page_len.is_null() || globals_out.is_null() || globals_len.is_null() {
+        return JPDFIUM_ERR_INVALID;
+    }
+    *page_out = std::ptr::null_mut();
+    *page_len = 0;
+    *globals_out = std::ptr::null_mut();
+    *globals_len = 0;
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        encode_jbig2(pixels, pixels_len, width, height, invert != 0, page_out, page_len,
+                     globals_out, globals_len)
+    }))
+    .unwrap_or(JPDFIUM_ERR_GENERIC)
+}
+
+/// Encoding body for [`jpdfium_rust_encode_jbig2`].
+///
+/// # Safety
+/// `pixels` must point to `pixels_len` readable bytes; all out pointers must be valid.
+#[allow(clippy::too_many_arguments)]
+unsafe fn encode_jbig2(
+    pixels: *const u8,
+    pixels_len: i64,
+    width: i32,
+    height: i32,
+    invert: bool,
+    page_out: *mut *mut u8,
+    page_len: *mut i64,
+    globals_out: *mut *mut u8,
+    globals_len: *mut i64,
+) -> i32 {
+    if pixels.is_null()
+        || width <= 0
+        || height <= 0
+        || width > 64 * 1024
+        || height > 64 * 1024
+        || (width as i64) * (height as i64) > 64 * 1024 * 1024
+    {
+        return JPDFIUM_ERR_INVALID;
+    }
+    let row_bytes = (width as usize).div_ceil(8);
+    let needed = row_bytes * height as usize;
+    if pixels_len < 0 || needed > pixels_len as usize {
+        return JPDFIUM_ERR_INVALID;
+    }
+    let packed = slice::from_raw_parts(pixels, needed);
+    let mut raster = Vec::with_capacity(width as usize * height as usize);
+    for y in 0..height as usize {
+        let row = &packed[y * row_bytes..(y + 1) * row_bytes];
+        for x in 0..width as usize {
+            let bit = (row[x / 8] >> (7 - (x % 8))) & 1;
+            let white = if invert { bit == 0 } else { bit == 1 };
+            raster.push(if white { 0 } else { 1 });
+        }
+    }
+    let context = jbig2enc_rust::Jbig2Context::with_config(
+        jbig2enc_rust::Jbig2Config::text_lossless(), true);
+    let encoded = match jbig2enc_rust::encode_single_image_with_config(
+        &raster, width as u32, height as u32, context) {
+        Ok(encoded) => encoded,
+        Err(_) => return JPDFIUM_ERR_GENERIC,
+    };
+    let page_ptr = malloc_copy(&encoded.page_data);
+    if page_ptr.is_null() {
+        return JPDFIUM_ERR_GENERIC;
+    }
+    *page_out = page_ptr;
+    *page_len = encoded.page_data.len() as i64;
+    if let Some(globals) = encoded.global_data {
+        let globals_ptr = malloc_copy(&globals);
+        if globals_ptr.is_null() {
+            libc::free(page_ptr as *mut libc::c_void);
+            *page_out = std::ptr::null_mut();
+            *page_len = 0;
+            return JPDFIUM_ERR_GENERIC;
+        }
+        *globals_out = globals_ptr;
+        *globals_len = globals.len() as i64;
+    }
+    JPDFIUM_OK
 }

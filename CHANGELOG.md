@@ -19,13 +19,38 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Added
 
-- `PdfXOptions.neutralsToBlack(boolean)`, on by default, maps neutral RGB
-  vector colours to K only instead of four-colour black.
-
-- `PdfXOptions.embedMissingFonts(boolean)`, on by default, and
-  `fontDirectories(Path...)`: PDF/X conversion embeds fonts used without a
-  program through `PdfFontEmbedder.embedMissing`.
-
+- Ebook/comic compression: `CompressOptions.maxImageEdgePx` downsamples images
+  by their longest pixel edge, which is the only size signal that works for
+  CBZ/CBR pages laid out as 1 image pixel = 1 PDF point (they report 72 DPI and
+  escaped the DPI threshold). The image pass now honours `convertPngToJpeg`,
+  downsamples with the Rust Lanczos3 kernel, and encodes JPEG through the
+  pure-Rust mozjpeg port (trellis quantisation, deringing, optimized Huffman
+  tables). On a 24-page 2550x3301 comic scan, 150 DPI / 1600 px / quality 65
+  reduced 14.8 MB to 1.8 MB; Ghostscript `/ebook` left the same file at
+  14.7 MB.
+- Optional libvips integration in the compressor: when `jpdfium-vips` is on
+  the classpath, `PdfImageOptimizer` compares its JPEG output with the Rust
+  encoder and keeps the smaller stream. `jpdfium.vips.trellis=true` enables
+  libvips trellis/deringing on builds linked against mozjpeg.
+- `PdfCompressor` now deduplicates image XObjects with identical dictionaries
+  and raw stream bytes before writing. This collapses repeated covers, logos
+  and page backgrounds: a 10-page PDF repeating one 1600x2400 image went from
+  3.7 MB to 95 KB after the normal image pass, versus 938 KB without dedup.
+- `CompressOptions.jpegProgressive` writes rewritten images as progressive
+  JPEG. Saves 2-11% more depending on image content while remaining a standard
+  PDF DCT stream; baseline stays the default for maximum reader compatibility.
+- `PdfFontSubsetter` provides caller-driven font subsetting for text-heavy
+  documents: it subsets a supplied font program with HarfBuzz while retaining
+  glyph IDs, then replaces the matching qpdf font stream only when smaller.
+  It is opt-in because the caller must supply every codepoint the content uses.
+- `CompressOptions.jbig2` (default on) encodes qualifying 1-bit DeviceGray
+  images as JBIG2 with a `/JBIG2Globals` stream and adopts it only when the
+  combined streams are smaller. A synthetic 2480x3508 bilevel bar scan went
+  from 3,109 B to 1,017 B; a 3-page 300 DPI text scan went from 93,672 B to
+  21,762 B.
+- `CompressOptions.ccittG4` (default on) re-encodes qualifying 1-bit
+  DeviceGray images as CCITT Group 4 and adopts the stream only when smaller.
+  A synthetic 2480x3508 bilevel bar scan went from 3,109 B to 1,690 B.
 - `PdfSplit.extractPageRangesToFiles` writes many page ranges of one file from a single qpdf
   parse instead of one parse per range. Ranges qpdf cannot write, and `MEMORY` storage, go
   through `extractPageRangeToFile` one at a time. 400 single-page parts of a 4.3 MB PDF take 0.12 s instead of

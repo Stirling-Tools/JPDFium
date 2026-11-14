@@ -20,6 +20,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -37,6 +38,7 @@
 #include <qpdf/DLL.h>
 
 #include <qpdf/Buffer.hh>
+#include <qpdf/Pl_Buffer.hh>
 #include <qpdf/Pl_Count.hh>
 #include <qpdf/Pl_DCT.hh>
 #include <qpdf/Pl_Discard.hh>
@@ -210,6 +212,336 @@ void optimizeImages(QPDF& pdf, int32_t jpegQuality) {
     }
 }
 
+// Hash a stream's dictionary and raw bytes so only bit-identical image
+// XObjects are candidates for deduplication. The dictionary check catches
+// images with identical pixels but different color spaces or decode arrays.
+size_t imageFingerprint(QPDFObjectHandle& image, std::string& dict) {
+    dict = image.getDict().unparse();
+    size_t hash = std::hash<std::string>{}(dict);
+    auto data = image.getRawStreamData();
+    if (data && data->getSize() > 0) {
+        const auto* bytes = data->getBuffer();
+        uint64_t fnv = 1469598103934665603ULL;
+        for (size_t i = 0; i < data->getSize(); ++i) {
+            fnv ^= bytes[i];
+            fnv *= 1099511628211ULL;
+        }
+        hash ^= std::hash<uint64_t>{}(fnv) + 0x9e3779b97f4a7c15ULL + (hash << 6) + (hash >> 2);
+    }
+    return hash;
+}
+
+bool sameImage(QPDFObjectHandle& left, QPDFObjectHandle& right, std::string const& dict) {
+    if (right.getDict().unparse() != dict) return false;
+    auto a = left.getRawStreamData();
+    auto b = right.getRawStreamData();
+    if (!a || !b || a->getSize() != b->getSize()) return false;
+    return std::memcmp(a->getBuffer(), b->getBuffer(), a->getSize()) == 0;
+}
+
+constexpr int64_t kBilevelMaxPixels = 64LL * 1024 * 1024;
+constexpr int64_t kDedupeMaxStreamBytes = 32LL * 1024 * 1024;
+
+bool hasFilter(QPDFObjectHandle& dict, std::string const& filter) {
+    if (!dict.hasKey("/Filter")) return false;
+    auto value = dict.getKey("/Filter");
+    if (value.isName()) return value.getName() == filter;
+    if (!value.isArray()) return false;
+    for (int i = 0; i < value.getArrayNItems(); ++i) {
+        auto item = value.getArrayItem(i);
+        if (item.isName() && item.getName() == filter) return true;
+    }
+    return false;
+}
+
+// qpdf recompresses an unreferenced Flate stream on write, so a bilevel
+// re-encode must beat the smaller of the current stream and a fresh Flate
+// encode of the same decoded pixels.
+size_t recompressedFlateSize(Buffer const* decoded) {
+    if (decoded == nullptr || decoded->getSize() == 0) return 0;
+    Pl_Buffer buffer("bilevel-flate");
+    Pl_Flate flate("bilevel-flate", &buffer, Pl_Flate::a_deflate);
+    flate.write(decoded->getBuffer(), decoded->getSize());
+    flate.finish();
+    std::unique_ptr<Buffer> compressed(buffer.getBuffer());
+    return compressed ? compressed->getSize() : 0;
+}
+
+bool bilevelSmallEnough(int64_t encoded, size_t raw) {
+    // Leave a 5% margin: qpdf may recompress an existing Flate stream below
+    // the same size, so a codec that barely wins would not justify replacing it.
+    return raw > 0 && encoded > 0 && encoded * 100 < static_cast<int64_t>(raw) * 95;
+}
+
+// Point every duplicate image resource at the first identical stream. The
+// writer then drops the now-unreferenced copies. Duplicate images are common
+// in generated documents that repeat a cover, logo, or page background.
+void deduplicateImages(QPDF& pdf) {
+    QPDFPageDocumentHelper helper{pdf};
+    std::unordered_map<size_t, std::vector<QPDFObjectHandle>> seen;
+    // A page can reference one indirect image many times. Hashing the same
+    // 32 MiB stream for every reference is quadratic work; remember the
+    // canonical replacement for each indirect image object instead.
+    std::map<QPDFObjGen, QPDFObjectHandle> canonical;
+    for (auto& page : helper.getAllPages()) {
+        page.forEachImage(true,
+                          [&seen, &canonical](QPDFObjectHandle& image, QPDFObjectHandle& xobjDict,
+                                              std::string const& key) {
+                              QPDFObjGen identity = image.getObjGen();
+                              if (identity.isIndirect()) {
+                                  auto known = canonical.find(identity);
+                                  if (known != canonical.end()) {
+                                      if (!image.isSameObjectAs(known->second)) {
+                                          xobjDict.replaceKey(key, known->second);
+                                      }
+                                      return;
+                                  }
+                              }
+                              if (!image.getDict().hasKey("/Length")) return;
+                              auto declaredLength = image.getDict().getKey("/Length");
+                              if (!declaredLength.isInteger() ||
+                                  declaredLength.getIntValue() > kDedupeMaxStreamBytes) {
+                                  return;
+                              }
+                              std::string dict;
+                              size_t fingerprint = imageFingerprint(image, dict);
+                              auto& bucket = seen[fingerprint];
+                              QPDFObjectHandle replacement = image;
+                              for (auto& candidate : bucket) {
+                                  if (!sameImage(image, candidate, dict)) continue;
+                                  replacement = candidate;
+                                  break;
+                              }
+                              if (replacement.isSameObjectAs(image)) {
+                                  bucket.push_back(image);
+                              } else {
+                                  xobjDict.replaceKey(key, replacement);
+                              }
+                              if (identity.isIndirect()) canonical.emplace(identity, replacement);
+                          });
+    }
+}
+
+extern "C" int32_t jpdfium_rust_encode_ccitt_g4(const uint8_t*, int64_t, int32_t, int32_t, int32_t,
+                                                uint8_t**, int64_t*);
+extern "C" void jpdfium_rust_free(uint8_t*);
+
+struct RustBuffer {
+    uint8_t* ptr = nullptr;
+    ~RustBuffer() {
+        if (ptr) jpdfium_rust_free(ptr);
+    }
+    RustBuffer() = default;
+    RustBuffer(RustBuffer const&) = delete;
+    RustBuffer& operator=(RustBuffer const&) = delete;
+};
+
+// Re-encode 1-bit DeviceGray images as JBIG2 when the page and globals
+// streams together are smaller. The same conservative image checks as the
+// CCITT pass apply; JBIG2 is skipped when a mask or non-default decode could
+// change appearance.
+void encodeBilevelJbig2(QPDF& pdf) {
+    QPDFPageDocumentHelper helper{pdf};
+    std::map<std::string, QPDFObjectHandle> replacements;
+    std::set<std::string> attempted;
+    for (auto& page : helper.getAllPages()) {
+        page.forEachImage(true, [&pdf, &replacements, &attempted](QPDFObjectHandle& image,
+                                                                  QPDFObjectHandle& resources,
+                                                                  std::string const& key) {
+            try {
+                auto dict = image.getDict();
+                if (hasFilter(dict, "/JBIG2Decode") || hasFilter(dict, "/DCTDecode") ||
+                    hasFilter(dict, "/JPXDecode")) {
+                    return;
+                }
+                if (!dict.hasKey("/Width") || !dict.hasKey("/Height") ||
+                    !dict.hasKey("/BitsPerComponent")) {
+                    return;
+                }
+                if (dict.getKey("/BitsPerComponent").getIntValue() != 1) return;
+                if (dict.hasKey("/ImageMask") || dict.hasKey("/Mask") || dict.hasKey("/SMask")) {
+                    return;
+                }
+                if (!dict.hasKey("/ColorSpace") || !dict.getKey("/ColorSpace").isName() ||
+                    dict.getKey("/ColorSpace").getName() != "/DeviceGray") {
+                    return;
+                }
+                if (dict.hasKey("/Decode")) {
+                    auto decode = dict.getKey("/Decode");
+                    if (!decode.isArray() || decode.getArrayNItems() != 2 ||
+                        !decode.getArrayItem(0).isNumber() || !decode.getArrayItem(1).isNumber() ||
+                        decode.getArrayItem(0).getNumericValue() != 0 ||
+                        decode.getArrayItem(1).getNumericValue() != 1) {
+                        return;
+                    }
+                }
+                int64_t widthValue = dict.getKey("/Width").getIntValue();
+                int64_t heightValue = dict.getKey("/Height").getIntValue();
+                if (widthValue <= 0 || heightValue <= 0 || widthValue > 32768 ||
+                    heightValue > 32768 || widthValue * heightValue > kBilevelMaxPixels) {
+                    return;
+                }
+                int width = static_cast<int>(widthValue);
+                int height = static_cast<int>(heightValue);
+                std::string objectKey =
+                    image.isIndirect() ? image.getObjGen().unparse() : std::string();
+                if (!objectKey.empty()) {
+                    auto cached = replacements.find(objectKey);
+                    if (cached != replacements.end()) {
+                        resources.replaceKey(key, cached->second);
+                        return;
+                    }
+                    if (!attempted.insert(objectKey).second) return;
+                }
+                auto decoded = image.getStreamData(qpdf_dl_all);
+                if (!decoded) return;
+                size_t rowBytes = (static_cast<size_t>(width) + 7) / 8;
+                if (decoded->getSize() < rowBytes * static_cast<size_t>(height)) return;
+
+                RustBuffer pageData;
+                RustBuffer globalsData;
+                int64_t pageLen = 0;
+                int64_t globalsLen = 0;
+                if (jpdfium_rust_encode_jbig2(decoded->getBuffer(), decoded->getSize(), width,
+                                              height, 0, &pageData.ptr, &pageLen, &globalsData.ptr,
+                                              &globalsLen) != 0 ||
+                    pageData.ptr == nullptr || pageLen <= 0) {
+                    return;
+                }
+                auto raw = image.getRawStreamData();
+                if (!raw) return;
+                int64_t encodedLen = pageLen + globalsLen;
+                size_t baseline = raw->getSize();
+                size_t flateSize = recompressedFlateSize(decoded.get());
+                if (flateSize > 0 && flateSize < baseline) baseline = flateSize;
+                if (!bilevelSmallEnough(encodedLen, baseline)) return;
+
+                auto replacement = pdf.newStream();
+                auto replacementDict = dict.shallowCopy();
+                replacementDict.removeKey("/Filter");
+                replacementDict.removeKey("/DecodeParms");
+                replacement.replaceDict(replacementDict);
+                QPDFObjectHandle parms = QPDFObjectHandle::newNull();
+                if (globalsLen > 0) {
+                    auto globalsStream = pdf.newStream();
+                    globalsStream.replaceStreamData(
+                        std::string(reinterpret_cast<const char*>(globalsData.ptr),
+                                    static_cast<size_t>(globalsLen)),
+                        QPDFObjectHandle::newNull(), QPDFObjectHandle::newNull());
+                    auto globalsRef = pdf.makeIndirectObject(globalsStream);
+                    parms = QPDFObjectHandle::newDictionary();
+                    parms.replaceKey("/JBIG2Globals", globalsRef);
+                }
+                replacement.replaceStreamData(
+                    std::string(reinterpret_cast<const char*>(pageData.ptr),
+                                static_cast<size_t>(pageLen)),
+                    QPDFObjectHandle::newName("/JBIG2Decode"), parms);
+                if (!objectKey.empty()) replacements[objectKey] = replacement;
+                resources.replaceKey(key, replacement);
+            } catch (...) {
+                // A malformed image must not abort the structural pass.
+            }
+        });
+    }
+}
+
+// Re-encode 1-bit DeviceGray images as CCITT G4 when the encoded stream is
+// smaller. Only the default (0=black, 1=white) decode is accepted; masks and
+// non-gray color spaces are left untouched so appearance cannot change.
+void encodeBilevelImages(QPDF& pdf) {
+    QPDFPageDocumentHelper helper{pdf};
+    std::map<std::string, QPDFObjectHandle> replacements;
+    std::set<std::string> attempted;
+    for (auto& page : helper.getAllPages()) {
+        page.forEachImage(true, [&pdf, &replacements, &attempted](QPDFObjectHandle& image,
+                                                                  QPDFObjectHandle& resources,
+                                                                  std::string const& key) {
+            try {
+                auto dict = image.getDict();
+                if (hasFilter(dict, "/JBIG2Decode") || hasFilter(dict, "/DCTDecode") ||
+                    hasFilter(dict, "/JPXDecode")) {
+                    return;
+                }
+                if (!dict.hasKey("/Width") || !dict.hasKey("/Height") ||
+                    !dict.hasKey("/BitsPerComponent")) {
+                    return;
+                }
+                if (dict.getKey("/BitsPerComponent").getIntValue() != 1) return;
+                if (dict.hasKey("/ImageMask") || dict.hasKey("/Mask") || dict.hasKey("/SMask")) {
+                    return;
+                }
+                if (!dict.hasKey("/ColorSpace") || !dict.getKey("/ColorSpace").isName() ||
+                    dict.getKey("/ColorSpace").getName() != "/DeviceGray") {
+                    return;
+                }
+                if (dict.hasKey("/Decode")) {
+                    auto decode = dict.getKey("/Decode");
+                    if (!decode.isArray() || decode.getArrayNItems() != 2 ||
+                        !decode.getArrayItem(0).isNumber() || !decode.getArrayItem(1).isNumber() ||
+                        decode.getArrayItem(0).getNumericValue() != 0 ||
+                        decode.getArrayItem(1).getNumericValue() != 1) {
+                        return;
+                    }
+                }
+                int64_t widthValue = dict.getKey("/Width").getIntValue();
+                int64_t heightValue = dict.getKey("/Height").getIntValue();
+                if (widthValue <= 0 || heightValue <= 0 || widthValue > 32768 ||
+                    heightValue > 32768 || widthValue * heightValue > kBilevelMaxPixels) {
+                    return;
+                }
+                int width = static_cast<int>(widthValue);
+                int height = static_cast<int>(heightValue);
+                std::string objectKey =
+                    image.isIndirect() ? image.getObjGen().unparse() : std::string();
+                if (!objectKey.empty()) {
+                    auto cached = replacements.find(objectKey);
+                    if (cached != replacements.end()) {
+                        resources.replaceKey(key, cached->second);
+                        return;
+                    }
+                    if (!attempted.insert(objectKey).second) return;
+                }
+                auto decoded = image.getStreamData(qpdf_dl_all);
+                if (!decoded) return;
+                size_t rowBytes = (static_cast<size_t>(width) + 7) / 8;
+                if (decoded->getSize() < rowBytes * static_cast<size_t>(height)) return;
+
+                RustBuffer out;
+                int64_t outLen = 0;
+                if (jpdfium_rust_encode_ccitt_g4(decoded->getBuffer(), decoded->getSize(), width,
+                                                 height, 0, &out.ptr, &outLen) != 0 ||
+                    out.ptr == nullptr || outLen <= 0) {
+                    return;
+                }
+                auto raw = image.getRawStreamData();
+                if (!raw) return;
+                size_t baseline = raw->getSize();
+                size_t flateSize = recompressedFlateSize(decoded.get());
+                if (flateSize > 0 && flateSize < baseline) baseline = flateSize;
+                if (!bilevelSmallEnough(outLen, baseline)) return;
+
+                auto replacement = pdf.newStream();
+                auto replacementDict = dict.shallowCopy();
+                replacementDict.removeKey("/Filter");
+                replacementDict.removeKey("/DecodeParms");
+                auto parms = QPDFObjectHandle::newDictionary();
+                parms.replaceKey("/K", QPDFObjectHandle::newInteger(-1));
+                parms.replaceKey("/Columns", QPDFObjectHandle::newInteger(width));
+                parms.replaceKey("/Rows", QPDFObjectHandle::newInteger(height));
+                parms.replaceKey("/BlackIs1", QPDFObjectHandle::newBool(false));
+                replacement.replaceDict(replacementDict);
+                replacement.replaceStreamData(std::string(reinterpret_cast<const char*>(out.ptr),
+                                                          static_cast<size_t>(outLen)),
+                                              QPDFObjectHandle::newName("/CCITTFaxDecode"), parms);
+                if (!objectKey.empty()) replacements[objectKey] = replacement;
+                resources.replaceKey(key, replacement);
+            } catch (...) {
+                // A malformed image must not abort the structural pass.
+            }
+        });
+    }
+}
+
 void applyDocumentOptions(QPDF& pdf, const OptimizeOptions& options) {
     if (options.flags & JPDFIUM_QPDF_QDF) {
         if (options.flags & JPDFIUM_QPDF_LINEARIZE) {
@@ -218,6 +550,15 @@ void applyDocumentOptions(QPDF& pdf, const OptimizeOptions& options) {
     }
     if (options.flags & JPDFIUM_QPDF_OPTIMIZE_IMAGES) {
         optimizeImages(pdf, options.jpegQuality);
+    }
+    if (options.flags & JPDFIUM_QPDF_JBIG2) {
+        encodeBilevelJbig2(pdf);
+    }
+    if (options.flags & JPDFIUM_QPDF_CCITT_G4) {
+        encodeBilevelImages(pdf);
+    }
+    if (options.flags & JPDFIUM_QPDF_DEDUPLICATE_IMAGES) {
+        deduplicateImages(pdf);
     }
     if (options.flags & JPDFIUM_QPDF_REMOVE_UNREFERENCED_RESOURCES) {
         QPDFPageDocumentHelper{pdf}.removeUnreferencedResources();
@@ -235,6 +576,7 @@ void configureWriter(QPDFWriter& w, const OptimizeOptions& options) {
     if (options.flags & JPDFIUM_QPDF_COMPRESS_STREAMS) w.setCompressStreams(true);
     if (options.flags & JPDFIUM_QPDF_PRESERVE_UNREFERENCED) w.setPreserveUnreferencedObjects(true);
     if (options.flags & JPDFIUM_QPDF_NORMALIZE_CONTENT) w.setContentNormalization(true);
+    if (options.flags & JPDFIUM_QPDF_JBIG2) w.setMinimumPDFVersion("1.4");
     if (options.objectStreamMode >= 0)
         w.setObjectStreamMode(static_cast<qpdf_object_stream_e>(options.objectStreamMode));
     if (options.streamDataMode >= 0)
