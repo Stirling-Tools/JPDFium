@@ -1,6 +1,7 @@
 // jpdfium_color.cpp - DeviceCMYK pipeline: CMYK JPEG images and OutputIntent ICC.
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -77,6 +78,168 @@ void RgbToCmyk(uint8_t r, uint8_t g, uint8_t b, bool extract_black, uint8_t* out
     out[2] = y;
     out[3] = k;
 }
+
+#ifdef JPDFIUM_HAS_QPDF
+QPDFObjectHandle ConvertRgbArrayToCmyk(QPDFObjectHandle rgb) {
+    if (!rgb.isArray() || rgb.getArrayNItems() != 3) return QPDFObjectHandle::newNull();
+    double r = std::clamp(rgb.getArrayItem(0).getNumericValue(), 0.0, 1.0);
+    double g = std::clamp(rgb.getArrayItem(1).getNumericValue(), 0.0, 1.0);
+    double b = std::clamp(rgb.getArrayItem(2).getNumericValue(), 0.0, 1.0);
+    uint8_t cmyk[4];
+    RgbToCmyk(static_cast<uint8_t>(std::lround(r * 255.0)),
+              static_cast<uint8_t>(std::lround(g * 255.0)),
+              static_cast<uint8_t>(std::lround(b * 255.0)), true, cmyk);
+    QPDFObjectHandle out = QPDFObjectHandle::newArray();
+    for (uint8_t value : cmyk) {
+        out.appendItem(QPDFObjectHandle::newReal(static_cast<double>(value) / 255.0));
+    }
+    return out;
+}
+
+bool ConvertExponentialFunctionToCmyk(QPDFObjectHandle function) {
+    QPDFObjectHandle c0 = function.getKey("/C0");
+    QPDFObjectHandle c1 = function.getKey("/C1");
+    if (!c0.isArray() || !c1.isArray()) return false;
+    if (c0.getArrayNItems() == 4 && c1.getArrayNItems() == 4) return true;
+    if (c0.getArrayNItems() != 3 || c1.getArrayNItems() != 3) return false;
+    function.replaceKey("/C0", ConvertRgbArrayToCmyk(c0));
+    function.replaceKey("/C1", ConvertRgbArrayToCmyk(c1));
+    return true;
+}
+
+QPDFObjectHandle NewUnitRange(int components) {
+    QPDFObjectHandle range = QPDFObjectHandle::newArray();
+    for (int i = 0; i < components; ++i) {
+        range.appendItem(QPDFObjectHandle::newReal(0.0));
+        range.appendItem(QPDFObjectHandle::newReal(1.0));
+    }
+    return range;
+}
+
+bool ConvertSampledFunctionToCmyk(QPDFObjectHandle function) {
+    QPDFObjectHandle dict = function.getDict();
+    QPDFObjectHandle range = dict.getKey("/Range");
+    if (!range.isArray() || range.getArrayNItems() % 2 != 0) return false;
+    const int outputs = range.getArrayNItems() / 2;
+    if (outputs == 4) return true;
+    if (outputs != 3) return false;
+
+    QPDFObjectHandle bitsObj = dict.getKey("/BitsPerSample");
+    const int bits = bitsObj.isInteger() ? static_cast<int>(bitsObj.getIntValue()) : 8;
+    // Rewriting arbitrary bit depths would need a second packing pass; leave
+    // those to the Ghostscript fallback.
+    if (bits != 8) return false;
+
+    QPDFObjectHandle size = dict.getKey("/Size");
+    if (!size.isArray() || size.getArrayNItems() < 1 || size.getArrayNItems() > 4) return false;
+    int64_t samples = 1;
+    for (int i = 0; i < size.getArrayNItems(); ++i) {
+        QPDFObjectHandle item = size.getArrayItem(i);
+        if (!item.isInteger() || item.getIntValue() < 1) return false;
+        samples *= item.getIntValue();
+        if (samples > 1 << 24) return false;
+    }
+
+    QPDFObjectHandle orderObj = dict.getKey("/Order");
+    const int order = orderObj.isInteger() ? static_cast<int>(orderObj.getIntValue()) : 1;
+    if (order != 1 && order != 3) return false;
+
+    std::shared_ptr<Buffer> stream = function.getStreamData(qpdf_dl_all);
+    if (!stream || stream->getSize() < static_cast<size_t>(samples) * 3) return false;
+    const uint8_t* input = reinterpret_cast<const uint8_t*>(stream->getBuffer());
+
+    QPDFObjectHandle decodeObj = dict.getKey("/Decode");
+    double decode[6] = {0.0, 1.0, 0.0, 1.0, 0.0, 1.0};
+    if (decodeObj.isArray() && decodeObj.getArrayNItems() == 6) {
+        for (int i = 0; i < 6; ++i) {
+            if (!decodeObj.getArrayItem(i).isNumber()) return false;
+            decode[i] = decodeObj.getArrayItem(i).getNumericValue();
+        }
+    }
+
+    std::vector<uint8_t> output(static_cast<size_t>(samples) * 4);
+    for (int64_t sample = 0; sample < samples; ++sample) {
+        double rgb[3];
+        for (int component = 0; component < 3; ++component) {
+            const int64_t index =
+                order == 1 ? sample * 3 + component : component * samples + sample;
+            const double normalized = static_cast<double>(input[index]) / 255.0;
+            rgb[component] =
+                std::clamp(decode[component * 2] +
+                               normalized * (decode[component * 2 + 1] - decode[component * 2]),
+                           0.0, 1.0);
+        }
+        uint8_t cmyk[4];
+        RgbToCmyk(static_cast<uint8_t>(std::lround(rgb[0] * 255.0)),
+                  static_cast<uint8_t>(std::lround(rgb[1] * 255.0)),
+                  static_cast<uint8_t>(std::lround(rgb[2] * 255.0)), true, cmyk);
+        for (int component = 0; component < 4; ++component) {
+            output[static_cast<size_t>(sample) * 4 + component] = cmyk[component];
+        }
+    }
+
+    dict.replaceKey("/Range", NewUnitRange(4));
+    dict.replaceKey("/Decode", NewUnitRange(4));
+    dict.replaceKey("/Order", QPDFObjectHandle::newInteger(1));
+    function.replaceStreamData(
+        std::string(reinterpret_cast<const char*>(output.data()), output.size()),
+        QPDFObjectHandle::newNull(), QPDFObjectHandle::newNull());
+    return true;
+}
+
+bool ConvertShadingFunctionToCmyk(QPDFObjectHandle function);
+
+bool ConvertStitchingFunctionToCmyk(QPDFObjectHandle function) {
+    QPDFObjectHandle functions = function.getKey("/Functions");
+    if (!functions.isArray() || functions.getArrayNItems() == 0) return false;
+    for (int i = 0; i < functions.getArrayNItems(); ++i) {
+        if (!ConvertShadingFunctionToCmyk(functions.getArrayItem(i))) return false;
+    }
+    QPDFObjectHandle range = function.getKey("/Range");
+    if (!range.isArray() || range.getArrayNItems() % 2 != 0) return false;
+    if (range.getArrayNItems() / 2 == 4) return true;
+    if (range.getArrayNItems() / 2 != 3) return false;
+    function.replaceKey("/Range", NewUnitRange(4));
+    return true;
+}
+
+bool ConvertShadingFunctionToCmyk(QPDFObjectHandle function) {
+    if (!function.isDictionary() && !function.isStream()) return false;
+    QPDFObjectHandle dict = function.isStream() ? function.getDict() : function;
+    QPDFObjectHandle type = dict.getKey("/FunctionType");
+    if (!type.isInteger()) return false;
+    switch (type.getIntValue()) {
+        case 0:
+            return ConvertSampledFunctionToCmyk(function);
+        case 2:
+            return ConvertExponentialFunctionToCmyk(dict);
+        case 3:
+            return ConvertStitchingFunctionToCmyk(dict);
+        default:
+            // PostScript calculator functions are arbitrary programs; the
+            // Ghostscript fallback owns those.
+            return false;
+    }
+}
+
+// Rewrites /DeviceRGB shadings whose function is a Type 0 sampled function,
+// a Type 2 exponential function, or a Type 3 stitch of those. Other shading
+// functions are left untouched.
+int32_t ConvertDocumentShadingsToCmyk(QPDF& pdf) {
+    int32_t converted = 0;
+    for (QPDFObjectHandle object : pdf.getAllObjects()) {
+        if (!object.isDictionary()) continue;
+        QPDFObjectHandle shadingType = object.getKey("/ShadingType");
+        if (!shadingType.isInteger()) continue;
+        QPDFObjectHandle colorSpace = object.getKey("/ColorSpace");
+        if (!colorSpace.isName() || colorSpace.getName() != "/DeviceRGB") continue;
+        if (!ConvertShadingFunctionToCmyk(object.getKey("/Function"))) continue;
+        object.replaceKey("/ColorSpace", QPDFObjectHandle::newName("/DeviceCMYK"));
+        converted++;
+    }
+    return converted;
+}
+#endif
 
 void GrayToCmyk(uint8_t v, bool extract_black, uint8_t* out) {
     if (extract_black) {
@@ -1191,6 +1354,46 @@ std::shared_ptr<Buffer> InjectPdfx(const uint8_t* input, size_t input_len, const
 }  // namespace
 
 extern "C" {
+
+JPDFIUM_EXPORT int32_t jpdfium_color_shadings_to_cmyk(const uint8_t* input, int64_t input_len,
+                                                      uint8_t** output, int64_t* output_len) {
+    if (output) *output = nullptr;
+    if (output_len) *output_len = 0;
+    try {
+#ifndef JPDFIUM_HAS_QPDF
+        (void)input;
+        (void)input_len;
+        return JPDFIUM_ERR_NOT_FOUND;
+#else
+        if (!input || input_len <= 0 || !output || !output_len) return JPDFIUM_ERR_INVALID;
+        auto qpdf = QPDF::create();
+        qpdf->processMemoryFile("jpdfium-shading-input", reinterpret_cast<const char*>(input),
+                                input_len);
+        if (ConvertDocumentShadingsToCmyk(*qpdf) == 0) return JPDFIUM_OK;
+
+        QPDFWriter writer{*qpdf};
+        writer.setOutputMemory();
+        jpdfium_qpdf_internal::WriterLock lock{-1};
+        writer.write();
+        std::shared_ptr<Buffer> buffer = writer.getBufferSharedPointer();
+        if (!buffer || buffer->getSize() == 0) return JPDFIUM_ERR_NATIVE;
+        const int64_t length = static_cast<int64_t>(buffer->getSize());
+        auto* copy = static_cast<uint8_t*>(std::malloc(static_cast<size_t>(length)));
+        if (!copy) return JPDFIUM_ERR_NATIVE;
+        std::memcpy(copy, buffer->getBuffer(), static_cast<size_t>(length));
+        *output = copy;
+        *output_len = length;
+        return JPDFIUM_OK;
+#endif
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "jpdfium color shadings: %s\n", e.what());
+        if (output) *output = nullptr;
+        if (output_len) *output_len = 0;
+        return JPDFIUM_ERR_NATIVE;
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
+    }
+}
 
 JPDFIUM_EXPORT uint32_t jpdfium_color_capabilities(void) JPDFIUM_NOEXCEPT {
     uint32_t caps = 0;

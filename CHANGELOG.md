@@ -19,13 +19,11 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Added
 
-- `PdfXOptions.neutralsToBlack(boolean)`, on by default, maps neutral RGB
-  vector colours to K only instead of four-colour black.
-
-- `PdfXOptions.embedMissingFonts(boolean)`, on by default, and
-  `fontDirectories(Path...)`: PDF/X conversion embeds fonts used without a
-  program through `PdfFontEmbedder.embedMissing`.
-
+- `PdfShadingConverter` rewrites `/DeviceRGB` axial and radial shadings whose
+  function is a Type 0 sampled function, a Type 2 exponential function, or a
+  Type 3 stitch of those to `/DeviceCMYK`. PDF/X metadata application runs the
+  same pass before writing the output intent. PostScript calculator functions
+  are left to the Ghostscript fallback.
 - `PdfSplit.extractPageRangesToFiles` writes many page ranges of one file from a single qpdf
   parse instead of one parse per range. Ranges qpdf cannot write, and `MEMORY` storage, go
   through `extractPageRangeToFile` one at a time. 400 single-page parts of a 4.3 MB PDF take 0.12 s instead of
