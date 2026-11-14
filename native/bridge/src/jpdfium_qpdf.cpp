@@ -1306,10 +1306,14 @@ std::string extractCffTable(FT_Library lib, std::string const& sfntBytes) {
     return cff;
 }
 
+static void ensureMicrosoftUnicodeCmap(std::string& sfnt);
+
 std::string subsetProgram(FontProgram const& p, std::set<FT_UInt> const& glyphs,
                           bool retainGids = true) {
     if (p.bytes.size() > std::numeric_limits<unsigned int>::max()) return {};
-    hb_blob_t* blob = hb_blob_create(p.bytes.data(), static_cast<unsigned int>(p.bytes.size()),
+    std::string sfntCopy = p.bytes;
+    ensureMicrosoftUnicodeCmap(sfntCopy);
+    hb_blob_t* blob = hb_blob_create(sfntCopy.data(), static_cast<unsigned int>(sfntCopy.size()),
                                      HB_MEMORY_MODE_READONLY, nullptr, nullptr);
     hb_face_t* face = hb_face_create(blob, 0);
     hb_blob_destroy(blob);
@@ -1321,6 +1325,16 @@ std::string subsetProgram(FontProgram const& p, std::set<FT_UInt> const& glyphs,
             for (FT_ULong u = FT_Get_First_Char(p.face, &gid); gid;
                  u = FT_Get_Next_Char(p.face, u, &gid))
                 if (glyphs.contains(gid)) hb_set_add(hb_subset_input_unicode_set(input), u);
+        }
+        hb_set_t* drop_tables = hb_subset_input_set(input, HB_SUBSET_SETS_DROP_TABLE_TAG);
+        for (hb_tag_t tag :
+             {HB_TAG('G', 'S', 'U', 'B'), HB_TAG('G', 'P', 'O', 'S'), HB_TAG('G', 'D', 'E', 'F'),
+              HB_TAG('B', 'A', 'S', 'E'), HB_TAG('J', 'S', 'T', 'F'), HB_TAG('M', 'A', 'T', 'H'),
+              HB_TAG('E', 'B', 'D', 'T'), HB_TAG('E', 'B', 'L', 'C'), HB_TAG('E', 'B', 'S', 'C'),
+              HB_TAG('C', 'B', 'D', 'T'), HB_TAG('C', 'B', 'L', 'C'), HB_TAG('s', 'b', 'i', 'x'),
+              HB_TAG('S', 'V', 'G', ' '), HB_TAG('h', 'd', 'm', 'x'), HB_TAG('V', 'D', 'M', 'X'),
+              HB_TAG('L', 'T', 'S', 'H'), HB_TAG('P', 'C', 'L', 'T'), HB_TAG('D', 'S', 'I', 'G')}) {
+            hb_set_add(drop_tables, tag);
         }
         hb_subset_input_set_flags(input, HB_SUBSET_FLAGS_GLYPH_NAMES |
                                              HB_SUBSET_FLAGS_NOTDEF_OUTLINE |
@@ -1339,7 +1353,7 @@ std::string subsetProgram(FontProgram const& p, std::set<FT_UInt> const& glyphs,
     return out;
 }
 
-void ensureMicrosoftUnicodeCmap(std::string& sfnt) {
+static void ensureMicrosoftUnicodeCmap(std::string& sfnt) {
     if (sfnt.size() < 12) return;
     auto read16 = [&](size_t off) -> uint16_t {
         return (static_cast<uint8_t>(sfnt[off]) << 8) | static_cast<uint8_t>(sfnt[off + 1]);
@@ -1389,30 +1403,46 @@ void ensureMicrosoftUnicodeCmap(std::string& sfnt) {
     uint16_t numSubtables = read16(static_cast<size_t>(cmapOffset) + 2);
     if (cmapLength < 4 || static_cast<size_t>(numSubtables) * 8 > cmapLength - 4) return;
 
-    bool hasMsUnicode = false;
-    size_t unicodeSubtableOff = 0;
-
+    int unicodeIndex = -1;
     for (size_t i = 0; i < numSubtables; ++i) {
         size_t subOff = cmapOffset + 4 + i * 8;
         uint16_t plat = read16(subOff);
         uint16_t enc = read16(subOff + 2);
         if (plat == 3 && (enc == 1 || enc == 10)) {
-            hasMsUnicode = true;
+            unicodeIndex = static_cast<int>(i);
             break;
         }
-        if (plat == 0 && (enc == 3 || enc == 4 || enc == 0)) {
-            uint32_t subtableDataOffset = read32(subOff + 4);
-            if (static_cast<size_t>(cmapOffset) + subtableDataOffset + 2 <= sfnt.size() &&
-                read16(static_cast<size_t>(cmapOffset) + subtableDataOffset) == 4)
-                unicodeSubtableOff = subOff;
+    }
+    if (unicodeIndex < 0) {
+        for (size_t i = 0; i < numSubtables; ++i) {
+            size_t subOff = cmapOffset + 4 + i * 8;
+            uint16_t plat = read16(subOff);
+            uint16_t enc = read16(subOff + 2);
+            if (plat == 0 && (enc == 3 || enc == 4 || enc == 0)) {
+                uint32_t subtableDataOffset = read32(subOff + 4);
+                if (static_cast<size_t>(cmapOffset) + subtableDataOffset + 2 <= sfnt.size() &&
+                    read16(static_cast<size_t>(cmapOffset) + subtableDataOffset) == 4) {
+                    unicodeIndex = static_cast<int>(i);
+                    break;
+                }
+            }
         }
     }
 
-    if (hasMsUnicode || !unicodeSubtableOff) return;
+    if (unicodeIndex < 0) return;
 
-    // Convert Unicode subtable (0, 3) to Microsoft Unicode (3, 1)
-    write16(unicodeSubtableOff, 3);
-    write16(unicodeSubtableOff + 2, 1);
+    if (numSubtables > 1 || read16(static_cast<size_t>(cmapOffset) + 4) == 0) {
+        if (unicodeIndex > 0) {
+            size_t srcOff = static_cast<size_t>(cmapOffset) + 4 + unicodeIndex * 8;
+            size_t dstOff = static_cast<size_t>(cmapOffset) + 4;
+            std::memmove(&sfnt[dstOff], &sfnt[srcOff], 8);
+        }
+        if (read16(static_cast<size_t>(cmapOffset) + 4) == 0) {
+            write16(static_cast<size_t>(cmapOffset) + 4, 3);
+            write16(static_cast<size_t>(cmapOffset) + 6, 1);
+        }
+        write16(static_cast<size_t>(cmapOffset) + 2, 1);
+    }
 
     // Recalculate cmap checksum
     uint32_t cmapSum = 0;

@@ -1862,14 +1862,131 @@ static FnCidScan fn_used_cids_for_font(QPDF& pdf, QPDFObjectHandle const& font, 
     return result;
 }
 
+static void fn_isolate_unicode_cmap(std::string& sfnt) {
+    if (sfnt.size() < 12) return;
+    auto read16 = [&](size_t off) -> uint16_t {
+        return (static_cast<uint8_t>(sfnt[off]) << 8) | static_cast<uint8_t>(sfnt[off + 1]);
+    };
+    auto read32 = [&](size_t off) -> uint32_t {
+        return (static_cast<uint32_t>(static_cast<uint8_t>(sfnt[off])) << 24) |
+               (static_cast<uint32_t>(static_cast<uint8_t>(sfnt[off + 1])) << 16) |
+               (static_cast<uint32_t>(static_cast<uint8_t>(sfnt[off + 2])) << 8) |
+               static_cast<uint32_t>(static_cast<uint8_t>(sfnt[off + 3]));
+    };
+    auto write16 = [&](size_t off, uint16_t v) {
+        sfnt[off] = static_cast<char>((v >> 8) & 0xFF);
+        sfnt[off + 1] = static_cast<char>(v & 0xFF);
+    };
+    auto write32 = [&](size_t off, uint32_t v) {
+        sfnt[off] = static_cast<char>((v >> 24) & 0xFF);
+        sfnt[off + 1] = static_cast<char>((v >> 16) & 0xFF);
+        sfnt[off + 2] = static_cast<char>((v >> 8) & 0xFF);
+        sfnt[off + 3] = static_cast<char>(v & 0xFF);
+    };
+
+    uint16_t numTables = read16(4);
+    if (sfnt.size() < 12 + static_cast<size_t>(numTables) * 16) return;
+
+    size_t cmapEntryOff = 0;
+    uint32_t cmapOffset = 0;
+    uint32_t cmapLength = 0;
+    uint32_t headOffset = 0;
+
+    for (size_t i = 0; i < numTables; ++i) {
+        size_t entry = 12 + i * 16;
+        if (std::memcmp(&sfnt[entry], "cmap", 4) == 0) {
+            cmapEntryOff = entry;
+            cmapOffset = read32(entry + 8);
+            cmapLength = read32(entry + 12);
+        } else if (std::memcmp(&sfnt[entry], "head", 4) == 0) {
+            headOffset = read32(entry + 8);
+        }
+    }
+
+    if (!cmapEntryOff || cmapOffset > sfnt.size() || sfnt.size() - cmapOffset < 4 ||
+        cmapLength > sfnt.size() - cmapOffset)
+        return;
+
+    uint16_t numSubtables = read16(static_cast<size_t>(cmapOffset) + 2);
+    if (numSubtables <= 1 || cmapLength < 4 ||
+        static_cast<size_t>(numSubtables) * 8 > cmapLength - 4)
+        return;
+
+    int unicodeIndex = -1;
+    for (size_t i = 0; i < numSubtables; ++i) {
+        size_t subOff = static_cast<size_t>(cmapOffset) + 4 + i * 8;
+        uint16_t plat = read16(subOff);
+        uint16_t enc = read16(subOff + 2);
+        if (plat == 3 && (enc == 1 || enc == 10)) {
+            unicodeIndex = static_cast<int>(i);
+            break;
+        }
+    }
+    if (unicodeIndex < 0) {
+        for (size_t i = 0; i < numSubtables; ++i) {
+            size_t subOff = static_cast<size_t>(cmapOffset) + 4 + i * 8;
+            uint16_t plat = read16(subOff);
+            uint16_t enc = read16(subOff + 2);
+            if (plat == 0 && (enc == 3 || enc == 4 || enc == 0)) {
+                unicodeIndex = static_cast<int>(i);
+                break;
+            }
+        }
+    }
+    if (unicodeIndex < 0) return;
+
+    if (unicodeIndex > 0) {
+        size_t srcOff = static_cast<size_t>(cmapOffset) + 4 + unicodeIndex * 8;
+        size_t dstOff = static_cast<size_t>(cmapOffset) + 4;
+        std::memmove(&sfnt[dstOff], &sfnt[srcOff], 8);
+    }
+    uint16_t plat = read16(static_cast<size_t>(cmapOffset) + 4);
+    if (plat == 0) {
+        write16(static_cast<size_t>(cmapOffset) + 4, 3);
+        write16(static_cast<size_t>(cmapOffset) + 6, 1);
+    }
+    write16(static_cast<size_t>(cmapOffset) + 2, 1);
+
+    uint32_t cmapSum = 0;
+    for (size_t i = 0; i < cmapLength; i += 4) {
+        uint32_t word = 0;
+        for (size_t b = 0; b < 4 && i + b < cmapLength; ++b) {
+            word =
+                (word << 8) | static_cast<uint8_t>(sfnt[static_cast<size_t>(cmapOffset) + i + b]);
+        }
+        if (cmapLength - i < 4) {
+            word <<= (4 - (cmapLength - i)) * 8;
+        }
+        cmapSum += word;
+    }
+    write32(cmapEntryOff + 4, cmapSum);
+
+    if (headOffset && headOffset <= sfnt.size() && sfnt.size() - headOffset >= 12) {
+        write32(static_cast<size_t>(headOffset) + 8, 0);
+        uint32_t fontSum = 0;
+        for (size_t i = 0; i < sfnt.size(); i += 4) {
+            uint32_t word = 0;
+            for (size_t b = 0; b < 4 && i + b < sfnt.size(); ++b) {
+                word = (word << 8) | static_cast<uint8_t>(sfnt[i + b]);
+            }
+            if (sfnt.size() - i < 4) {
+                word <<= (4 - (sfnt.size() - i)) * 8;
+            }
+            fontSum += word;
+        }
+        write32(static_cast<size_t>(headOffset) + 8, 0xB1B0AFBA - fontSum);
+    }
+}
+
 static std::string fn_subset_sfnt(FT_Library lib, const uint8_t* data, size_t size,
                                   FT_Long face_index, std::set<FT_UInt> const& glyphs,
                                   FT_Face face) {
     (void)lib;
     if (!data || size == 0 || size > std::numeric_limits<unsigned int>::max()) return {};
-    hb_blob_t* blob =
-        hb_blob_create(reinterpret_cast<const char*>(data), static_cast<unsigned int>(size),
-                       HB_MEMORY_MODE_READONLY, nullptr, nullptr);
+    std::string sfnt_copy(reinterpret_cast<const char*>(data), size);
+    fn_isolate_unicode_cmap(sfnt_copy);
+    hb_blob_t* blob = hb_blob_create(sfnt_copy.data(), static_cast<unsigned int>(sfnt_copy.size()),
+                                     HB_MEMORY_MODE_READONLY, nullptr, nullptr);
     hb_face_t* hb_face = hb_face_create(blob, static_cast<unsigned int>(face_index));
     hb_blob_destroy(blob);
     std::string out;
@@ -1880,6 +1997,16 @@ static std::string fn_subset_sfnt(FT_Library lib, const uint8_t* data, size_t si
             for (FT_ULong u = FT_Get_First_Char(face, &gid); gid;
                  u = FT_Get_Next_Char(face, u, &gid))
                 if (glyphs.contains(gid)) hb_set_add(hb_subset_input_unicode_set(input), u);
+        }
+        hb_set_t* drop_tables = hb_subset_input_set(input, HB_SUBSET_SETS_DROP_TABLE_TAG);
+        for (hb_tag_t tag :
+             {HB_TAG('G', 'S', 'U', 'B'), HB_TAG('G', 'P', 'O', 'S'), HB_TAG('G', 'D', 'E', 'F'),
+              HB_TAG('B', 'A', 'S', 'E'), HB_TAG('J', 'S', 'T', 'F'), HB_TAG('M', 'A', 'T', 'H'),
+              HB_TAG('E', 'B', 'D', 'T'), HB_TAG('E', 'B', 'L', 'C'), HB_TAG('E', 'B', 'S', 'C'),
+              HB_TAG('C', 'B', 'D', 'T'), HB_TAG('C', 'B', 'L', 'C'), HB_TAG('s', 'b', 'i', 'x'),
+              HB_TAG('S', 'V', 'G', ' '), HB_TAG('h', 'd', 'm', 'x'), HB_TAG('V', 'D', 'M', 'X'),
+              HB_TAG('L', 'T', 'S', 'H'), HB_TAG('P', 'C', 'L', 'T'), HB_TAG('D', 'S', 'I', 'G')}) {
+            hb_set_add(drop_tables, tag);
         }
         hb_subset_input_set_flags(input, HB_SUBSET_FLAGS_RETAIN_GIDS | HB_SUBSET_FLAGS_GLYPH_NAMES |
                                              HB_SUBSET_FLAGS_NOTDEF_OUTLINE);
