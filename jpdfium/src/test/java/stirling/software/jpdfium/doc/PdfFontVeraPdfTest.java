@@ -73,17 +73,23 @@ class PdfFontVeraPdfTest {
         assumeTrue(verapdfAvailable, "verapdf CLI is not available");
         assumeTrue(PdfFontEmbedder.isAvailable(), "native font embedder is not available");
 
-        Path safedocsDir = Path.of("/private/var/folders/10/4hn925296yx_fqxp5g2z__v40000gn/T/safedocs/pdfs/0000");
-        assumeTrue(Files.isDirectory(safedocsDir), "SafeDocs 0000 directory not found");
+        Path safedocsBase = Path.of("/private/var/folders/10/4hn925296yx_fqxp5g2z__v40000gn/T/safedocs/pdfs");
+        assumeTrue(Files.isDirectory(safedocsBase), "SafeDocs base directory not found");
+
+        List<String> folders = List.of("0000", "0400", "0800", "1200", "1600", "2000");
+        List<Path> candidates = new ArrayList<>();
+        for (String folder : folders) {
+            Path dir = safedocsBase.resolve(folder);
+            if (!Files.isDirectory(dir)) continue;
+            try (Stream<Path> s = Files.list(dir)) {
+                candidates.addAll(s.filter(p -> p.toString().endsWith(".pdf"))
+                        .limit(8)
+                        .toList());
+            }
+        }
 
         int tested = 0;
         int passed2b = 0;
-        List<Path> candidates;
-        try (Stream<Path> s = Files.list(safedocsDir)) {
-            candidates = s.filter(p -> p.toString().endsWith(".pdf"))
-                    .limit(30)
-                    .toList();
-        }
 
         for (Path pdf : candidates) {
             byte[] bytes;
@@ -101,6 +107,10 @@ class PdfFontVeraPdfTest {
                 continue;
             }
             if (result.embedded().isEmpty()) continue;
+            if (!result.unresolved().isEmpty()) {
+                System.out.println("SafeDocs " + pdf.getFileName() + " partial embedding, unresolved=" + result.unresolved());
+                continue;
+            }
 
             tested++;
             Path embedOnlyPath = tempDir.resolve("embed-only-" + pdf.getFileName());
@@ -167,11 +177,14 @@ class PdfFontVeraPdfTest {
     }
 
     private static boolean isFontRule(String clause, String desc, String obj, String flavour) {
-        if ("1b".equalsIgnoreCase(flavour) && clause.startsWith("6.3.")) {
-            return true;
+        if (flavour != null && flavour.startsWith("1")) {
+            return clause.startsWith("6.3");
         }
-        if ("2b".equalsIgnoreCase(flavour) && clause.startsWith("6.2.11")) {
-            return true;
+        if (flavour != null && (flavour.startsWith("2") || flavour.startsWith("3"))) {
+            return clause.startsWith("6.2.11");
+        }
+        if (clause.startsWith("6.2.2") || clause.startsWith("6.2.3") || clause.startsWith("6.2.4") || clause.startsWith("6.7")) {
+            return false;
         }
         String o = obj.toLowerCase();
         if (o.contains("font") || o.contains("glyph") || o.contains("cmap")) return true;

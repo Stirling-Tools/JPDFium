@@ -1333,7 +1333,8 @@ std::string subsetProgram(FontProgram const& p, std::set<FT_UInt> const& glyphs,
               HB_TAG('E', 'B', 'D', 'T'), HB_TAG('E', 'B', 'L', 'C'), HB_TAG('E', 'B', 'S', 'C'),
               HB_TAG('C', 'B', 'D', 'T'), HB_TAG('C', 'B', 'L', 'C'), HB_TAG('s', 'b', 'i', 'x'),
               HB_TAG('S', 'V', 'G', ' '), HB_TAG('h', 'd', 'm', 'x'), HB_TAG('V', 'D', 'M', 'X'),
-              HB_TAG('L', 'T', 'S', 'H'), HB_TAG('P', 'C', 'L', 'T'), HB_TAG('D', 'S', 'I', 'G')}) {
+              HB_TAG('L', 'T', 'S', 'H'), HB_TAG('P', 'C', 'L', 'T'), HB_TAG('D', 'S', 'I', 'G'),
+              HB_TAG('k', 'e', 'r', 'n'), HB_TAG('m', 'e', 't', 'a'), HB_TAG('S', 'T', 'A', 'T')}) {
             hb_set_add(drop_tables, tag);
         }
         hb_subset_input_set_flags(input, HB_SUBSET_FLAGS_GLYPH_NAMES |
@@ -4357,7 +4358,24 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
                                                                 : "/FontFile3",
                                   stream);
             if (cid) {
-                std::set<uint32_t> activeCids = cidsPresentInProgram(target, program.face);
+                std::set<uint32_t> activeCids;
+                if (!glyphs.empty()) {
+                    std::string map_view;
+                    auto map = target.getKey("/CIDToGIDMap");
+                    if (map.isStream()) {
+                        try {
+                            auto data = map.getStreamData(qpdf_dl_generalized);
+                            if (data) {
+                                map_view.assign(reinterpret_cast<const char*>(data->getBuffer()),
+                                                data->getSize());
+                            }
+                        } catch (...) {
+                        }
+                    }
+                    activeCids = cidsForRetainedGlyphs(target, map_view, glyphs);
+                } else {
+                    activeCids = cidsPresentInProgram(target, program.face);
+                }
                 if (activeCids.empty()) {
                     // The installed map could not be read back. Derive the bitmap
                     // from the mapping this rewrite actually wrote, or leave the
@@ -4406,7 +4424,7 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
         } else {
             writer.setOutputMemory();
         }
-        WriterLock lock{-1};
+        WriterLock lock{9};
         writer.write();
         return {out ? nullptr : writer.getBufferSharedPointer(), "", 0};
     } catch (QPDFExc const& e) {
@@ -4972,7 +4990,7 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_subset_fonts(const uint8_t* input, int64_t i
         writer.setDecodeLevel(qpdf_dl_none);
         writer.setNewlineBeforeEndstream(true);
         writer.setOutputMemory();
-        WriterLock lock{-1};
+        WriterLock lock{9};
         writer.write();
         auto buf = writer.getBufferSharedPointer();
         if (!buf || buf->getSize() == 0) return -1;
