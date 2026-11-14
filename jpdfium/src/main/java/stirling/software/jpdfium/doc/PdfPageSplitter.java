@@ -79,6 +79,8 @@ public final class PdfPageSplitter {
             try (PdfPage page = doc.page(currentIdx)) {
                 pageWidth = page.size().width();
                 pageHeight = page.size().height();
+            } catch (RuntimeException e) {
+                continue;
             }
 
             // Determine split point
