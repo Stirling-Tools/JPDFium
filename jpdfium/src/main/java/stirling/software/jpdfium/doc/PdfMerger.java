@@ -113,9 +113,6 @@ public final class PdfMerger {
         if (pdf == null || pdf.length == 0) {
             return false;
         }
-        if (pdf.length >= 2048) {
-            return true;
-        }
         try (PdfDocument doc = PdfDocument.open(pdf)) {
             return doc.pageCount() > 0;
         } catch (RuntimeException e) {
