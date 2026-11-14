@@ -310,4 +310,26 @@ class PdfRepairTest {
         }
     }
 
+    @Test
+    void repairsSynthesizedDefectedFixtures() throws IOException {
+        String[] fixtures = {
+            "/pdfs/repair/truncated_no_eof.pdf",
+            "/pdfs/repair/corrupt_xref_offsets.pdf",
+            "/pdfs/repair/missing_startxref.pdf",
+            "/pdfs/repair/corrupt_stream_length.pdf"
+        };
+        for (String fixture : fixtures) {
+            byte[] input;
+            try (var is = PdfRepairTest.class.getResourceAsStream(fixture)) {
+                assertNotNull(is, "Missing fixture: " + fixture);
+                input = is.readAllBytes();
+            }
+            RepairResult result = PdfRepair.builder().input(input).all().build().execute();
+            assertTrue(result.isUsable(), "Expected repairable fixture: " + fixture);
+            try (var doc = stirling.software.jpdfium.PdfDocument.open(result.repairedPdf())) {
+                assertTrue(doc.pageCount() > 0, "Expected >0 pages after repair for: " + fixture);
+            }
+        }
+    }
+
 }
