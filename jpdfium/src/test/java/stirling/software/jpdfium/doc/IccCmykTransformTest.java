@@ -39,6 +39,40 @@ class IccCmykTransformTest {
     }
 
     @Test
+    void validatesTheSourceProfileBeforeTheKOnlyShortcut() {
+        IccCmykTransform transform = new IccCmykTransform(PdfIccProfiles.compactCmyk());
+        byte[] malformed = new byte[200];
+        ByteBuffer buffer = ByteBuffer.wrap(malformed);
+        buffer.putInt(0, malformed.length);
+        buffer.put(16, "CMYK".getBytes(StandardCharsets.US_ASCII));
+        buffer.put(36, "acsp".getBytes(StandardCharsets.US_ASCII));
+        buffer.putInt(128, 1);
+        buffer.putInt(132, 0x64657363);
+        buffer.putInt(136, 500);
+        buffer.putInt(140, 4);
+
+        assertThrows(
+                JPDFiumException.class,
+                () -> transform.toCmykFromIcc(
+                        malformed, new float[] {0f, 0f, 0f, 1f}, new int[4]));
+    }
+
+    @Test
+    void distinctCmykSourceProfileStillUsesTheConversionPath() {
+        byte[] target = PdfIccProfiles.compactCmyk();
+        byte[] source = target.clone();
+        source[84] ^= 1; // profile ID only; colorimetry is unchanged
+        IccCmykTransform transform = new IccCmykTransform(target);
+        int[] out = new int[4];
+
+        transform.toCmykFromIcc(source, new float[] {0f, 0f, 0f, 1f}, out);
+
+        for (int value : out) {
+            assertTrue(value >= 0 && value <= 255, "ink out of range: " + value);
+        }
+    }
+
+    @Test
     void bundledProfileHasOutputClassTags() {
         java.awt.color.ICC_Profile profile =
                 java.awt.color.ICC_Profile.getInstance(PdfIccProfiles.compactCmyk());

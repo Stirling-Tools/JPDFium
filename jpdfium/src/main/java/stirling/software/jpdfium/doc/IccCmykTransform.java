@@ -34,6 +34,7 @@ final class IccCmykTransform {
 
     private final ColorSpace srgb = ColorSpace.getInstance(ColorSpace.CS_sRGB);
     private final ICC_ColorSpace cmyk;
+    private final byte[] targetIcc;
     private final byte[] lut = new byte[LUT_BYTES];
     private final float[] rgb = new float[3];
 
@@ -52,6 +53,7 @@ final class IccCmykTransform {
                     + components + "); expected 4");
         }
         this.cmyk = new ICC_ColorSpace(profile);
+        this.targetIcc = iccProfile.clone();
         buildLut();
     }
 
@@ -89,6 +91,20 @@ final class IccCmykTransform {
      */
     void toCmykFromIcc(byte[] sourceIcc, float[] components, int[] out) {
         ICC_ColorSpace source = staticSourceSpace(sourceIcc, components.length);
+        if (Arrays.equals(sourceIcc, targetIcc)
+                && components.length == 4
+                && components[0] <= 0.001f
+                && components[1] <= 0.001f
+                && components[2] <= 0.001f) {
+            // A K-only value already in the target ink space must stay
+            // single-channel black. A different CMYK source still goes
+            // through both profiles so its ink is preserved.
+            out[0] = 0;
+            out[1] = 0;
+            out[2] = 0;
+            out[3] = clamp255(components[3]);
+            return;
+        }
         float[] xyz = source.toCIEXYZ(components);
         if (components.length == 1 || components.length == 4) {
             // Gray and CMYK source profiles already carry ink information.

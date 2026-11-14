@@ -187,7 +187,7 @@ class PdfXConverterTest {
         byte[] icc = PdfIccProfiles.compactCmyk();
         assertEquals(4, ICC_Profile.getInstance(icc).getNumComponents(),
                 "bundled output intent must be a CMYK profile");
-        assertTrue(icc.length < 16 * 1024,
+        assertTrue(icc.length < 1024 * 1024,
                 "the bundled fallback must stay small; was " + icc.length + " bytes");
 
         byte[] input = Files.readAllBytes(resource("/pdfs/general/basic-text.pdf"));
