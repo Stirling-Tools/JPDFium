@@ -8,17 +8,17 @@ public enum CompressPreset {
      * Web optimization: moderate image quality, object stream compression.
      * Good balance between file size and quality.
      */
-    WEB(75, 150, true, true, true, false, true, PreservationMode.VISUALLY_CONSTRAINED),
+    WEB(75, 150, true, true, true, false, false, PreservationMode.VISUALLY_CONSTRAINED),
 
     /**
      * Screen/email: lower quality, maximum compression.
      */
-    SCREEN(60, 96, true, true, true, false, true, PreservationMode.SCAN),
+    SCREEN(60, 96, true, true, true, false, false, PreservationMode.SCAN),
 
     /**
      * Print-ready: high quality, structural optimization only.
      */
-    PRINT(90, 300, false, true, false, false, true, PreservationMode.VISUALLY_CONSTRAINED),
+    PRINT(90, 300, false, true, false, false, false, PreservationMode.VISUALLY_CONSTRAINED),
 
     /**
      * Lossless maximum: aggressive structural optimization and stream
@@ -31,12 +31,12 @@ public enum CompressPreset {
      * than the qpdf pass alone. zopfli remains available as an explicit opt-in
      * via {@link CompressOptions.Builder#useZopfliDeflate(boolean)}.
      */
-    LOSSLESS(-1, -1, false, true, false, false, true, PreservationMode.EXACT),
+    LOSSLESS(-1, -1, false, true, false, false, false, PreservationMode.EXACT),
 
     /**
      * Maximum compression: aggressive image optimization and structural compression.
      */
-    MAXIMUM(50, 96, true, true, true, false, true, PreservationMode.DESTRUCTIVE);
+    MAXIMUM(50, 96, true, true, true, false, false, PreservationMode.DESTRUCTIVE);
 
     private final int imageQuality;
     private final int maxImageDpi;

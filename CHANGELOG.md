@@ -114,6 +114,22 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Fixed
 
+- Font normalization rebuilds `/CIDSet` from every CID present in the embedded
+  program, including CIDs mapped to GID 0, and corrects an existing `/W` array
+  when it disagrees with the program's advances. `issue20065.pdf` now passes
+  veraPDF 6.2.11.4.2-2 and 6.2.11.5-1 without changing extracted text.
+
+- Compression font subsetting is opt-in (`subsetFonts(false)` by default) and
+  verifies extracted text and rendering before adopting the smaller bytes.
+  `PdfFontEmbedder.embedMissingStrict` rejects a result that still has an
+  unembedded font instead of returning a document that silently fails
+  PDF/A font-embedding checks.
+
+- The Adobe Glyph List table covers all 4,281 names, including the 81
+  multi-scalar Arabic/Hebrew sequences, and `uXXXX` escapes accept lowercase
+  only when they contain a decimal digit, so ordinary names such as `uface`
+  no longer resolve to U+FACE while `u00e9` still works.
+
 - PDF/X-1a and PDF/X-3 no longer accept images with soft masks, which the page
   transparency probe missed, and drop transparency groups from pages that have
   no transparent content.
