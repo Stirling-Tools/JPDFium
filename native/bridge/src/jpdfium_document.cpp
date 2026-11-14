@@ -883,9 +883,8 @@ int32_t jpdfium_import_n_pages_to_one(void* srcDoc, float outputWidth, float out
         FPDF_ClosePage(page);
     }
 
-    FPDF_DOCUMENT nupDoc =
-        FPDF_ImportNPagesToOne(doc, outputWidth, outputHeight,
-                               static_cast<size_t>(cols), static_cast<size_t>(rows));
+    FPDF_DOCUMENT nupDoc = FPDF_ImportNPagesToOne(
+        doc, outputWidth, outputHeight, static_cast<size_t>(cols), static_cast<size_t>(rows));
 
     if (!nupDoc) return JPDFIUM_ERR_NATIVE;
 
