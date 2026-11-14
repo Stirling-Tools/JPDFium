@@ -79,7 +79,7 @@ public final class PdfMerger {
             return null;
         }
         byte[] result = QpdfLib.merge(inputs);
-        if (result != null) {
+        if (hasPages(result)) {
             return result;
         }
         List<byte[]> repaired = new ArrayList<>(inputs.size());
@@ -93,7 +93,7 @@ public final class PdfMerger {
             }
         }
         byte[] retried = repaired.isEmpty() ? null : QpdfLib.merge(repaired);
-        if (retried != null) {
+        if (hasPages(retried)) {
             return retried;
         }
         try (PdfDocument dest = PdfDocument.createEmpty()) {
@@ -106,6 +106,20 @@ public final class PdfMerger {
             return dest.pageCount() > 0 ? dest.saveBytes() : null;
         } catch (RuntimeException e) {
             return null;
+        }
+    }
+
+    private static boolean hasPages(byte[] pdf) {
+        if (pdf == null || pdf.length == 0) {
+            return false;
+        }
+        if (pdf.length >= 2048) {
+            return true;
+        }
+        try (PdfDocument doc = PdfDocument.open(pdf)) {
+            return doc.pageCount() > 0;
+        } catch (RuntimeException e) {
+            return false;
         }
     }
 
