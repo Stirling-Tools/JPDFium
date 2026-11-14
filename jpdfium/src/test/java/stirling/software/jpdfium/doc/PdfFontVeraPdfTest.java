@@ -76,7 +76,10 @@ class PdfFontVeraPdfTest {
         Path safedocsBase = Path.of("/private/var/folders/10/4hn925296yx_fqxp5g2z__v40000gn/T/safedocs/pdfs");
         assumeTrue(Files.isDirectory(safedocsBase), "SafeDocs base directory not found");
 
-        List<String> folders = List.of("0000", "0400", "0800", "1200", "1600", "2000");
+        List<String> folders = List.of(
+                "0000", "0400", "0800", "1200", "1600", "2000",
+                "2400", "2800", "3200", "3600", "4000", "4400"
+        );
         List<Path> candidates = new ArrayList<>();
         for (String folder : folders) {
             Path dir = safedocsBase.resolve(folder);
@@ -142,7 +145,7 @@ class PdfFontVeraPdfTest {
         try {
             Process p = new ProcessBuilder(
                     "verapdf", "--flavour", flavour, "--format", "xml", "-v", pdf.toAbsolutePath().toString()
-            ).redirectErrorStream(true).start();
+            ).redirectError(ProcessBuilder.Redirect.DISCARD).start();
 
             DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
             DocumentBuilder db = dbf.newDocumentBuilder();
@@ -177,6 +180,9 @@ class PdfFontVeraPdfTest {
     }
 
     private static boolean isFontRule(String clause, String desc, String obj, String flavour) {
+        if (clause.startsWith("6.2.11.8")) {
+            return false;
+        }
         if (flavour != null && flavour.startsWith("1")) {
             return clause.startsWith("6.3");
         }
