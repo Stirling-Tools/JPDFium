@@ -11,45 +11,10 @@ import java.lang.System.Logger.Level;
 import java.lang.foreign.MemorySegment;
 
 /**
- * Font normalization pipeline - fixes broken fonts that cause auto-redact failures,
- * garbled text extraction, and corrupted rendering after edits.
- *
- * <p>Broken fonts are the #1 reason auto-redact misses characters. The per-page
- * repair pipeline is:
- * <pre>
- * Save through PDFium -> Load with qpdf -> Walk page font resources ->
- * Load embedded program in FreeType -> Generate /ToUnicode and repair widths ->
- * Write back through qpdf and reload the document
- * </pre>
- *
- * <p>{@link #normalizePage} combines the two repairs in a single qpdf rewrite, so
- * a page whose fonts need both changes is saved and reloaded only once. Only
- * fonts with a readable embedded program ({@code /FontFile}, {@code /FontFile2}
- * or {@code /FontFile3}) are processed; a missing or unembedded program has no
- * authoritative cmap or advance widths to read, so embedding is handled
- * separately by {@link stirling.software.jpdfium.doc.PdfFontEmbedder}.
- *
- * <p>Each stage uses a strictly MIT-compatible native library:
- * <ul>
- *   <li><strong>FreeType</strong> (FTL/MIT) - cmap walking for /ToUnicode, authoritative
- *       advance widths, classify, Type1 parse</li>
- *   <li><strong>HarfBuzz hb-subset</strong> (MIT) - subset, layout table preservation, CFF2 output</li>
- *   <li><strong>ICU4C</strong> (Unicode License) - Unicode normalization (NFC/NFD) before CMap generation</li>
- *   <li><strong>qpdf</strong> (Apache 2.0) - resource walking, stream replacement, font dict edit,
- *       single write-back per page</li>
- * </ul>
- *
- * <p><b>Usage</b></p>
- * <pre>{@code
- * try (PdfDocument doc = PdfDocument.open(path)) {
- *     for (int i = 0; i < doc.pageCount(); i++) {
- *         FontNormalizer.Result result = FontNormalizer.normalizePage(doc, i);
- *         System.out.printf("Page %d: %d fonts processed, %d ToUnicode fixed%n",
- *             i, result.fontsProcessed(), result.toUnicodeFixed());
- *     }
- *     RedactResult redactResult = PdfRedactor.redact(doc, opts);
- * }
- * }</pre>
+ * Repairs embedded font dictionaries: missing {@code /ToUnicode}, simple-font
+ * {@code /Widths}, CID {@code /W}, {@code /CIDSet}, and CFF packaging. Only fonts
+ * with an embedded program are processed; embed missing programs with
+ * {@code PdfFontEmbedder} first.
  */
 public final class FontNormalizer {
 
@@ -70,7 +35,7 @@ public final class FontNormalizer {
      *
      * <p>Fonts without an embedded program are skipped, since there is no cmap or
      * advance-width source to read. Use
-     * {@link stirling.software.jpdfium.doc.PdfFontEmbedder} first to embed missing
+     * {@code PdfFontEmbedder} first to embed missing
      * or unembedded font programs.
      *
      * @param doc       open PDF document
@@ -128,7 +93,7 @@ public final class FontNormalizer {
      * {@code /ToUnicode} stream are left alone.
      *
      * <p>Fonts with no embedded program cannot be repaired here; embed them with
-     * {@link stirling.software.jpdfium.doc.PdfFontEmbedder} first.
+     * {@code PdfFontEmbedder} first.
      *
      * @param doc       open PDF document
      * @param pageIndex zero-based page index
@@ -172,7 +137,7 @@ public final class FontNormalizer {
      * deliberate tracking or justification. CID fonts without a {@code /W} array
      * gain entries for drawn CIDs plus zero-advance glyphs. Fonts with no
      * readable embedded program are skipped; embed them with
-     * {@link stirling.software.jpdfium.doc.PdfFontEmbedder} first.
+     * {@code PdfFontEmbedder} first.
      *
      * @param doc       open PDF document
      * @param pageIndex zero-based page index
