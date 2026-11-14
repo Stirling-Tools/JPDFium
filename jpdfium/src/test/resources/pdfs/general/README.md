@@ -33,3 +33,5 @@ Tiny hand-built PDFs, no external content, committed by the JPDFium authors:
 | `nested-type3-reverse-order.pdf` | Nested Type3 fonts whose resource dictionaries appear in reverse object order |
 | `three-pages-shared-font.pdf` | Three pages sharing one font resource; page-range inventories must stay compact |
 | `utf8-name-font.pdf` | `/BaseFont` name with non-ASCII UTF-8 bytes that must round-trip through inventory reports |
+| `gb_euc_h_sample.pdf` | Hand-built Type0 sample: `SimSun` base font with an `Adobe-GB1-0` CIDSystemInfo and a `/GB-EUC-H` encoding; draws "Hello ASCII" and `<D6D0CEC4B2E2CAD4>` (GB-EUC-H bytes for 中文测试), exercising GB-EUC-H CID handling |
+| `ksc_euc_h_sample.pdf` | Hand-built Type0 sample: `Batang` base font with an `Adobe-Korea1-0` CIDSystemInfo and a `/KSC-EUC-H` encoding; draws "Hello ASCII" and `<C7D1B9BEEE20C5D7BDBAC6AE>` (KSC-EUC-H bytes for 한국어 테스트), exercising KSC-EUC-H CID handling |
