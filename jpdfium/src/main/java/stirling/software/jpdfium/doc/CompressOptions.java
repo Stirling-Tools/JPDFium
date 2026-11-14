@@ -29,6 +29,7 @@ public final class CompressOptions {
     private final PreservationMode preservationMode;
     private final ProcessingMode processingMode;
     private final boolean useZopfliDeflate;  // Rust: zopfli post-processing pass
+    private final boolean usePodofoImageDedup;
     private final int zopfliIterations;      // Rust: zopfli iteration count
     private final int zopfliMaxInputBytes;   // Rust: skip zopfli above this size, 0 = unlimited
 
@@ -42,6 +43,7 @@ public final class CompressOptions {
         this.preservationMode = b.preservationMode;
         this.processingMode = b.processingMode;
         this.useZopfliDeflate = b.useZopfliDeflate;
+        this.usePodofoImageDedup = b.usePodofoImageDedup;
         this.zopfliIterations = b.zopfliIterations;
         this.zopfliMaxInputBytes = b.zopfliMaxInputBytes;
     }
@@ -70,6 +72,8 @@ public final class CompressOptions {
      * Default: {@code false}.
      */
     public boolean useZopfliDeflate() { return useZopfliDeflate; }
+    /** Whether to run PoDoFo duplicate-image removal when PoDoFo is linked. */
+    public boolean usePodofoImageDedup() { return usePodofoImageDedup; }
     /**
      * Number of zopfli iterations for the DEFLATE recompression pass.
      * Higher values produce smaller output at the cost of more CPU time.
@@ -110,6 +114,7 @@ public final class CompressOptions {
         private PreservationMode preservationMode = PreservationMode.VISUALLY_CONSTRAINED;
         private ProcessingMode processingMode = ProcessingMode.DEFAULT;
         private boolean useZopfliDeflate = false;
+        private boolean usePodofoImageDedup;
         private int zopfliIterations = 15;
         private int zopfliMaxInputBytes = 0;
 
@@ -163,6 +168,12 @@ public final class CompressOptions {
          * @param enable {@code true} to enable (default {@code false})
          */
         public Builder useZopfliDeflate(boolean enable) { this.useZopfliDeflate = enable; return this; }
+
+        /** Enable PoDoFo duplicate-image removal when the native bridge is available. */
+        public Builder usePodofoImageDedup(boolean enable) {
+            this.usePodofoImageDedup = enable;
+            return this;
+        }
 
         /**
          * Set the number of zopfli iterations for the DEFLATE recompression pass.
