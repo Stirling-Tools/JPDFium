@@ -3944,7 +3944,8 @@ QPDFObjectHandle newDescriptor(QPDF& qpdf, QPDFObjectHandle font, FT_Face face, 
 
 EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
                             std::vector<FontSource> const& sources, bool onlyMissing,
-                            FILE* out = nullptr, bool existingOnly = false) {
+                            FILE* out = nullptr, bool existingOnly = false,
+                            bool stripSignatures = false) {
     struct Programs : std::vector<FontProgram> {
         FT_Library lib = nullptr;
         ~Programs() {
@@ -3966,6 +3967,100 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
             return field.hasKey("/ByteRange") ||
                    (value.isDictionary() && value.hasKey("/ByteRange"));
         };
+
+        if (stripSignatures) {
+            std::set<QPDFObjGen> sigObjects;
+            for (auto& object : qpdf->getAllObjects()) {
+                auto dict = object.isStream() ? object.getDict() : object;
+                if (!dict.isDictionary()) continue;
+                auto ft = dict.getKey("/FT");
+                auto type = dict.getKey("/Type");
+                if (hasSignatureValue(dict) || (ft.isName() && ft.getName() == "/Sig") ||
+                    (type.isName() && type.getName() == "/Sig")) {
+                    sigObjects.insert(object.getObjGen());
+                    auto v = dict.getKey("/V");
+                    if (v.isIndirect()) sigObjects.insert(v.getObjGen());
+                }
+            }
+
+            auto root = qpdf->getRoot();
+            if (root.hasKey("/AcroForm")) {
+                auto acroForm = root.getKey("/AcroForm");
+                if (acroForm.isDictionary()) {
+                    std::function<void(QPDFObjectHandle)> cleanFields = [&](QPDFObjectHandle node) {
+                        for (char const* key : {"/Fields", "/Kids"}) {
+                            if (node.hasKey(key) && node.getKey(key).isArray()) {
+                                auto arr = node.getKey(key);
+                                std::vector<QPDFObjectHandle> kept;
+                                for (auto& item : arr.getArrayAsVector()) {
+                                    if (item.isIndirect() && sigObjects.count(item.getObjGen()))
+                                        continue;
+                                    if (item.isDictionary()) {
+                                        auto ft = item.getKey("/FT");
+                                        auto type = item.getKey("/Type");
+                                        if (hasSignatureValue(item) ||
+                                            (ft.isName() && ft.getName() == "/Sig") ||
+                                            (type.isName() && type.getName() == "/Sig"))
+                                            continue;
+                                        cleanFields(item);
+                                    }
+                                    kept.push_back(item);
+                                }
+                                if (kept.size() != arr.getArrayAsVector().size()) {
+                                    node.replaceKey(key, QPDFObjectHandle::newArray(kept));
+                                }
+                            }
+                        }
+                    };
+                    cleanFields(acroForm);
+                    if (acroForm.hasKey("/SigFlags")) acroForm.removeKey("/SigFlags");
+                }
+            }
+
+            auto pages = qpdf->getAllPages();
+            for (auto& page : pages) {
+                if (page.hasKey("/Annots") && page.getKey("/Annots").isArray()) {
+                    auto annots = page.getKey("/Annots");
+                    std::vector<QPDFObjectHandle> kept;
+                    for (auto& annot : annots.getArrayAsVector()) {
+                        if (annot.isIndirect() && sigObjects.count(annot.getObjGen())) continue;
+                        if (annot.isDictionary()) {
+                            auto ft = annot.getKey("/FT");
+                            auto type = annot.getKey("/Type");
+                            if (hasSignatureValue(annot) ||
+                                (ft.isName() && ft.getName() == "/Sig") ||
+                                (type.isName() && type.getName() == "/Sig"))
+                                continue;
+                        }
+                        kept.push_back(annot);
+                    }
+                    if (kept.size() != annots.getArrayAsVector().size()) {
+                        page.replaceKey("/Annots", QPDFObjectHandle::newArray(kept));
+                    }
+                }
+            }
+
+            if (root.hasKey("/Perms")) {
+                auto perms = root.getKey("/Perms");
+                if (perms.isDictionary()) {
+                    perms.removeKey("/DocMDP");
+                    perms.removeKey("/UR3");
+                    if (perms.getKeys().empty()) root.removeKey("/Perms");
+                }
+            }
+            if (root.hasKey("/DSS")) root.removeKey("/DSS");
+
+            for (auto& object : qpdf->getAllObjects()) {
+                auto dict = object.isStream() ? object.getDict() : object;
+                if (!dict.isDictionary()) continue;
+                if (dict.hasKey("/ByteRange")) dict.removeKey("/ByteRange");
+                if (dict.hasKey("/Contents") && dict.hasKey("/Type") &&
+                    dict.getKey("/Type").isName() && dict.getKey("/Type").getName() == "/Sig") {
+                    dict.removeKey("/Contents");
+                }
+            }
+        }
+
         std::vector<QPDFObjectHandle> fonts;
         auto collectFromResources = [&](QPDFObjectHandle const& res) {
             auto fontDict = res.isDictionary() ? res.getKey("/Font") : QPDFObjectHandle();
@@ -3976,7 +4071,7 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
         for (auto& object : qpdf->getAllObjects()) {
             auto dict = object.isStream() ? object.getDict() : object;
             if (!dict.isDictionary()) continue;
-            if (hasSignatureValue(dict)) {
+            if (!stripSignatures && hasSignatureValue(dict)) {
                 return {nullptr, "document is signed; refusing to rewrite", -3};
             }
             auto type = dict.getKey("/Type");
@@ -4007,7 +4102,7 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
             }
         }
         if (acroForm.isDictionary()) {
-            if (signedForm) {
+            if (!stripSignatures && signedForm) {
                 return {nullptr, "document is signed; refusing to rewrite", -3};
             }
             collectFromResources(acroForm.getKey("/DR"));
@@ -4907,7 +5002,7 @@ static int32_t embedFontsExport(const uint8_t* input, int64_t inputLen, int32_t 
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_embed_fonts(const uint8_t* input, int64_t inputLen,
                                                 int32_t count, const char* const* names,
                                                 const uint8_t* const* fonts,
-                                                const int64_t* fontLens, int32_t onlyMissing,
+                                                const int64_t* fontLens, int32_t flags,
                                                 uint8_t** output, int64_t* outputLen) {
     try {
         if (!input || inputLen <= 0 || count <= 0 || !names || !fonts || !fontLens || !output ||
@@ -4921,12 +5016,14 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_embed_fonts(const uint8_t* input, int64_t in
             if (!names[i] || !*names[i] || !fonts[i] || fontLens[i] <= 0) return -1;
             sources.push_back({names[i], {fonts[i], static_cast<size_t>(fontLens[i])}});
         }
+        const bool onlyMissing = (flags & 1) != 0;
+        const bool stripSignatures = (flags & 2) != 0;
         auto result = embedFonts(
             [&](QPDF& qpdf) {
                 qpdf.processMemoryFile("font-in", reinterpret_cast<const char*>(input),
                                        static_cast<size_t>(inputLen));
             },
-            sources, onlyMissing != 0);
+            sources, onlyMissing, nullptr, false, stripSignatures);
         if (result.rc != 0) {
             std::fprintf(stderr, "jpdfium qpdf embed fonts: %s\n", result.error.c_str());
             return result.rc;
@@ -4947,7 +5044,7 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_embed_fonts(const uint8_t* input, int64_t in
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_embed_fonts_file(const char* in_path, const char* out_path,
                                                      int32_t count, const char* const* names,
                                                      const uint8_t* const* fonts,
-                                                     const int64_t* fontLens, int32_t onlyMissing) {
+                                                     const int64_t* fontLens, int32_t flags) {
     try {
         if (!in_path || !out_path || count <= 0 || !names || !fonts || !fontLens) return -1;
         std::vector<FontSource> sources;
@@ -4957,8 +5054,10 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_embed_fonts_file(const char* in_path, const 
         }
         FILE* out = createOutputFile(out_path);
         if (!out) return -1;
+        const bool onlyMissing = (flags & 1) != 0;
+        const bool stripSignatures = (flags & 2) != 0;
         auto result = embedFonts([&](QPDF& qpdf) { qpdf.processFile(in_path); }, sources,
-                                 onlyMissing != 0, out, false);
+                                 onlyMissing, out, false, stripSignatures);
         const bool closed = std::fclose(out) == 0;
         if (result.rc != 0) {
             std::fprintf(stderr, "jpdfium qpdf embed fonts file: %s\n", result.error.c_str());
