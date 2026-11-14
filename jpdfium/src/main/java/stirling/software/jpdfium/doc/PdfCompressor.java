@@ -986,6 +986,34 @@ public final class PdfCompressor {
     }
 
     /**
+     * Progressive compression: steps through presets (LOSSLESS -> WEB -> SCREEN -> MAXIMUM with
+     * font subsetting) until the output is at or below {@code targetBytes}, returning the smallest
+     * result achieved.
+     */
+    public static byte[] compressToTargetSize(PdfDocument doc, long targetBytes) {
+        CompressPreset[] ladder = {
+                CompressPreset.LOSSLESS,
+                CompressPreset.WEB,
+                CompressPreset.SCREEN,
+                CompressPreset.MAXIMUM
+        };
+        byte[] best = null;
+        for (CompressPreset preset : ladder) {
+            byte[] candidate = compress(doc, CompressOptions.builder()
+                    .preset(preset)
+                    .subsetFonts(preset != CompressPreset.LOSSLESS)
+                    .build()).bytes();
+            if (best == null || candidate.length < best.length) {
+                best = candidate;
+            }
+            if (best.length <= targetBytes) {
+                return best;
+            }
+        }
+        return best;
+    }
+
+    /**
      * Compression result bundled with the compressed PDF bytes.
      */
     public record CompressResultWithBytes(CompressResult result, byte[] bytes) {
