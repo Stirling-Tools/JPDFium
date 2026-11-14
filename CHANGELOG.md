@@ -94,25 +94,11 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Fixed
 
-- PDF/X-1a and PDF/X-3 no longer accept images with soft masks, which the page
-  transparency probe missed, and drop transparency groups from pages that have
-  no transparent content.
-
-- PDF/X no longer leaves soft-masked or lossless RGB images, Indexed RGB
-  lookups or RGB Separation alternates unconverted.
-
-- PDF/X-4 and PDF/X-6 XMP now carries `xmp:CreateDate`, `xmp:MetadataDate`,
-  `xmpMM:DocumentID`, `xmpMM:InstanceID`, `xmpMM:VersionID` and
-  `xmpMM:RenditionClass`; an existing document ID is kept.
-
-- PDF/X output removes JavaScript, flattens printable annotations, drops an
-  `/ArtBox` that sits beside a `/TrimBox`, replaces PostScript XObjects, and is
-  never encrypted.
-
-- PDF/X conversion fails instead of writing a document with fewer pages when
-  the source page tree cannot be rewritten, and refuses signed documents
-  instead of silently invalidating the signature.
-
+- Full flatten rasterizes populated AcroForm widgets instead of dropping their
+  values: widget appearances are baked into page content before the page image
+  is generated, and the resulting document has no AcroForm left.
+- Cropping with content removal paints erased image pixels white instead of
+  black, so a full-bleed image no longer shows a dark fringe at the crop edge.
 - Word and regex redaction finds words PDFium reports hyphenated across a line
   break (`Trace-` / `Monkey`), and removes the hyphen with them; it previously
   missed them, and with eight or more words the keyword prefilter skipped such

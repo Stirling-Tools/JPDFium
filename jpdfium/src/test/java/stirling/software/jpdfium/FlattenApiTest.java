@@ -504,6 +504,38 @@ class FlattenApiTest {
     }
 
     @Test
+    void fullBatchBakesPopulatedFormWidget() throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "full flattening needs the real PDFium natives");
+        try (PdfDocument doc = PdfDocument.open(resource("all_form_fields.pdf"))) {
+            String textField;
+            try (PdfPage page = doc.page(0)) {
+                textField = PdfFormReader.readPage(doc.rawHandle(), page.rawHandle(), 0).stream()
+                        .filter(f -> f.type() == FormFieldType.TEXT && !f.name().isEmpty())
+                        .map(FormField::name)
+                        .findFirst()
+                        .orElse(null);
+            }
+            assertNotNull(textField, "the fixture must carry a text field");
+            assertTrue(
+                    PdfFormFiller.fill(doc).text(textField, "FILLEDVALUE").apply()
+                            .filledFields()
+                            .contains(textField),
+                    "the text field must accept a value");
+
+            doc.flatten(FlattenMode.FULL, 100);
+            byte[] out = doc.saveBytes();
+            try (PdfDocument reopened = PdfDocument.open(out);
+                 PdfPage page = reopened.page(0)) {
+                List<FormField> after =
+                        PdfFormReader.readPage(reopened.rawHandle(), page.rawHandle(), 0);
+                assertTrue(after.isEmpty(),
+                        "full flatten must bake the filled widget, leaving no field: "
+                                + after.stream().map(FormField::name).toList());
+            }
+        }
+    }
+
+    @Test
     void fullBatchRollsBackWhenALaterPageFails(@TempDir Path dir) throws IOException {
         assumeTrue(NativeRuntime.isFull(), "full flattening needs the real PDFium natives");
         Path fixture = writePdfBoxFixture(dir.resolve("oversized-last-page.pdf"), pdf -> {
