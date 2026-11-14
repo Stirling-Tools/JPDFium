@@ -379,9 +379,10 @@ if(JPDFIUM_USE_PDFIUM)
     elseif(WIN32)
         # Rust crates link these via #[link] / #pragma comment, but staticlibs
         # need them at the consumer level. ws2_32 (sockets), userenv (env vars),
-        # bcrypt + ncrypt (crypto), advapi32 (registry), ntdll (low-level).
+        # bcrypt + ncrypt (crypto), advapi32 (registry), ntdll (low-level),
+        # synchronization (WaitOnAddress / WakeByAddress for Rust std sync).
         target_link_libraries(jpdfium PRIVATE
-            ws2_32 userenv bcrypt ncrypt advapi32 ntdll)
+            ws2_32 userenv bcrypt ncrypt advapi32 ntdll synchronization)
     endif()
     target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_RUST)
     message(STATUS "Rust integration: lopdf + zopfli + oxipng + fast_image_resize")
