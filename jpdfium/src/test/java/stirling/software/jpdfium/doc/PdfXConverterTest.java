@@ -1,6 +1,7 @@
 package stirling.software.jpdfium.doc;
 
 import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.cos.COSDictionary;
 import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.cos.COSObject;
 import org.apache.pdfbox.cos.COSStream;
@@ -11,6 +12,7 @@ import org.apache.pdfbox.pdmodel.font.PDType1Font;
 import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
 import org.apache.pdfbox.pdmodel.PDResources;
 import org.apache.pdfbox.pdmodel.common.PDMetadata;
+import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.pdmodel.common.PDStream;
 import org.apache.pdfbox.pdmodel.graphics.color.PDOutputIntent;
 import org.apache.pdfbox.pdmodel.graphics.form.PDFormXObject;
@@ -25,6 +27,7 @@ import java.awt.color.ICC_Profile;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -652,6 +655,21 @@ class PdfXConverterTest {
         }
     }
 
+    @Test
+    void requireEmbeddedFontsFindsSoftMaskOnlyFonts() throws Exception {
+        assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
+        PdfXOptions options = PdfXOptions.builder()
+                .standard(PdfXStandard.PDF_X_4)
+                .useCompactCmyk()
+                .requireEmbeddedFonts(true)
+                .embedMissingFonts(false)
+                .build();
+
+        JPDFiumException rejected = assertThrows(JPDFiumException.class,
+                () -> PdfXConverter.applyMetadata(softMaskFontPdf(), options));
+        assertTrue(rejected.getMessage().contains("embedded fonts"), rejected.getMessage());
+    }
+
     private static byte[] nonEmbeddedTextPdf() throws Exception {
         try (PDDocument pdfbox = new PDDocument()) {
             PDPage page = new PDPage();
@@ -663,6 +681,51 @@ class PdfXConverterTest {
                 content.showText("Helvetica");
                 content.endText();
             }
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            pdfbox.save(bytes);
+            return bytes.toByteArray();
+        }
+    }
+
+    private static byte[] softMaskFontPdf() throws Exception {
+        try (PDDocument pdfbox = new PDDocument()) {
+            PDPage page = new PDPage();
+            pdfbox.addPage(page);
+
+            COSDictionary font = new COSDictionary();
+            font.setItem(COSName.TYPE, COSName.FONT);
+            font.setName(COSName.SUBTYPE, "TrueType");
+            font.setName(COSName.BASE_FONT, "ArialMT");
+
+            COSDictionary fonts = new COSDictionary();
+            fonts.setItem("F1", font);
+            COSDictionary groupResources = new COSDictionary();
+            groupResources.setItem(COSName.FONT, fonts);
+
+            COSStream group = new COSStream();
+            group.setItem(COSName.TYPE, COSName.XOBJECT);
+            group.setItem(COSName.SUBTYPE, COSName.FORM);
+            group.setItem(COSName.BBOX, new PDRectangle(0, 0, 200, 200).getCOSArray());
+            group.setItem(COSName.RESOURCES, groupResources);
+            try (OutputStream out = group.createOutputStream()) {
+                out.write("BT /F1 12 Tf 20 100 Td (X) Tj ET"
+                        .getBytes(StandardCharsets.US_ASCII));
+            }
+
+            COSDictionary smask = new COSDictionary();
+            smask.setItem(COSName.S, COSName.ALPHA);
+            smask.setItem(COSName.getPDFName("G"), group);
+            COSDictionary gs = new COSDictionary();
+            gs.setItem(COSName.getPDFName("SMask"), smask);
+            COSDictionary extGStates = new COSDictionary();
+            extGStates.setItem("GS1", gs);
+
+            COSDictionary resources = new COSDictionary();
+            resources.setItem(COSName.EXT_G_STATE, extGStates);
+            page.setResources(new PDResources(resources));
+            page.setContents(new PDStream(pdfbox, new ByteArrayInputStream(
+                    "/GS1 gs".getBytes(StandardCharsets.US_ASCII))));
+
             ByteArrayOutputStream bytes = new ByteArrayOutputStream();
             pdfbox.save(bytes);
             return bytes.toByteArray();
