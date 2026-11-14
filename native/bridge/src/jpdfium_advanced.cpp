@@ -991,6 +991,22 @@ static std::vector<QPDFObjectHandle> collect_page_fonts(QPDFObjectHandle page,
 
 static std::string build_tounicode_cmap(std::map<uint32_t, std::vector<uint32_t>> const& mapping,
                                         bool cid) {
+    std::vector<std::pair<uint32_t, std::vector<uint32_t>>> valid;
+    valid.reserve(mapping.size());
+    for (auto const& [code, seq] : mapping) {
+        if (seq.empty()) continue;
+        bool ok = true;
+        for (uint32_t u : seq) {
+            if (u == 0 || u == 0xFEFF || u == 0xFFFE || (u >= 0xD800 && u <= 0xDFFF) ||
+                u > 0x10FFFF) {
+                ok = false;
+                break;
+            }
+        }
+        if (ok) valid.emplace_back(code, seq);
+    }
+    if (valid.empty()) return {};
+
     std::string out;
     out += "/CIDInit /ProcSet findresource begin\n";
     out += "12 dict begin\n";
@@ -1002,8 +1018,8 @@ static std::string build_tounicode_cmap(std::map<uint32_t, std::vector<uint32_t>
     out += cid ? "<0000> <FFFF>\n" : "<00> <FF>\n";
     out += "endcodespacerange\n";
 
-    size_t remaining = mapping.size();
-    auto it = mapping.begin();
+    size_t remaining = valid.size();
+    auto it = valid.begin();
     while (remaining > 0) {
         size_t chunk = remaining > 100 ? 100 : remaining;
         out += std::to_string(chunk) + " beginbfchar\n";
@@ -1202,9 +1218,10 @@ struct FnContentToken {
 };
 
 struct FnContentLexer {
-    std::string const& data;
+    std::string_view data;
     size_t pos = 0;
     bool malformed = false;
+    int array_depth = 0;
 
     void skipSpace() {
         while (pos < data.size()) {
@@ -1278,18 +1295,31 @@ struct FnContentLexer {
     bool hex(std::string& out) {
         if (pos >= data.size() || data[pos] != '<') return false;
         ++pos;
-        std::string digits;
+        int first_nibble = -1;
         while (pos < data.size() && data[pos] != '>') {
             unsigned char c = static_cast<unsigned char>(data[pos++]);
             if (std::isspace(c)) continue;
-            if (!std::isxdigit(c)) return false;
-            digits += static_cast<char>(c);
+            int val = -1;
+            if (c >= '0' && c <= '9') {
+                val = c - '0';
+            } else if (c >= 'a' && c <= 'f') {
+                val = c - 'a' + 10;
+            } else if (c >= 'A' && c <= 'F') {
+                val = c - 'A' + 10;
+            } else {
+                return false;
+            }
+            if (first_nibble < 0) {
+                first_nibble = val;
+            } else {
+                out += static_cast<char>((first_nibble << 4) | val);
+                first_nibble = -1;
+            }
         }
         if (pos >= data.size()) return false;
         ++pos;
-        if (digits.size() % 2) digits += '0';
-        for (size_t i = 0; i < digits.size(); i += 2) {
-            out += static_cast<char>(std::strtoul(digits.substr(i, 2).c_str(), nullptr, 16));
+        if (first_nibble >= 0) {
+            out += static_cast<char>(first_nibble << 4);
         }
         return true;
     }
@@ -1297,16 +1327,22 @@ struct FnContentLexer {
     bool name(std::string& out) {
         if (pos >= data.size() || data[pos] != '/') return false;
         ++pos;
+        auto hex_val = [](char ch) -> int {
+            if (ch >= '0' && ch <= '9') return ch - '0';
+            if (ch >= 'a' && ch <= 'f') return ch - 'a' + 10;
+            if (ch >= 'A' && ch <= 'F') return ch - 'A' + 10;
+            return 0;
+        };
         while (pos < data.size()) {
             unsigned char c = static_cast<unsigned char>(data[pos]);
             if (std::isspace(c) || c == '/' || c == '(' || c == ')' || c == '<' || c == '>' ||
                 c == '[' || c == ']' || c == '{' || c == '}' || c == '%') {
                 break;
             }
-            if (c == '#' && pos + 2 < data.size() && std::isxdigit(data[pos + 1]) &&
-                std::isxdigit(data[pos + 2])) {
-                out +=
-                    static_cast<char>(std::strtoul(data.substr(pos + 1, 2).c_str(), nullptr, 16));
+            if (c == '#' && pos + 2 < data.size() &&
+                std::isxdigit(static_cast<unsigned char>(data[pos + 1])) &&
+                std::isxdigit(static_cast<unsigned char>(data[pos + 2]))) {
+                out += static_cast<char>((hex_val(data[pos + 1]) << 4) | hex_val(data[pos + 2]));
                 pos += 3;
             } else {
                 out += static_cast<char>(c);
@@ -1343,16 +1379,28 @@ struct FnContentLexer {
     bool array(FnContentOperand& out) {
         if (pos >= data.size() || data[pos] != '[') return false;
         ++pos;
+        if (++array_depth > 32) {
+            malformed = true;
+            --array_depth;
+            return false;
+        }
         out.kind = FnContentOperand::Kind::Array;
         while (pos < data.size()) {
             skipSpace();
-            if (pos >= data.size()) return false;
+            if (pos >= data.size()) {
+                --array_depth;
+                return false;
+            }
             if (data[pos] == ']') {
                 ++pos;
+                --array_depth;
                 return true;
             }
             FnContentToken token;
-            if (!next(token)) return false;
+            if (!next(token)) {
+                --array_depth;
+                return false;
+            }
             if (!token.word) {
                 if (token.operand.kind == FnContentOperand::Kind::String) {
                     out.strings.push_back(token.operand.text);
@@ -1362,6 +1410,7 @@ struct FnContentLexer {
                 }
             }
         }
+        --array_depth;
         return false;
     }
 
@@ -1420,7 +1469,7 @@ struct FnContentLexer {
             ++pos;
         }
         if (pos == start) return false;
-        std::string value = data.substr(start, pos - start);
+        std::string value(data.substr(start, pos - start));
         bool numeric = value.find_first_not_of("0123456789+-.") == std::string::npos;
         if (numeric) {
             out.word = false;
@@ -1497,7 +1546,7 @@ static void fn_scan_resource_streams(QPDFObjectHandle const& resources,
                                      int depth, std::set<std::pair<QPDFObjGen, bool>>& seen_streams,
                                      int& budget, bool& complete, bool two_byte);
 
-static void fn_scan_content_stream(std::string const& data, QPDFObjectHandle const& resources,
+static void fn_scan_content_stream(std::string_view data, QPDFObjectHandle const& resources,
                                    QPDFObjectHandle const& font, std::set<uint32_t>& cids,
                                    int depth, std::set<std::pair<QPDFObjGen, bool>>& seen_streams,
                                    int& budget, bool& complete, bool two_byte,
@@ -1536,6 +1585,22 @@ static void fn_scan_content_stream(std::string const& data, QPDFObjectHandle con
                     selected = fn_same_font(candidate, font);
                 }
             }
+        } else if (op == "gs" && !operands.empty() &&
+                   operands.back().kind == FnContentOperand::Kind::Name) {
+            if (resources.isDictionary()) {
+                auto extgstate = resources.getKey("/ExtGState");
+                if (extgstate.isDictionary()) {
+                    auto gs_dict = extgstate.getKey("/" + operands.back().text);
+                    if (gs_dict.isDictionary() && gs_dict.hasKey("/Font")) {
+                        auto font_entry = gs_dict.getKey("/Font");
+                        if (font_entry.isArray() && font_entry.getArrayNItems() > 0) {
+                            selected = fn_same_font(font_entry.getArrayItem(0), font);
+                        } else {
+                            complete = false;
+                        }
+                    }
+                }
+            }
         } else if (op == "Tj" && !operands.empty() &&
                    operands.back().kind == FnContentOperand::Kind::String) {
             if (selected) fn_collect_cids(operands.back().text, cids, complete, two_byte);
@@ -1567,7 +1632,7 @@ static void fn_scan_content_stream(std::string const& data, QPDFObjectHandle con
                             try {
                                 auto stream_data = form.getStreamData(qpdf_dl_generalized);
                                 if (stream_data && stream_data->getSize()) {
-                                    std::string content(
+                                    std::string_view content(
                                         reinterpret_cast<char const*>(stream_data->getBuffer()),
                                         stream_data->getSize());
                                     fn_scan_content_stream(content, form_resources, font, cids,
@@ -1637,6 +1702,21 @@ static void fn_scan_resource_streams(QPDFObjectHandle const& resources,
         for (auto const& entry : patterns.getDictAsMap()) scan_stream(entry.second, resources);
     }
 
+    auto extgstates = resources.getKey("/ExtGState");
+    if (extgstates.isDictionary()) {
+        for (auto const& entry : extgstates.getDictAsMap()) {
+            auto const& gs = entry.second;
+            if (!gs.isDictionary()) continue;
+            auto smask = gs.getKey("/SMask");
+            if (!smask.isDictionary()) continue;
+            auto group = smask.getKey("/G");
+            if (!group.isStream()) continue;
+            auto group_resources = group.getDict().getKey("/Resources");
+            if (!group_resources.isDictionary()) group_resources = resources;
+            scan_stream(group, group_resources);
+        }
+    }
+
     auto fonts = resources.getKey("/Font");
     if (fonts.isDictionary()) {
         for (auto const& entry : fonts.getDictAsMap()) {
@@ -1653,7 +1733,22 @@ static void fn_scan_resource_streams(QPDFObjectHandle const& resources,
     }
 }
 
-static FnCidScan fn_used_cids_for_font(QPDF& pdf, QPDFObjectHandle const& font, bool two_byte) {
+struct FontNormalizeState {
+    int32_t fonts_processed = 0;
+    int32_t tuc_fixed = 0;
+    int32_t w_fixed = 0;
+    int32_t type1_converted = 0;
+    int32_t resubset = 0;
+    bool changed = false;
+    std::map<std::pair<QPDFObjGen, bool>, FnCidScan> scan_cache;
+};
+
+static FnCidScan fn_used_cids_for_font(QPDF& pdf, QPDFObjectHandle const& font, bool two_byte,
+                                       FontNormalizeState* state = nullptr) {
+    if (state && font.isIndirect()) {
+        auto it = state->scan_cache.find({font.getObjGen(), two_byte});
+        if (it != state->scan_cache.end()) return it->second;
+    }
     FnCidScan result;
     int budget = 2048;
     std::set<std::pair<QPDFObjGen, bool>> seen_streams;
@@ -1677,8 +1772,8 @@ static FnCidScan fn_used_cids_for_font(QPDF& pdf, QPDFObjectHandle const& font, 
                 try {
                     auto data = stream.getStreamData(qpdf_dl_generalized);
                     if (!data || !data->getSize()) return;
-                    std::string content(reinterpret_cast<char const*>(data->getBuffer()),
-                                        data->getSize());
+                    std::string_view content(reinterpret_cast<char const*>(data->getBuffer()),
+                                             data->getSize());
                     fn_scan_content_stream(content, stream_resources, font, result.cids, 0,
                                            seen_streams, budget, result.complete, two_byte);
                     fn_scan_resource_streams(stream_resources, font, result.cids, 0, seen_streams,
@@ -1738,6 +1833,9 @@ static FnCidScan fn_used_cids_for_font(QPDF& pdf, QPDFObjectHandle const& font, 
         }
     } catch (...) {
         result.complete = false;
+    }
+    if (state && font.isIndirect()) {
+        state->scan_cache[{font.getObjGen(), two_byte}] = result;
     }
     return result;
 }
@@ -1810,14 +1908,23 @@ struct FontUsageCounts {
     std::map<QPDFObjGen, int> streams;
 };
 
-struct FontNormalizeState {
-    int32_t fonts_processed = 0;
-    int32_t tuc_fixed = 0;
-    int32_t w_fixed = 0;
-    int32_t type1_converted = 0;
-    int32_t resubset = 0;
-    bool changed = false;
-};
+static void mark_form_font_not_subsettable(QPDFObjectHandle const& font, FontUsageCounts& usage) {
+    if (!font.isDictionary()) return;
+    QPDFObjectHandle target = font;
+    QPDFObjectHandle descendants = font.getKey("/DescendantFonts");
+    if (descendants.isArray() && descendants.getArrayNItems() > 0 &&
+        descendants.getArrayItem(0).isDictionary())
+        target = descendants.getArrayItem(0);
+    QPDFObjectHandle descriptor = target.getKey("/FontDescriptor");
+    if (!descriptor.isDictionary()) return;
+    if (descriptor.isIndirect()) usage.descriptors[descriptor.getObjGen()] = 999999;
+    for (char const* key : {"/FontFile", "/FontFile2", "/FontFile3"}) {
+        auto stream = descriptor.getKey(key);
+        if (stream.isStream() && stream.isIndirect()) {
+            usage.streams[stream.getObjGen()] = 999999;
+        }
+    }
+}
 
 static void count_font_usage(QPDFObjectHandle const& font, std::set<QPDFObjGen>& counted,
                              FontUsageCounts& usage) {
@@ -2128,13 +2235,62 @@ static void convert_cff_in_sfnt(QPDF& pdf, QPDFObjectHandle& target, QPDFObjectH
     cff_stream.getDict().replaceKey("/Subtype",
                                     QPDFObjectHandle::newName(cid ? "/CIDFontType0C" : "/Type1C"));
     descriptor.replaceKey("/FontFile3", cff_stream);
-    if (FT_Face reloaded = load_font_face(ft_lib, cff, 0)) face.reset(reloaded);
+    // Do not reload the FreeType face from `cff`: the buffer is destroyed when this
+    // function returns, which would leave the face pointing at freed memory.
     ++state.type1_converted;
     state.changed = true;
 }
 
-// Re-subset an embedded SFNT program or multi-face collection to the glyphs drawn
-// in the document when all referencing content streams scan cleanly.
+/**
+ * Re-subsets an embedded SFNT (TrueType or OpenType/CFF) font program or extracts
+ * a single face from a multi-face TrueType Collection (TTC) container to retain
+ * strictly those glyphs drawn by referencing content streams across the document.
+ *
+ * Algorithm overview:
+ * 1. Precondition checks:
+ *    - Rejects fonts with <= 1 glyph, non-SFNT fonts, CFF2 tables, or fonts whose
+ *      OS/2 fsType flags forbid subsetting (e.g., Restricted License embedding 0x0002).
+ *    - Extracts BaseFont name and descriptor FontName; rejects fonts missing BaseFont.
+ *    - Checks subset tag (pattern 'XXXXXX+'); skips fonts already tagged as subsets
+ *      unless extracting a face from a TrueType Collection (.ttc / 'ttcf').
+ *    - Checks sharing: skips programs or descriptors referenced by multiple font
+ *      dictionaries across pages, or referenced by /AcroForm /DR.
+ * 2. Usage discovery (fail-closed):
+ *    - For CID fonts (Type 0 / CIDFontType2): scans all content streams for 2-byte CIDs,
+ *      mapping each CID through /CIDToGIDMap (stream or /Identity) to a glyph index (GID).
+ *    - For simple fonts (TrueType): scans content streams for 1-byte character codes.
+ *      Validates that every referenced code resolves to a valid non-zero GID in
+ *      simple_glyphs. If any drawn code is unmapped or maps to GID 0, subsetting is rejected
+ *      to avoid dropping glyphs that PDFium's engine-level heuristics might render.
+ * 3. Subset generation:
+ *    - Invokes the HarfBuzz subsetter (hb_subset) to retain targeted GIDs while
+ *      preserving original glyph advances, hinting metrics, and required tables.
+ *    - Verifies that glyph advances in the subsetted program exactly match the original.
+ * 4. PDF dictionary updates:
+ *    - Generates a deterministic 6-character uppercase tag (e.g., 'ABCDEF+FontName').
+ *    - Updates /BaseFont in font and descendant dictionaries, and /FontName in descriptor.
+ *    - Replaces /FontFile2 (TrueType) or /FontFile3 (OpenType/CFF) stream data and Length.
+ *    - Keeps the original FreeType face, whose backing buffer outlives this call, and updates
+ *      active CID tracking.
+ *
+ * @param pdf Document handle.
+ * @param font Referring font dictionary handle.
+ * @param target Descendant CIDFont or simple font dictionary handle.
+ * @param descriptor /FontDescriptor dictionary handle.
+ * @param stream Embedded font program stream handle.
+ * @param data Decompressed raw bytes of the original font program.
+ * @param face_index Face index in TTC collection, or 0 for standalone fonts.
+ * @param face FreeType face pointer; not reloaded because the subset buffer is temporary.
+ * @param cid True for 2-byte composite fonts; false for 1-byte simple fonts.
+ * @param cid_to_gid /CIDToGIDMap stream handle (or /Identity).
+ * @param cid_identity True if /CIDToGIDMap is /Identity.
+ * @param simple_glyphs Character-code-to-GID mapping array for simple fonts.
+ * @param usage Shared reference counts for descriptors and font streams.
+ * @param active_cids Output set receiving retained CIDs for CIDSet synchronization.
+ * @param have_active_cids Output flag set to true when active_cids is populated.
+ * @param state Normalization statistics and scan cache.
+ * @return True if the font program was successfully subsetted and replaced; false otherwise.
+ */
 static bool resubset_embedded_sfnt(QPDF& pdf, QPDFObjectHandle& font, QPDFObjectHandle& target,
                                    QPDFObjectHandle& descriptor, QPDFObjectHandle const& stream,
                                    std::shared_ptr<Buffer> const& data, FT_Long face_index,
@@ -2172,7 +2328,7 @@ static bool resubset_embedded_sfnt(QPDF& pdf, QPDFObjectHandle& font, QPDFObject
     std::set<FT_UInt> target_glyphs{0};
     std::set<uint32_t> used_active{0};
     if (cid) {
-        FnCidScan scan = fn_used_cids_for_font(pdf, font, true);
+        FnCidScan scan = fn_used_cids_for_font(pdf, font, true, &state);
         if (!scan.complete || scan.cids.empty()) return false;
         std::shared_ptr<Buffer> cid_map;
         if (!cid_identity) {
@@ -2198,10 +2354,12 @@ static bool resubset_embedded_sfnt(QPDF& pdf, QPDFObjectHandle& font, QPDFObject
             used_active.insert(c);
         }
     } else {
-        FnCidScan scan = fn_used_cids_for_font(pdf, font, false);
+        if (simple_glyphs.size() < 256) return false;
+        FnCidScan scan = fn_used_cids_for_font(pdf, font, false, &state);
         if (!scan.complete || scan.cids.empty()) return false;
         for (uint32_t code : scan.cids) {
-            if (code < simple_glyphs.size()) target_glyphs.insert(simple_glyphs[code].gid);
+            if (code >= simple_glyphs.size() || simple_glyphs[code].gid == 0) return false;
+            target_glyphs.insert(simple_glyphs[code].gid);
             if (code < 256) {
                 for (BaseEncoding encoding :
                      {BaseEncoding::Standard, BaseEncoding::WinAnsi, BaseEncoding::MacRoman}) {
@@ -2240,7 +2398,23 @@ static bool resubset_embedded_sfnt(QPDF& pdf, QPDFObjectHandle& font, QPDFObject
         replacement_dict.replaceKey("/Subtype", QPDFObjectHandle::newName("/OpenType"));
         descriptor.replaceKey("/FontFile3", replacement);
     }
-    if (FT_Face reloaded = load_font_face(ft_lib, subset, face_index)) face.reset(reloaded);
+    // Keep the original face: `subset` is destroyed when this function returns, so
+    // reloading from it would leave a dangling face buffer. The original face stays
+    // alive for the remainder of process_font() and still describes the glyphs.
+    if (!cid) {
+        std::string charset_str;
+        char glyph_name[256];
+        for (FT_UInt gid : target_glyphs) {
+            if (FT_HAS_GLYPH_NAMES(face.get()) &&
+                FT_Get_Glyph_Name(face.get(), gid, glyph_name, sizeof(glyph_name)) == 0) {
+                charset_str += "/";
+                charset_str += glyph_name;
+            }
+        }
+        if (!charset_str.empty()) {
+            descriptor.replaceKey("/CharSet", QPDFObjectHandle::newString(charset_str));
+        }
+    }
     ++state.resubset;
     state.changed = true;
     if (cid) {
@@ -2250,17 +2424,22 @@ static bool resubset_embedded_sfnt(QPDF& pdf, QPDFObjectHandle& font, QPDFObject
     return true;
 }
 
-// Repair or synthesize /CIDSet on a CIDFont descriptor so its bitset matches the drawn CIDs.
+// Repair or synthesize /CIDSet on a CIDFont descriptor so its bitset matches the embedded program.
+// Per ISO 19005-1 §6.3.3.3 and ISO 19005-2 §6.2.11.3.3, /CIDSet must identify all CIDs present
+// in the embedded font program. If re-subsetting just ran (did_resubset), active_cids contains
+// the exact CIDs retained in the new font program. If no re-subset ran, we do not overwrite
+// an existing /CIDSet with only drawn CIDs (which would falsely mark unreferenced glyphs as
+// absent).
 static void repair_cidset_stream(QPDF& pdf, QPDFObjectHandle& font, QPDFObjectHandle& descriptor,
                                  bool did_resubset, bool have_active_cids,
                                  std::set<uint32_t> const& active_cids, FontNormalizeState& state) {
-    if (!descriptor.hasKey("/CIDSet") && !did_resubset) return;
+    if (!did_resubset && !have_active_cids) return;
     std::set<uint32_t> cids{0};
     bool complete = true;
     if (have_active_cids) {
         cids.insert(active_cids.begin(), active_cids.end());
     } else {
-        FnCidScan scan = fn_used_cids_for_font(pdf, font, true);
+        FnCidScan scan = fn_used_cids_for_font(pdf, font, true, &state);
         complete = scan.complete;
         cids.insert(scan.cids.begin(), scan.cids.end());
     }
@@ -2444,16 +2623,20 @@ static void process_font(QPDF& pdf, QPDFObjectHandle font, bool do_fix_tounicode
     }
 
     const bool full = do_fix_tounicode && do_repair_widths;
+    bool did_convert = false;
     if (full) {
+        const int32_t converted_before = state.type1_converted;
         convert_cff_in_sfnt(pdf, target, descriptor, face, cid, subtype_name, state);
+        did_convert = state.type1_converted != converted_before;
     }
     std::set<uint32_t> active_cids{0};
     bool have_active_cids = false;
     const bool did_resubset =
-        full && resubset_embedded_sfnt(pdf, font, target, descriptor, stream, data, face_index,
-                                       face, cid, cid_to_gid, cid_identity, simple_glyphs, usage,
-                                       active_cids, have_active_cids, state);
-    if (cid) {
+        full && !did_convert &&
+        resubset_embedded_sfnt(pdf, font, target, descriptor, stream, data, face_index, face, cid,
+                               cid_to_gid, cid_identity, simple_glyphs, usage, active_cids,
+                               have_active_cids, state);
+    if (cid && full) {
         repair_cidset_stream(pdf, font, descriptor, did_resubset, have_active_cids, active_cids,
                              state);
     }
@@ -2500,6 +2683,21 @@ static int32_t font_normalize_qpdf(DocWrapper* w, int32_t page_index, bool do_fi
                 std::set<QPDFObjGen> seen_fonts;
                 for (auto& font : collect_page_fonts(page, seen_resources, seen_fonts))
                     count_font_usage(font, counted, usage);
+            }
+            // Mark any fonts, descriptors, and streams referenced by /AcroForm /DR
+            // as heavily shared (sentinel count 999999) so they are never subsetted.
+            // Subsetting form fonts would break interactive text entry for undrawn characters.
+            auto acro_form = pdf.getRoot().getKey("/AcroForm");
+            if (acro_form.isDictionary() && acro_form.hasKey("/DR")) {
+                std::set<QPDFObjGen> seen_dr_resources;
+                std::set<QPDFObjGen> seen_dr_fonts;
+                std::map<QPDFObjGen, int> dr_streams;
+                std::vector<QPDFObjectHandle> dr_fonts;
+                collect_resource_fonts(acro_form.getKey("/DR"), 0, seen_dr_resources, seen_dr_fonts,
+                                       dr_streams, dr_fonts);
+                for (auto& dr_font : dr_fonts) {
+                    mark_form_font_not_subsettable(dr_font, usage);
+                }
             }
         }
 
