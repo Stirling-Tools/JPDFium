@@ -320,6 +320,7 @@ public final class PdfAutoCrop {
                     cropped++;
                 }
             }
+            if (cropped > 0) doc.markContentModified();
             return cropped;
         }
 
@@ -336,6 +337,7 @@ public final class PdfAutoCrop {
                 }
             }
         }
+        if (cropped > 0) doc.markContentModified();
         return cropped;
     }
 }

@@ -1957,6 +1957,16 @@
         ]
       },
       {
+        "returnType": "jlong",
+        "parameterTypes": [
+          "void*",
+          "jint",
+          "jint",
+          "void*",
+          "jlong"
+        ]
+      },
+      {
         "returnType": "jint",
         "parameterTypes": [
           "void*",

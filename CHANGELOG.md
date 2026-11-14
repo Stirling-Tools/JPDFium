@@ -19,12 +19,17 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Added
 
-- `PdfXOptions.neutralsToBlack(boolean)`, on by default, maps neutral RGB
-  vector colours to K only instead of four-colour black.
-
-- `PdfXOptions.embedMissingFonts(boolean)`, on by default, and
-  `fontDirectories(Path...)`: PDF/X conversion embeds fonts used without a
-  program through `PdfFontEmbedder.embedMissing`.
+- `PdfMetadataEditor`, reachable through `PdfDocument.editMetadata()`, for
+  writing standard /Info fields, custom keys, /Trapped, and the catalog XMP
+  packet. `PdfMetadata` now reads custom keys, /Trapped, and XMP. The new EPDF
+  metadata bindings back the /Info writes; XMP replacement uses the in-process
+  QPDF writer. Metadata edits preserve existing signatures by using an
+  incremental save for /Info and /Trapped changes, and keep PDF/A, PDF/X, and
+  PDF/UA identification when the XMP packet is replaced. PDF/UA titles cannot
+  be removed. XMP rewrites stream through private temporary files and retain
+  the open password for QPDF, including file-backed large documents.
+- `PdfDocument.saveIncremental(Path)`, a transactional append-only save that
+  leaves earlier signed revisions byte-for-byte intact.
 
 - `PdfSplit.extractPageRangesToFiles` writes many page ranges of one file from a single qpdf
   parse instead of one parse per range. Ranges qpdf cannot write, and `MEMORY` storage, go
