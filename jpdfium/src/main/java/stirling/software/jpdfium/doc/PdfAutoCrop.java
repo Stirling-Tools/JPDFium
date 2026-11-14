@@ -294,9 +294,14 @@ public final class PdfAutoCrop {
             boolean foundAny = false;
 
             for (int i = 0; i < count; i++) {
-                Rect bounds = useBitmap
-                        ? detectContentBoundsBitmap(doc, i, 72, 0.98f, margin)
-                        : detectContentBoundsText(doc, i, margin);
+                Rect bounds;
+                try {
+                    bounds = useBitmap
+                            ? detectContentBoundsBitmap(doc, i, 72, 0.98f, margin)
+                            : detectContentBoundsText(doc, i, margin);
+                } catch (RuntimeException e) {
+                    continue;
+                }
                 if (bounds != null) {
                     float l = bounds.x();
                     float b = bounds.y();
@@ -318,6 +323,8 @@ public final class PdfAutoCrop {
                 try (PdfPage page = doc.page(i)) {
                     PdfPageBoxes.setCropBox(page.rawHandle(), unionBox);
                     cropped++;
+                } catch (RuntimeException e) {
+                    continue;
                 }
             }
             return cropped;
@@ -326,14 +333,18 @@ public final class PdfAutoCrop {
         // Per-page cropping
         int cropped = 0;
         for (int i = 0; i < count; i++) {
-            Rect bounds = useBitmap
-                    ? detectContentBoundsBitmap(doc, i, 72, 0.98f, margin)
-                    : detectContentBoundsText(doc, i, margin);
-            if (bounds != null) {
-                try (PdfPage page = doc.page(i)) {
-                    PdfPageBoxes.setCropBox(page.rawHandle(), bounds);
-                    cropped++;
+            try {
+                Rect bounds = useBitmap
+                        ? detectContentBoundsBitmap(doc, i, 72, 0.98f, margin)
+                        : detectContentBoundsText(doc, i, margin);
+                if (bounds != null) {
+                    try (PdfPage page = doc.page(i)) {
+                        PdfPageBoxes.setCropBox(page.rawHandle(), bounds);
+                        cropped++;
+                    }
                 }
+            } catch (RuntimeException e) {
+                continue;
             }
         }
         return cropped;
