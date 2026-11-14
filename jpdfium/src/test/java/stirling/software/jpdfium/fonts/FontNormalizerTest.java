@@ -47,6 +47,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeFalse;
@@ -323,6 +324,22 @@ class FontNormalizerTest {
         }
     }
 
+    private static byte[] withCidWidth(byte[] pdf, int cid, int width) throws IOException {
+        try (PDDocument doc = Loader.loadPDF(pdf)) {
+            COSDictionary descendant = cidDescendant(doc);
+            assertNotNull(descendant);
+            COSArray widths = new COSArray();
+            widths.add(COSInteger.get(cid));
+            COSArray run = new COSArray();
+            run.add(COSInteger.get(width));
+            widths.add(run);
+            descendant.setItem(COSName.W, widths);
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            doc.save(out);
+            return out.toByteArray();
+        }
+    }
+
     private static byte[] withIntegerWidth(byte[] pdf, char code, int width) throws IOException {
         try (PDDocument doc = Loader.loadPDF(pdf)) {
             COSDictionary font = firstFontDictionary(doc);
@@ -589,6 +606,10 @@ class FontNormalizerTest {
                 assertTrue(font.getNameAsString(COSName.BASE_FONT)
                                 .matches("[A-Z]{6}\\+FaceTwo-Regular"),
                         "a re-subset collection font must carry a deterministic subset tag");
+                COSDictionary descriptor = font.getCOSDictionary(COSName.FONT_DESC);
+                assertNotNull(descriptor);
+                assertNull(descriptor.getDictionaryObject(COSName.getPDFName("CharSet")),
+                        "PDF 32000-1 9.8.2 defines CharSet only for Type 1 subsets");
                 assertEquals("H", new PDFTextStripper().getText(loaded).trim(),
                         "the re-subset font program must still draw drawn glyphs");
             }
@@ -717,8 +738,9 @@ class FontNormalizerTest {
                 .getResource("/pdfs/general/issue20065.pdf").toURI()));
         PdfFontEmbedder.Result embedded = PdfFontEmbedder.embedMissing(input);
         assertTrue(embedded.unresolved().isEmpty(), "unresolved: " + embedded.unresolved());
+        byte[] stale = withCidWidth(embedded.pdf(), 0, 500);
 
-        try (PdfDocument doc = PdfDocument.open(embedded.pdf())) {
+        try (PdfDocument doc = PdfDocument.open(stale)) {
             FontNormalizer.Result result = FontNormalizer.normalizeAll(doc);
             assertEquals(1, result.widthsRepaired(),
                     "the existing /W must be corrected against the embedded program");
