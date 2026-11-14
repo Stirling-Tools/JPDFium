@@ -80,6 +80,30 @@ class PdfFontEmbedderTest {
     }
 
     @Test
+    void embedsJapan1RksjCidFontWithAUnicodeFallback() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
+        var url = getClass().getResource("/pdfs/general/90ms_rksj_h_sample.pdf");
+        assertNotNull(url, "90ms-RKSJ-H fixture missing");
+        byte[] input = Files.readAllBytes(Path.of(url.toURI()));
+
+        PdfFontEmbedder.Result result = PdfFontEmbedder.embedMissing(input);
+
+        assertTrue(result.embedded().contains("HeiseiMin-W3"),
+                "predefined-CMap CID font must embed, got " + result);
+        try (PDDocument doc = Loader.loadPDF(result.pdf())) {
+            String text = new org.apache.pdfbox.text.PDFTextStripper().getText(doc);
+            assertTrue(text.contains("日本語テスト"),
+                    "the embedded fallback must preserve Japanese text, got: " + text);
+        }
+        try (stirling.software.jpdfium.PdfDocument doc =
+                        stirling.software.jpdfium.PdfDocument.open(result.pdf());
+                stirling.software.jpdfium.PdfPage page = doc.page(0)) {
+            assertTrue(page.extractText().contains("日本語テスト"),
+                    "PDFium must extract Japanese after embedding, got: " + page.extractText());
+        }
+    }
+
+    @Test
     void fileBackedEmbeddingCopiesTheInputWhenNoFontMatches(@TempDir Path temp) throws Exception {
         assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
         Path input = helveticaPage(temp.resolve("input.pdf"));
@@ -1148,11 +1172,18 @@ class PdfFontEmbedderTest {
         }
     }
 
+    private static byte[] unsupportedPredefinedCmap() throws Exception {
+        byte[] input = Files.readAllBytes(Path.of(PdfFontEmbedderTest.class
+                .getResource("/pdfs/general/90ms_rksj_h_sample.pdf").toURI()));
+        return new String(input, StandardCharsets.ISO_8859_1)
+                .replace("/90ms-RKSJ-H", "/90pv-RKSJ-H")
+                .getBytes(StandardCharsets.ISO_8859_1);
+    }
+
     @Test
     void unsafeCidFontsAreReportedInsteadOfSubstituted() throws Exception {
         assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
-        byte[] input = Files.readAllBytes(Path.of(
-                PdfFontEmbedderTest.class.getResource("/pdfs/general/90ms_rksj_h_sample.pdf").toURI()));
+        byte[] input = unsupportedPredefinedCmap();
         PdfFontEmbedder.Result result = PdfFontEmbedder.embedMissing(input);
         assertFalse(result.embedded().contains("HeiseiMin-W3"),
                 "predefined-CMap CID fonts must not be substituted: " + result);
@@ -1170,8 +1201,7 @@ class PdfFontEmbedderTest {
     @Test
     void strictEmbeddingFailsOnPredefinedCmapFont() throws Exception {
         assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
-        byte[] input = Files.readAllBytes(Path.of(
-                PdfFontEmbedderTest.class.getResource("/pdfs/general/90ms_rksj_h_sample.pdf").toURI()));
+        byte[] input = unsupportedPredefinedCmap();
         JPDFiumException error = assertThrows(JPDFiumException.class,
                 () -> PdfFontEmbedder.embedMissingStrict(input));
         assertTrue(error.getMessage().contains("HeiseiMin-W3"), error.getMessage());
@@ -1457,8 +1487,7 @@ class PdfFontEmbedderTest {
     @Test
     void fileBackedEmbeddingRefusesUnsafeCidFonts(@TempDir Path temp) throws Exception {
         assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
-        byte[] input = Files.readAllBytes(Path.of(PdfFontEmbedderTest.class
-                .getResource("/pdfs/general/90ms_rksj_h_sample.pdf").toURI()));
+        byte[] input = unsupportedPredefinedCmap();
         Path source = temp.resolve("input.pdf");
         Files.write(source, input);
         Path output = temp.resolve("output.pdf");
