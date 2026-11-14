@@ -188,3 +188,7 @@ This distribution bundles binary forms of the following open-source projects:
     - Copyright the LLVM Project contributors
     - License: Apache License 2.0 with LLVM Exceptions
       (see LLVM-LIBCXX-APACHE-2.0-WITH-LLVM-EXCEPTION.txt)
+
+40. Adobe Glyph List (AGL) glyphlist.txt (generated glyph-name table)
+    - Copyright 2002-2019 Adobe (http://www.adobe.com/).
+    - License: BSD 3-Clause License (see ADOBE-GLYPHLIST-BSD-3.txt)
