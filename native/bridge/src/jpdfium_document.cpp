@@ -874,8 +874,17 @@ int32_t jpdfium_import_n_pages_to_one(void* srcDoc, float outputWidth, float out
                                       int64_t* outputLen) {
     if (!srcDoc || !output || !outputLen || cols < 1 || rows < 1) return JPDFIUM_ERR_INVALID;
 
+    auto doc = static_cast<FPDF_DOCUMENT>(srcDoc);
+    int pageCount = FPDF_GetPageCount(doc);
+    if (pageCount <= 0) return JPDFIUM_ERR_INVALID;
+    for (int i = 0; i < pageCount; ++i) {
+        FPDF_PAGE page = FPDF_LoadPage(doc, i);
+        if (!page) return JPDFIUM_ERR_NATIVE;
+        FPDF_ClosePage(page);
+    }
+
     FPDF_DOCUMENT nupDoc =
-        FPDF_ImportNPagesToOne(static_cast<FPDF_DOCUMENT>(srcDoc), outputWidth, outputHeight,
+        FPDF_ImportNPagesToOne(doc, outputWidth, outputHeight,
                                static_cast<size_t>(cols), static_cast<size_t>(rows));
 
     if (!nupDoc) return JPDFIUM_ERR_NATIVE;
