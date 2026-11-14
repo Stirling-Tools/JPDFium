@@ -2,22 +2,35 @@ package stirling.software.jpdfium.doc;
 
 import java.awt.color.ColorSpace;
 import java.awt.color.ICC_Profile;
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+
+import static java.lang.foreign.ValueLayout.JAVA_INT;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Optional;
+import java.util.Set;
 
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.exception.JPDFiumException;
+import stirling.software.jpdfium.model.FlattenMode;
 import stirling.software.jpdfium.model.PdfVersion;
 import stirling.software.jpdfium.model.Rect;
-import stirling.software.jpdfium.panama.ColorBindings;
+import stirling.software.jpdfium.transform.PdfPageGeometry;
 import stirling.software.jpdfium.panama.DocBindings;
+import stirling.software.jpdfium.panama.ColorBindings;
+import stirling.software.jpdfium.panama.NativeRuntime;
+import stirling.software.jpdfium.panama.RenderBindings;
 import stirling.software.jpdfium.panama.QpdfLib;
 
 /**
@@ -25,17 +38,11 @@ import stirling.software.jpdfium.panama.QpdfLib;
  * CMYK conversion, a GTS_PDFX output intent, XMP metadata, the standard base
  * PDF version and page trim boxes.
  *
- * <p>Colours are rewritten in the existing content streams, images keep their masks,
- * printable annotations are flattened, JavaScript is removed and missing fonts are
- * embedded from the system font directories unless {@code embedMissingFonts} is off.
- * PDF/X-1a and PDF/X-3 reject transparency, hidden optional content and JBIG2/JPX
- * images rather than flattening them. Signed documents are rejected, and the
- * conversion fails if the page count changes.
- *
- * <p>This is <strong>not a PDF/X validator</strong>. A font that cannot be found is
- * left unembedded (rejected with {@code requireEmbeddedFonts}), and trapping is not
- * applied. veraPDF has no PDF/X profiles,
- * so use a PDF/X preflight such as Acrobat or callas before claiming conformance;
+ * <p>This is <strong>not a PDF/X validator</strong>. It writes the base version and
+ * missing trim boxes, can reject non-embedded fonts on request, and rasterizes
+ * transparent pages for standards that forbid transparency. It does not repair font programs,
+ * trapping, /ID, or every remaining RGB object. Use an external preflight
+ * (veraPDF or Acrobat) before claiming PDF/X conformance;
  * {@link #checkMetadata(byte[], PdfXOptions)} only checks the intent/ICC/version
  * wiring written here.
  */
@@ -370,48 +377,178 @@ public final class PdfXConverter {
             throw new JPDFiumException("PDF/X metadata requires an output intent ICC profile");
         }
         validateCmykProfile(profile);
-        if (isSigned(doc)) {
-            throw new JPDFiumException("PDF/X conversion rewrites the document and would invalidate"
-                    + " its digital signature; remove the signature first");
+        validateBeforeFlatten(doc, options);
+        Set<Integer> flattenedPages = flattenTransparency(doc, standard);
+        if (options.convertColors()) {
+            PdfColorConverter.convert(doc, options.colorOptions());
+            if (!flattenedPages.isEmpty()) {
+                PdfColorConverter.convertImagesToCmyk(
+                        doc, flattenedPages, options.jpegQuality(), true);
+            }
         }
-        requireNoTransparency(doc, standard);
+    }
+
+    /**
+     * Reject requests that would fail after transparency flattening has already
+     * mutated the document. Keeping these checks ahead of the rasterizer means a
+     * bad option combination leaves the caller's document untouched.
+     */
+    private static void validateBeforeFlatten(PdfDocument doc, PdfXOptions options) {
+        PdfXStandard standard = options.standard();
         if (!standard.allowsIccBasedColors() && !options.convertColors()) {
             throw new JPDFiumException(standard + " forbids ICC-based, Lab, and RGB colour spaces; "
                     + "colour conversion cannot be disabled");
         }
+        if ((standard == PdfXStandard.PDF_X_1A || standard == PdfXStandard.PDF_X_3)
+                && (options.title() == null || options.title().isBlank())) {
+            PdfMetadata metadata = PdfMetadata.of(doc.rawHandleForRead());
+            if (metadata.title().isEmpty()) {
+                throw new JPDFiumException("Title is required for " + standard.name());
+            }
+        }
     }
 
-    private static byte[] nativePrepare(byte[] pdf, PdfXOptions options) {
-        IccCmykTransform xform = new IccCmykTransform(options.outputIntentProfile());
-        return ColorBindings.pdfxPrepareBytes(pdf, nativeLevel(options.standard()),
-                xform.lutBytes(), IccCmykTransform.lutGrid(), nativeFlags(options),
-                options.jpegQuality());
+    /**
+     * Rasterize pages with transparent content for standards whose PDF version
+     * forbids transparency. Full-page rasterization is the only flattening
+     * primitive JPDFium exposes; PDF/X-1a and X-3 outputs therefore trade
+     * selectable text for a valid, non-transparent page.
+     */
+    private record TransparentPage(int index, float width, float height) {}
+
+    private static Set<Integer> flattenTransparency(PdfDocument doc, PdfXStandard standard) {
+        if (standard.allowsTransparency()) return Set.of();
+        List<TransparentPage> transparentPages = new ArrayList<>();
+        for (int i = 0; i < doc.pageCount(); i++) {
+            try (PdfPage page = doc.page(i)) {
+                if (!PdfPageObjects.hasTransparencyStrict(page.rawHandleForRead())) continue;
+                var size = page.size();
+                transparentPages.add(new TransparentPage(i, size.width(), size.height()));
+            }
+        }
+        for (TransparentPage page : transparentPages) {
+            long width = Math.round(page.width() * TRANSPARENCY_FLATTEN_DPI / 72.0);
+            long height = Math.round(page.height() * TRANSPARENCY_FLATTEN_DPI / 72.0);
+            if (width * height > MAX_FLATTEN_PIXELS) {
+                throw new JPDFiumException(standard + " page " + page.index()
+                        + " is too large to flatten at " + TRANSPARENCY_FLATTEN_DPI
+                        + " dpi (" + width + "x" + height + " pixels)");
+            }
+        }
+        Set<Integer> removedWidgets = new LinkedHashSet<>();
+        for (TransparentPage page : transparentPages) {
+            int i = page.index();
+            int rotation;
+            Optional<Rect> cropBox;
+            Optional<Rect> trimBox;
+            Optional<Rect> bleedBox;
+            Optional<Rect> artBox;
+            try (PdfPage source = doc.page(i)) {
+                var size = source.size();
+                removedWidgets.addAll(PdfAnnotations.widgetObjectNumbers(source.rawHandleForRead()));
+                rotation = PdfPageGeometry.getRotation(doc, i);
+                cropBox = source.getCropBox()
+                        .map(box -> mapToRaster(
+                                source.rawHandleForRead(), rotation, size.width(), size.height(),
+                                box));
+                trimBox = source.getTrimBox()
+                        .map(box -> mapToRaster(
+                                source.rawHandleForRead(), rotation, size.width(), size.height(),
+                                box));
+                bleedBox = source.getBleedBox()
+                        .map(box -> mapToRaster(
+                                source.rawHandleForRead(), rotation, size.width(), size.height(),
+                                box));
+                artBox = source.getArtBox()
+                        .map(box -> mapToRaster(
+                                source.rawHandleForRead(), rotation, size.width(), size.height(),
+                                box));
+            }
+            doc.flattenPage(i, FlattenMode.FULL, TRANSPARENCY_FLATTEN_DPI);
+            try (PdfPage flattened = doc.page(i)) {
+                cropBox.ifPresent(flattened::setCropBox);
+                trimBox.ifPresent(flattened::setTrimBox);
+                bleedBox.ifPresent(flattened::setBleedBox);
+                artBox.ifPresent(flattened::setArtBox);
+            }
+        }
+        PdfPageGeometry.clearUnplacedFormFields(doc, removedWidgets);
+        requireNoTransparency(doc, standard);
+        Set<Integer> indices = new LinkedHashSet<>();
+        for (TransparentPage page : transparentPages) indices.add(page.index());
+        return indices;
     }
 
-    private static void nativePrepare(Path pdf, PdfXOptions options) {
-        IccCmykTransform xform = new IccCmykTransform(options.outputIntentProfile());
-        ColorBindings.pdfxPrepareFile(pdf.toString(), pdf.toString(),
-                nativeLevel(options.standard()), xform.lutBytes(), IccCmykTransform.lutGrid(),
-                nativeFlags(options), options.jpegQuality());
+    /**
+     * Map a page box into the coordinates of the full-page raster that
+     * {@code flattenPage} installs. PDFium's own page-to-device transform
+     * handles rotation, the crop-box origin and a CropBox that extends beyond
+     * the MediaBox; mapping both corners normalizes swapped axes.
+     */
+    private static Rect mapToRaster(
+            MemorySegment page, int rotation, float width, float height, Rect box) {
+        final float scale = 1000f;
+        int deviceWidth = Math.max(1, Math.round(width * scale));
+        int deviceHeight = Math.max(1, Math.round(height * scale));
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment x1 = arena.allocate(JAVA_INT);
+            MemorySegment y1 = arena.allocate(JAVA_INT);
+            MemorySegment x2 = arena.allocate(JAVA_INT);
+            MemorySegment y2 = arena.allocate(JAVA_INT);
+            if (!mapPoint(page, rotation, deviceWidth, deviceHeight, box.x(), box.y(), x1, y1)
+                    || !mapPoint(
+                            page,
+                            rotation,
+                            deviceWidth,
+                            deviceHeight,
+                            box.x() + box.width(),
+                            box.y() + box.height(),
+                            x2,
+                            y2)) {
+                return box;
+            }
+            int minX = Math.min(x1.get(JAVA_INT, 0), x2.get(JAVA_INT, 0));
+            int maxX = Math.max(x1.get(JAVA_INT, 0), x2.get(JAVA_INT, 0));
+            int minY = Math.min(y1.get(JAVA_INT, 0), y2.get(JAVA_INT, 0));
+            int maxY = Math.max(y1.get(JAVA_INT, 0), y2.get(JAVA_INT, 0));
+            float left = minX / scale;
+            float bottom = height - maxY / scale;
+            return new Rect(left, bottom, (maxX - minX) / scale, (maxY - minY) / scale);
+        }
     }
 
-    private static int nativeLevel(PdfXStandard standard) {
-        return switch (standard) {
-            case PDF_X_1A -> 1;
-            case PDF_X_3 -> 3;
-            case PDF_X_4 -> 4;
-            case PDF_X_6 -> 6;
-        };
+    private static boolean mapPoint(
+            MemorySegment page,
+            int rotation,
+            int deviceWidth,
+            int deviceHeight,
+            float pageX,
+            float pageY,
+            MemorySegment deviceX,
+            MemorySegment deviceY) {
+        try {
+            return (int) RenderBindings.FPDF_PageToDevice.invokeExact(
+                    page,
+                    0,
+                    0,
+                    deviceWidth,
+                    deviceHeight,
+                    rotation,
+                    (double) pageX,
+                    (double) pageY,
+                    deviceX,
+                    deviceY)
+                    == 1;
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            return false;
+        }
     }
 
-    private static int nativeFlags(PdfXOptions options) {
-        int flags = ColorBindings.PDFX_CONVERT_SPECIAL;
-        if (options.convertColors()) flags |= ColorBindings.PDFX_CONVERT_COLOURS;
-        if (options.convertImages()) flags |= ColorBindings.PDFX_CONVERT_IMAGES;
-        if (options.neutralsToBlack()) flags |= ColorBindings.PDFX_NEUTRALS_TO_BLACK;
-        if (options.strictImages()) flags |= ColorBindings.PDFX_STRICT_IMAGES;
-        return flags;
-    }
+    private static final int TRANSPARENCY_FLATTEN_DPI = 300;
+
+    /** Refuse rasters over ~64 megapixels; 300 dpi on 50x50in is ~860 MB. */
+    private static final long MAX_FLATTEN_PIXELS = 64_000_000L;
 
     /**
      * Reject transparent page content for standards whose PDF version forbids
@@ -495,4 +632,43 @@ public final class PdfXConverter {
     public static void validate(byte[] pdf, PdfXOptions options) {
         checkMetadata(pdf, options);
     }
+
+    private static byte[] nativePrepare(byte[] pdf, PdfXOptions options) {
+        IccCmykTransform xform = new IccCmykTransform(options.outputIntentProfile());
+        return ColorBindings.pdfxPrepareBytes(pdf, nativeLevel(options.standard()),
+                xform.lutBytes(), IccCmykTransform.lutGrid(), nativeFlags(options),
+                options.jpegQuality());
+    }
+
+    private static void nativePrepare(Path pdf, PdfXOptions options) {
+        IccCmykTransform xform = new IccCmykTransform(options.outputIntentProfile());
+        ColorBindings.pdfxPrepareFile(pdf.toString(), pdf.toString(),
+                nativeLevel(options.standard()), xform.lutBytes(), IccCmykTransform.lutGrid(),
+                nativeFlags(options), options.jpegQuality());
+    }
+
+    private static int nativeLevel(PdfXStandard standard) {
+        return switch (standard) {
+            case PDF_X_1A -> 1;
+            case PDF_X_3 -> 3;
+            case PDF_X_4 -> 4;
+            case PDF_X_6 -> 6;
+        };
+    }
+
+    private static int nativeFlags(PdfXOptions options) {
+        int flags = ColorBindings.PDFX_CONVERT_SPECIAL;
+        if (options.convertColors()) flags |= ColorBindings.PDFX_CONVERT_COLOURS;
+        if (options.convertImages()) flags |= ColorBindings.PDFX_CONVERT_IMAGES;
+        if (options.neutralsToBlack()) flags |= ColorBindings.PDFX_NEUTRALS_TO_BLACK;
+        if (options.strictImages()) flags |= ColorBindings.PDFX_STRICT_IMAGES;
+        return flags;
+    }
+
+    /**
+     * Reject transparent page content for standards whose PDF version forbids
+     * it. Package-private so the read-only probe can be tested without a
+     * native CMYK build.
+     */
+
 }

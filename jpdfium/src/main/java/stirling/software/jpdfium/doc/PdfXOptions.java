@@ -140,7 +140,8 @@ public final class PdfXOptions {
         return title;
     }
 
-    /** Build the vector/image conversion options represented by these PDF/X options. */
+
+
     public PdfColorConverter.ColorConvertOptions colorOptions() {
         byte[] profile = outputIntentProfile();
         return PdfColorConverter.ColorConvertOptions.builder()

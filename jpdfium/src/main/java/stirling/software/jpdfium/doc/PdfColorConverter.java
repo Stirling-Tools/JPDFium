@@ -202,6 +202,25 @@ public final class PdfColorConverter {
     }
 
     /**
+     * Re-encode images on selected pages as DeviceCMYK, optionally including
+     * lossless sources. PDF/X uses this for the rasters created by page
+     * flattening without forcing lossless images on untouched pages.
+     */
+    public static int convertImagesToCmyk(
+            PdfDocument doc, Set<Integer> pageIndices, int quality, boolean convertLossless) {
+        if (!ColorBindings.imageConversionAvailable()) return -1;
+        int flags = convertLossless ? ColorBindings.IMAGE_CONVERT_LOSSLESS : 0;
+        int total = 0;
+        for (int i : pageIndices) {
+            if (i < 0 || i >= doc.pageCount()) continue;
+            int converted = ColorBindings.pageImagesToCmyk(doc.nativeHandle(), i, quality, flags);
+            if (converted < 0) return -1;
+            total += converted;
+        }
+        return total;
+    }
+
+    /**
      * Convert colors on a single page using the specified options.
      *
      * @param doc     the document to modify (in place)

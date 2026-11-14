@@ -212,29 +212,22 @@ if (PdfColorConverter.supportsColorSpace(PdfColorConverter.ColorSpace.CMYK)) {
   only intents of the same subtype are replaced. Recheck rendering after
   changing the print condition.
 
-`PdfXConverter.applyMetadata` converts to PDF/X-1a, -3, -4 or -6. It rewrites
-colours inside the existing content streams through QPDF, so text runs and
-marked content stay as they were and cost grows linearly with page count:
-
-- DeviceRGB vector colours, images (including soft-masked and lossless ones),
-  Indexed lookups and Separation/DeviceN alternates become output-intent CMYK.
-  PDF/X-1a also converts ICCBased, CalRGB, CalGray and Lab.
-- Neutral vector colours become K only (`neutralsToBlack`, on by default).
-- Lossless images stay lossless; JPEG sources are re-encoded as CMYK JPEG.
-- Printable annotations are flattened and JavaScript is removed.
-- Fonts used without an embedded program are embedded with
-  `PdfFontEmbedder.embedMissing` from the system font directories, or from
-  `fontDirectories(...)` (`embedMissingFonts`, on by default).
-- Signed documents are rejected, since the rewrite would invalidate the
-  signature.
-- PDF/X-1a and -3 reject transparency (including image soft masks), hidden
-  optional content and JBIG2/JPX images instead of flattening them.
-
-It does not flatten transparency or apply trapping, and it is not a
-validator; a font that cannot be found stays unembedded unless
-`requireEmbeddedFonts` rejects it. Supply a real printing-condition ICC for production output; the
-bundled compact profile is only a fallback. veraPDF has no PDF/X profiles, so
-run a PDF/X preflight such as Acrobat or callas before claiming compliance.
+`PdfXConverter` applies PDF/X metadata and output intents through
+`applyMetadata`. It is not a PDF/X validator. For standards that forbid
+transparency, detected transparent pages are rasterized at 300 dpi before the
+output intent is written; pages that still report transparency afterwards are
+rejected. Rasterizing preserves the visible page area and maps the source
+CropBox, TrimBox, BleedBox and ArtBox into the raster, but makes text on those
+pages non-selectable and removes interactive links, form fields and
+annotations from the rasterized page. Fields whose only widgets disappear are
+removed from the AcroForm tree. Transparency carried only by an annotation's
+appearance stream is outside the page-object probe: flatten annotations first
+when their appearance uses alpha. Close any caller-opened `PdfPage` wrappers
+before calling `applyMetadata`; rasterization can retire open pages. Pages over
+about 64 megapixels at 300 dpi are rejected instead of risking an oversized
+bitmap. Supply a real printing-condition ICC for production output; the bundled
+compact profile is only a fallback. Run veraPDF or Acrobat preflight before
+claiming compliance.
 
 ## What is not supported
 
