@@ -3,7 +3,6 @@ package stirling.software.jpdfium.doc;
 import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
-import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.panama.PageEditBindings;
 import stirling.software.jpdfium.panama.RenderBindings;
@@ -90,28 +89,14 @@ public final class PdfPageSplitter {
                 splitX = pageWidth / 2.0f;
             }
 
-            // Import the original page twice (we'll crop each differently)
-            // Use page import to duplicate
+            // Import the original page once to create the second half (reuse currentIdx for the first half)
             MemorySegment rawDoc = doc.rawHandle();
             boolean ok1 = PdfPageImporter.importPagesByIndex(rawDoc, rawDoc,
                     new int[]{currentIdx}, currentIdx + 1);
             if (!ok1) continue;
 
-            boolean ok2 = PdfPageImporter.importPagesByIndex(rawDoc, rawDoc,
-                    new int[]{currentIdx}, currentIdx + 2);
-            if (!ok2) continue;
-
-            // Now we have 3 copies at currentIdx, currentIdx+1, currentIdx+2
-            // We'll crop copies 1 & 2 and delete the original
-
-            int leftIdx = currentIdx + 1;
-            int rightIdx = currentIdx + 2;
-
-            if (!leftToRight) {
-                // Swap: right page comes first
-                leftIdx = currentIdx + 2;
-                rightIdx = currentIdx + 1;
-            }
+            int leftIdx = leftToRight ? currentIdx : currentIdx + 1;
+            int rightIdx = leftToRight ? currentIdx + 1 : currentIdx;
 
             // Crop left half
             try (PdfPage leftPage = doc.page(leftIdx)) {
@@ -126,11 +111,6 @@ public final class PdfPageSplitter {
                 PdfPageBoxes.setCropBox(rightPage.rawHandle(), rightCrop);
                 PdfPageBoxes.setMediaBox(rightPage.rawHandle(), rightCrop);
             }
-
-            // Delete the original (unmodified) page
-            try {
-                PageEditBindings.FPDFPage_Delete.invokeExact(rawDoc, currentIdx);
-            } catch (Throwable t) { throw new JPDFiumException("FPDFPage_Delete failed", t); }
 
             splitCount++;
         }

@@ -82,6 +82,28 @@ class PdfFontEmbedderTest {
     }
 
     @Test
+    void indexesFontFilesWithUpperCaseExtensions(@TempDir Path temp) throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
+        Path input = helveticaPage(temp.resolve("input.pdf"));
+        Path dir = Files.createDirectories(temp.resolve("upper-fonts"));
+        try (InputStream font = PDDocument.class.getResourceAsStream(
+                "/org/apache/pdfbox/resources/ttf/LiberationSans-Regular.ttf")) {
+            assertNotNull(font, "PDFBox no longer bundles LiberationSans");
+            // The directory scan must be case-insensitive: a mixed-case or
+            // upper-case extension indexes the file exactly like .ttf.
+            Files.copy(font, dir.resolve("LiberationSans-Regular.TTF"));
+        }
+
+        PdfFontEmbedder.FileResult result =
+                PdfFontEmbedder.embedMissingTo(input, temp.resolve("output.pdf"), dir);
+
+        assertEquals(List.of("Helvetica"), result.embedded(),
+                "FONT.TTF must be indexed like font.ttf");
+        assertTrue(firstFontEmbedded(temp.resolve("output.pdf")),
+                "upper-case extension font must be embedded");
+    }
+
+    @Test
     void embedsJapan1RksjCidFontWithAUnicodeFallback() throws Exception {
         assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
         var url = getClass().getResource("/pdfs/general/90ms_rksj_h_sample.pdf");
