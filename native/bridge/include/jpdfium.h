@@ -52,7 +52,7 @@ extern "C" {
 // combinations handshake on JPDFIUM_ABI_VERSION and verify platform-sensitive
 // layout facts (pointer width, PDFium struct geometry) instead of trusting
 // handwritten FFM patches. Bump the version on any ABI-breaking change.
-#define JPDFIUM_ABI_VERSION (2)
+#define JPDFIUM_ABI_VERSION (3)
 
 // Query ids for jpdfium_abi_query. Unknown ids return -1.
 #define JPDFIUM_ABI_QUERY_PTR_SIZE (0)
@@ -666,8 +666,8 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_embed_fonts_file(const char* in_path, const 
 // RETAIN_GIDS. Returns 0 when at least one font was subsetted (*output populated),
 // 1 when no font needed subsetting (*output is NULL), negative on error.
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_subset_fonts(const uint8_t* input, int64_t inputLen,
-                                                 uint8_t** output, int64_t* outputLen,
-                                                 int32_t* fontsSubset);
+                                                 int32_t subsetTagged, uint8_t** output,
+                                                 int64_t* outputLen, int32_t* fontsSubset);
 
 // In-process qpdf structural sanitization (FFM, no CLI).
 // Scrubs metadata/info/structure, JavaScript actions, embedded files, AcroForm
