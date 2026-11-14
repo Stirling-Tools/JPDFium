@@ -164,6 +164,20 @@ publishing workflows, not library releases, so they are not listed here.
   exactly like `font.ttf`, and the scan no longer allocates a regex per file
   name.
 
+- qpdf font embedding, subsetting and the PDF/X writer compress their output
+  at zlib level 9. The level is process-global state in qpdf, so those passes
+  hold the exclusive writer lock for the whole write: other threads' merge,
+  split or optimize work in the same process waits for a font pass instead of
+  interleaving with it.
+
+- Measured end to end on one arm64 driver (7 repetitions of identical
+  commands) across the unreleased rework: embedding the 7-font TAMReview
+  sample costs p50 60→129 ms and repairing a damaged 3.1 MB document p50
+  84→121 ms, while compression presets are unchanged (185→184 ms and 82→81 ms
+  p50). The embed pass now builds a document-wide font inventory, normalizes
+  and verifies; the numbers are recorded so later changes can tell
+  optimization from regression.
+
 ### Fixed
 
 - The bundled `JPDFiumCompactCmyk.icc` fallback is now generated only from the
