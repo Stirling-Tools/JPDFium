@@ -1,0 +1,12 @@
+Bundled fallback fonts (all shipped as .xz resources in this directory):
+
+- Liberation Sans, Serif and Mono 2.1.5 - SIL Open Font License 1.1 (OFL.txt)
+- Carlito 2.1 - SIL Open Font License 1.1 (OFL.txt)
+- Caladea 1.0 - SIL Open Font License 1.1 (OFL.txt)
+- Noto Sans Arabic - SIL Open Font License 1.1 (OFL.txt)
+- Noto Sans SC - SIL Open Font License 1.1 (OFL.txt)
+- DejaVu Sans, Serif and Sans Mono 2.37 - Bitstream Vera license (DejaVu-LICENSE.txt)
+
+The .xz files are byte-for-byte the upstream TTF/OTF font files compressed with XZ.
+manifest.tsv maps each resource to its PostScript name; PdfFontEmbedder reads it
+to build the deterministic fallback index without decompressing every face.
