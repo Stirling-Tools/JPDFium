@@ -173,6 +173,20 @@ public final class PdfRepair {
             }
         }
 
+        // Truncated PDF salvage: trim partial trailing object after last 'endobj' and append %%EOF
+        if (!coreResult.isUsable()) {
+            byte[] salvaged = salvageTruncatedPdf(current);
+            if (salvaged != null) {
+                RepairResult salvagedResult = RepairLib.repair(salvaged, flags);
+                if (!salvagedResult.isUsable() && useLopdfFallback) {
+                    salvagedResult = RepairLib.rustRepair(salvaged);
+                }
+                if (salvagedResult.isUsable()) {
+                    coreResult = salvagedResult;
+                }
+            }
+        }
+
         if (sanitize && coreResult.isUsable()) {
             byte[] repairedBytes = coreResult.repairedPdf();
             if (repairedBytes != null) {
@@ -340,5 +354,44 @@ public final class PdfRepair {
                     doUsePdfioFallback, doUseLopdfFallback, doTranscodeBrotli,
                     doValidateIcc, doValidateJpx, doWriteDiagnostics, doSanitize);
         }
+    }
+
+    private static byte[] salvageTruncatedPdf(byte[] input) {
+        if (input == null || input.length < 16) {
+            return null;
+        }
+        // Check %PDF- header within first 1024 bytes
+        int headerLimit = Math.min(input.length - 5, 1024);
+        boolean hasPdfHeader = false;
+        for (int i = 0; i <= headerLimit; i++) {
+            if (input[i] == '%' && input[i + 1] == 'P' && input[i + 2] == 'D'
+                    && input[i + 3] == 'F' && input[i + 4] == '-') {
+                hasPdfHeader = true;
+                break;
+            }
+        }
+        if (!hasPdfHeader) {
+            return null;
+        }
+
+        // Find last 'endobj' token
+        byte[] endobj = {'e', 'n', 'd', 'o', 'b', 'j'};
+        int lastEndObj = -1;
+        for (int i = input.length - endobj.length; i >= 0; i--) {
+            if (input[i] == 'e' && input[i + 1] == 'n' && input[i + 2] == 'd'
+                    && input[i + 3] == 'o' && input[i + 4] == 'b' && input[i + 5] == 'j') {
+                lastEndObj = i + endobj.length;
+                break;
+            }
+        }
+        if (lastEndObj <= 0) {
+            return null;
+        }
+
+        byte[] eof = {'\n', '%', '%', 'E', 'O', 'F', '\n'};
+        byte[] out = new byte[lastEndObj + eof.length];
+        System.arraycopy(input, 0, out, 0, lastEndObj);
+        System.arraycopy(eof, 0, out, lastEndObj, eof.length);
+        return out;
     }
 }

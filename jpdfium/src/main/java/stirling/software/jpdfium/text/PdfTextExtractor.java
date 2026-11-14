@@ -38,6 +38,11 @@ public final class PdfTextExtractor {
 
     private static final int PACKED_RECORD_BYTES = 32;
 
+    private static final float[] POWERS_OF_TEN = {
+        1.0f, 10.0f, 100.0f, 1000.0f, 10000.0f,
+        100000.0f, 1000000.0f, 10000000.0f, 100000000.0f, 1000000000.0f
+    };
+
     private PdfTextExtractor() {}
 
     /**
@@ -265,10 +270,9 @@ public final class PdfTextExtractor {
             int intPart = parseIntFast(s, digitsStart, dot);
             int fracPart = parseIntFast(s, dot + 1, end);
             int fracDigits = end - (dot + 1);
-            float frac = fracPart;
-            for (int i = 0; i < fracDigits; i++) {
-                frac /= 10.0f;
-            }
+            float frac = fracDigits < POWERS_OF_TEN.length
+                    ? fracPart / POWERS_OF_TEN[fracDigits]
+                    : fracPart / (float) Math.pow(10.0, fracDigits);
             float value = intPart + frac;
             return negative ? -value : value;
         } catch (NumberFormatException | IndexOutOfBoundsException | NullPointerException _) {
@@ -324,7 +328,7 @@ public final class PdfTextExtractor {
         if (characters.isEmpty()) return List.of();
 
         List<TextLine> lines = new ArrayList<>();
-        List<TextChar> currentLineChars = new ArrayList<>();
+        List<TextChar> currentLineChars = new ArrayList<>(64);
         float currentLineY = characters.getFirst().y();
         float lineThreshold = characters.getFirst().height() * 0.5f;
 
@@ -365,13 +369,13 @@ public final class PdfTextExtractor {
 
     private static List<TextWord> buildWords(List<TextChar> lineChars) {
         List<TextWord> words = new ArrayList<>();
-        List<TextChar> currentWord = new ArrayList<>();
+        List<TextChar> currentWord = new ArrayList<>(16);
 
         for (TextChar textChar : lineChars) {
             if (textChar.isWhitespace() || textChar.isNewline()) {
                 if (!currentWord.isEmpty()) {
                     words.add(buildWord(currentWord));
-                    currentWord = new ArrayList<>();
+                    currentWord = new ArrayList<>(16);
                 }
             } else {
                 currentWord.add(textChar);

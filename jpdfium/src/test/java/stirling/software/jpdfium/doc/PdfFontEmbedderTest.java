@@ -107,6 +107,153 @@ class PdfFontEmbedderTest {
     }
 
     @Test
+    void embedsJapan1ProportionalRksjCidFont() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
+        var url = getClass().getResource("/pdfs/general/90ms_rksj_h_sample.pdf");
+        assertNotNull(url, "90ms-RKSJ-H fixture missing");
+        byte[] input = Files.readAllBytes(Path.of(url.toURI()));
+        byte[] proportional = withCidEncoding(input, "90ms-RKSJ-H", "90msp-RKSJ-H");
+
+        PdfFontEmbedder.Result result = PdfFontEmbedder.embedMissing(proportional);
+
+        assertTrue(result.embedded().contains("HeiseiMin-W3"),
+                "the proportional predefined CMap must embed, got " + result);
+        try (PDDocument doc = Loader.loadPDF(result.pdf())) {
+            assertTrue(new PDFTextStripper().getText(doc).contains("日本語テスト"),
+                    "90msp-RKSJ-H must preserve Japanese text");
+        }
+
+        byte[] ascii = withPageContent(proportional,
+                "BT /F1 14 Tf 72 700 Td (A) Tj ET");
+        PdfFontEmbedder.Result asciiResult = PdfFontEmbedder.embedMissing(ascii);
+        try (PDDocument doc = Loader.loadPDF(asciiResult.pdf())) {
+            assertEquals("A", new PDFTextStripper().getText(doc).strip(),
+                    "90msp-RKSJ-H ASCII must map through CID 34");
+            COSDictionary font = doc.getPage(0).getResources()
+                    .getFont(COSName.getPDFName("F1")).getCOSObject();
+            COSArray descendants = (COSArray) font.getDictionaryObject(COSName.DESCENDANT_FONTS);
+            COSDictionary descendant = (COSDictionary) descendants.getObject(0);
+            COSBase mapping = descendant.getDictionaryObject(COSName.CID_TO_GID_MAP);
+            assertTrue(mapping instanceof COSStream, "ASCII mapping needs a CIDToGIDMap stream");
+            byte[] bytes;
+            try (var in = ((COSStream) mapping).createInputStream()) {
+                bytes = in.readAllBytes();
+            }
+            int gid = ((bytes[34 * 2] & 0xFF) << 8) | (bytes[34 * 2 + 1] & 0xFF);
+            assertTrue(gid > 0, "90msp-RKSJ-H code A must map to the glyph at CID 34");
+        }
+    }
+
+    @Test
+    void embedsJapan1VerticalRksjCidFont() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
+        var url = getClass().getResource("/pdfs/general/90ms_rksj_h_sample.pdf");
+        assertNotNull(url, "90ms-RKSJ-H fixture missing");
+        byte[] input = Files.readAllBytes(Path.of(url.toURI()));
+        for (String verticalCMap : List.of("90ms-RKSJ-V", "90msp-RKSJ-V")) {
+            byte[] vertical = withCidEncoding(input, "90ms-RKSJ-H", verticalCMap);
+            PdfFontEmbedder.Result result = PdfFontEmbedder.embedMissing(vertical);
+            assertTrue(result.embedded().contains("HeiseiMin-W3"),
+                    verticalCMap + " must embed, got " + result);
+            try (PDDocument doc = Loader.loadPDF(result.pdf())) {
+                String text = new PDFTextStripper().getText(doc).replaceAll("\\s+", "");
+                assertTrue(text.contains("日本語テスト"),
+                        verticalCMap + " must preserve Japanese text");
+            }
+        }
+    }
+
+    @Test
+    void embedsVerticalKoreaAndGbPredefinedCMaps() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
+        var gbUrl = getClass().getResource("/pdfs/general/gb_euc_h_sample.pdf");
+        assertNotNull(gbUrl, "GB-EUC-H fixture missing");
+        byte[] gbInput = Files.readAllBytes(Path.of(gbUrl.toURI()));
+        byte[] gbVertical = withCidEncoding(gbInput, "GB-EUC-H", "GB-EUC-V");
+        PdfFontEmbedder.Result gbResult = PdfFontEmbedder.embedMissing(gbVertical);
+        assertTrue(gbResult.embedded().contains("SimSun"),
+                "GB-EUC-V must embed, got " + gbResult);
+        try (PDDocument doc = Loader.loadPDF(gbResult.pdf())) {
+            String text = new PDFTextStripper().getText(doc).replaceAll("\\s+", "");
+            assertTrue(text.contains("中文测试"),
+                    "GB-EUC-V must preserve Chinese text");
+        }
+
+        assumeTrue(PdfFontEmbedder.diagnose("Batang").resolved(),
+                "no Korean-capable substitute installed");
+        var kscUrl = getClass().getResource("/pdfs/general/ksc_euc_h_sample.pdf");
+        assertNotNull(kscUrl, "KSC-EUC-H fixture missing");
+        byte[] kscInput = Files.readAllBytes(Path.of(kscUrl.toURI()));
+        byte[] kscVertical = withCidEncoding(kscInput, "KSC-EUC-H", "KSC-EUC-V");
+        PdfFontEmbedder.Result kscResult = PdfFontEmbedder.embedMissing(kscVertical);
+        assertTrue(kscResult.embedded().contains("Batang"),
+                "KSC-EUC-V must embed, got " + kscResult);
+        try (PDDocument doc = Loader.loadPDF(kscResult.pdf())) {
+            String text = new PDFTextStripper().getText(doc).replaceAll("\\s+", "");
+            assertTrue(text.contains("한국어테스트"),
+                    "KSC-EUC-V must preserve Korean text");
+        }
+    }
+
+    @Test
+    void embedsJapan1RksjWithNonAsciiBaseFontWithoutToUnicode() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
+        var url = getClass().getResource("/pdfs/general/90ms_rksj_h_sample.pdf");
+        assertNotNull(url, "90ms-RKSJ-H fixture missing");
+        byte[] input = Files.readAllBytes(Path.of(url.toURI()));
+        byte[] modified;
+        try (PDDocument doc = Loader.loadPDF(input)) {
+            for (PDPage page : doc.getPages()) {
+                for (COSName name : page.getResources().getFontNames()) {
+                    COSDictionary font = page.getResources().getFont(name).getCOSObject();
+                    COSArray descendants = (COSArray) font.getDictionaryObject(COSName.DESCENDANT_FONTS);
+                    if (descendants != null && descendants.size() > 0) {
+                        font.removeItem(COSName.TO_UNICODE);
+                        font.setItem(COSName.BASE_FONT, COSName.getPDFName("\uFF2D\uFF33 \u30B4\u30B7\u3083\u30AF"));
+                        COSDictionary desc = (COSDictionary) descendants.getObject(0);
+                        desc.removeItem(COSName.TO_UNICODE);
+                        desc.setItem(COSName.BASE_FONT, COSName.getPDFName("\uFF2D\uFF33 \u30B4\u30B7\u3083\u30AF"));
+                    }
+                }
+            }
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            doc.save(out);
+            modified = out.toByteArray();
+        }
+
+        PdfFontEmbedder.Result result = PdfFontEmbedder.embedMissing(modified);
+        assertFalse(result.statuses().stream().anyMatch(s -> s.reason().contains("legacy non-ASCII")),
+                "bundled CJK CMap must not be blocked by non-ASCII BaseFont check: " + result);
+    }
+
+    private static byte[] withPageContent(byte[] pdf, String content) throws IOException {
+        try (PDDocument doc = Loader.loadPDF(pdf)) {
+            doc.getPage(0).setContents(new PDStream(doc,
+                    new ByteArrayInputStream(content.getBytes(StandardCharsets.US_ASCII))));
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            doc.save(out);
+            return out.toByteArray();
+        }
+    }
+
+    private static byte[] withCidEncoding(byte[] pdf, String from, String to) throws IOException {
+        try (PDDocument doc = Loader.loadPDF(pdf)) {
+            for (PDPage page : doc.getPages()) {
+                for (COSName name : page.getResources().getFontNames()) {
+                    COSDictionary font = page.getResources().getFont(name).getCOSObject();
+                    COSBase encoding = font.getDictionaryObject(COSName.ENCODING);
+                    if (encoding instanceof COSName value && value.getName().equals(from)) {
+                        font.setItem(COSName.ENCODING, COSName.getPDFName(to));
+                    }
+                }
+            }
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            doc.save(out);
+            return out.toByteArray();
+        }
+    }
+
+    @Test
     void embedsGb1GbeucCidFontWithAUnicodeFallback() throws Exception {
         assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
         var url = getClass().getResource("/pdfs/general/gb_euc_h_sample.pdf");
@@ -1354,6 +1501,73 @@ class PdfFontEmbedderTest {
     }
 
     @Test
+    void signedDocumentIsEmbeddedWhenStripSignaturesTrue() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
+        Path source = Path.of(PdfFontEmbedderTest.class.getResource("/pdfs/general/basic-text.pdf").toURI());
+        byte[] input = Files.readAllBytes(source);
+        FontProgram font = findEmbeddedFont(input);
+        assertNotNull(font);
+
+        byte[] signedPdf;
+        try (PDDocument pdf = Loader.loadPDF(input)) {
+            var sigDict = new COSDictionary();
+            sigDict.setItem(COSName.TYPE, COSName.getPDFName("Sig"));
+            var byteRange = new COSArray();
+            byteRange.add(COSInteger.get(0));
+            byteRange.add(COSInteger.get(100));
+            byteRange.add(COSInteger.get(200));
+            byteRange.add(COSInteger.get(300));
+            sigDict.setItem(COSName.getPDFName("ByteRange"), byteRange);
+            pdf.getDocumentCatalog().getCOSObject().setItem(COSName.getPDFName("MockSig"), sigDict);
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            pdf.save(baos);
+            signedPdf = baos.toByteArray();
+        }
+
+        assertThrows(JPDFiumException.class,
+                () -> PdfFontEmbedder.embed(signedPdf, Map.of(font.baseName(), font.data()), false));
+
+        byte[] out = PdfFontEmbedder.embed(signedPdf, Map.of(font.baseName(), font.data()), true);
+        assertNotNull(out);
+        assertFalse(new String(out, StandardCharsets.ISO_8859_1).contains("/ByteRange"));
+
+        try (PdfDocument doc = PdfDocument.open(out)) {
+            assertEquals(1, doc.pageCount());
+            try (PdfPage page = doc.page(0)) {
+                assertNotNull(page.renderImage());
+            }
+        }
+
+        List<String> safeDocPaths = List.of(
+                "pdfs/1000/1000005.pdf",
+                "pdfs/2200/2200006.pdf",
+                "pdfs/2800/2800000.pdf",
+                "pdfs/5200/5200000.pdf",
+                "pdfs/5800/5800009.pdf",
+                "pdfs/6600/6600009.pdf",
+                "pdfs/7800/7800004.pdf",
+                "pdfs/0000/0000020.pdf");
+        Path safeBase = Path.of("/private/var/folders/10/4hn925296yx_fqxp5g2z__v40000gn/T/safedocs");
+        for (String rel : safeDocPaths) {
+            Path safeDoc = safeBase.resolve(rel);
+            if (Files.isRegularFile(safeDoc)) {
+                byte[] safeBytes = Files.readAllBytes(safeDoc);
+                assertThrows(JPDFiumException.class, () -> PdfFontEmbedder.embedMissing(safeBytes, false));
+                var res = PdfFontEmbedder.embedMissing(safeBytes, true);
+                assertNotNull(res.pdf());
+                assertFalse(res.embedded().isEmpty());
+                assertFalse(new String(res.pdf(), StandardCharsets.ISO_8859_1).contains("/ByteRange"));
+                try (PdfDocument doc = PdfDocument.open(res.pdf())) {
+                    assertTrue(doc.pageCount() > 0);
+                    try (PdfPage page = doc.page(0)) {
+                        assertNotNull(page.renderImage());
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
     void fontDataIsAppliedOnInMemoryOverloads() throws Exception {
         assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
         Path source = Path.of(PdfFontEmbedderTest.class.getResource("/pdfs/general/basic-text.pdf").toURI());
@@ -1531,6 +1745,12 @@ class PdfFontEmbedderTest {
                     "the producer width must be replaced by the substitute advance");
             assertTrue(run.getInt(0) > 0, "the substitute must keep a positive advance");
         }
+    }
+
+    @Test
+    void utf8NameBytesProduceDecodedLookupKey() {
+        assertTrue(PdfFontEmbedder.nameKeys("Caf\u00c3\u00a9").contains("café"),
+                "UTF-8 name bytes must also resolve as decoded text");
     }
 
     @Test

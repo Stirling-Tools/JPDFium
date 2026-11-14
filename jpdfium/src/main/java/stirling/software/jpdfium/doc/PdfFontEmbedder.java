@@ -7,7 +7,9 @@ import java.io.InputStreamReader;
 import java.io.StringReader;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.charset.CharacterCodingException;
 import java.nio.charset.Charset;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
@@ -127,6 +129,8 @@ public final class PdfFontEmbedder {
     }
 
     private static final int TTCF = 0x74746366;
+    private static final String[] STRIPPED_SUFFIXES = {"Regular", "Roman", "Book", "Normal"};
+    private static final String[] FONT_EXTENSIONS = {"ttf", "otf", "ttc", "otc", "pfb", "pfa", "t1"};
     private static final Pattern TYPE1_NAME = Pattern.compile("/FontName\\s*/(\\S+)");
     private static final List<String> CJK_FAMILY_HINTS = List.of(
             "heisei", "mincho", "gothic", "simsun", "simhei", "fangsong", "kaiti",
@@ -199,6 +203,17 @@ public final class PdfFontEmbedder {
      *                          is signed or password protected
      */
     public static byte[] embed(byte[] pdf, Map<String, byte[]> fonts) {
+        return embed(pdf, fonts, false);
+    }
+
+    /**
+     * Embed font programs keyed by exact {@code /BaseFont}, optionally stripping digital
+     * signatures so that the output remains valid and unsigned.
+     *
+     * @param stripSignatures when true, digital signature fields, {@code /ByteRange}, and
+     *                        permissions dictionaries are stripped before embedding
+     */
+    public static byte[] embed(byte[] pdf, Map<String, byte[]> fonts, boolean stripSignatures) {
         if (pdf == null || pdf.length == 0) throw new IllegalArgumentException("pdf must not be empty");
         if (fonts == null || fonts.isEmpty()) return pdf;
         Map<String, byte[]> normalized = new LinkedHashMap<>();
@@ -220,24 +235,39 @@ public final class PdfFontEmbedder {
             }
             normalized.put(name, singleFace(data, name));
         }
-        byte[] out = QpdfLib.embedFonts(pdf, normalized, false);
+        byte[] out = QpdfLib.embedFonts(pdf, normalized, false, stripSignatures);
         if (out == null) throw new JPDFiumException("no font matching /BaseFont " + normalized.keySet());
         return out;
     }
 
     /** File-backed variant of {@link #embed(byte[], Map)}. */
     public static byte[] embed(Path input, Map<String, byte[]> fonts) throws IOException {
-        return embed(Files.readAllBytes(input), fonts);
+        return embed(input, fonts, false);
+    }
+
+    /** File-backed variant of {@link #embed(byte[], Map, boolean)}. */
+    public static byte[] embed(Path input, Map<String, byte[]> fonts, boolean stripSignatures) throws IOException {
+        return embed(Files.readAllBytes(input), fonts, stripSignatures);
     }
 
     /** Alias of {@link #embed(byte[], Map)}. */
     public static byte[] replace(byte[] pdf, Map<String, byte[]> fonts) {
-        return embed(pdf, fonts);
+        return embed(pdf, fonts, false);
+    }
+
+    /** Alias of {@link #embed(byte[], Map, boolean)}. */
+    public static byte[] replace(byte[] pdf, Map<String, byte[]> fonts, boolean stripSignatures) {
+        return embed(pdf, fonts, stripSignatures);
     }
 
     /** Alias of {@link #embed(Path, Map)}. */
     public static byte[] replace(Path input, Map<String, byte[]> fonts) throws IOException {
-        return embed(input, fonts);
+        return embed(input, fonts, false);
+    }
+
+    /** Alias of {@link #embed(Path, Map, boolean)}. */
+    public static byte[] replace(Path input, Map<String, byte[]> fonts, boolean stripSignatures) throws IOException {
+        return embed(input, fonts, stripSignatures);
     }
 
     /**
@@ -246,6 +276,14 @@ public final class PdfFontEmbedder {
      * directories when none are given.
      */
     public static Result embedMissing(byte[] pdf, Path... fontDirs) throws IOException {
+        return embedMissing(pdf, false, fontDirs);
+    }
+
+    /**
+     * Embed every non-embedded font resource, optionally stripping digital signatures so
+     * signed documents can have missing fonts embedded.
+     */
+    public static Result embedMissing(byte[] pdf, boolean stripSignatures, Path... fontDirs) throws IOException {
         if (pdf == null || pdf.length == 0) {
             return new Result(pdf == null ? new byte[0] : pdf, List.of(), List.of(), List.of());
         }
@@ -275,19 +313,22 @@ public final class PdfFontEmbedder {
             if (face != null && !face.embeddable()) face = null;
             if (face == null) {
                 if (index == null) index = indexFor(fontDirs);
-                face = index.get(key);
-                if (face != null && !face.embeddable()) face = null;
+                for (String candidate : nameKeys(name)) {
+                    face = index.get(candidate);
+                    if (face != null && face.embeddable()) break;
+                    face = null;
+                }
             }
             if (face == null && bundled != null) {
-                face = resolve(bundled, key);
+                face = resolveName(bundled, name);
             }
             if (face == null) {
                 if (index == null) index = indexFor(fontDirs);
-                face = resolve(index, key);
+                face = resolveName(index, name);
             }
             if (face == null) {
                 if (index == null) index = indexFor(fontDirs);
-                Face restricted = restricted(index, key);
+                Face restricted = restrictedName(index, name);
                 statuses.add(restricted == null
                         ? new FontStatus(name, "", -1, false, "no matching font")
                         : new FontStatus(name, source(restricted), restricted.fsType(), false,
@@ -304,7 +345,7 @@ public final class PdfFontEmbedder {
             found.put(name, singleFace(data, name));
             statuses.add(new FontStatus(name, source(face), fsType, true, "embedded"));
         }
-        byte[] out = found.isEmpty() ? null : QpdfLib.embedFonts(pdf, found, true);
+        byte[] out = found.isEmpty() ? null : QpdfLib.embedFonts(pdf, found, true, stripSignatures);
         if (out == null) {
             List<FontStatus> failed = new ArrayList<>(statuses.size());
             for (FontStatus status : statuses) {
@@ -334,18 +375,32 @@ public final class PdfFontEmbedder {
      *     predefined CMap whose code-to-glyph mapping cannot be preserved
      */
     public static Result embedMissingStrict(byte[] pdf, Path... fontDirs) throws IOException {
-        return embedMissing(pdf, fontDirs).requireAllEmbedded();
+        return embedMissingStrict(pdf, false, fontDirs);
+    }
+
+    /**
+     * Embed missing fonts, optionally stripping signatures, and reject any result that still has
+     * an unembedded font.
+     */
+    public static Result embedMissingStrict(byte[] pdf, boolean stripSignatures, Path... fontDirs) throws IOException {
+        if (!QpdfLib.isFontInventorySupported()) {
+            throw new JPDFiumException(
+                    "strict font embedding requires the native font inventory");
+        }
+        return embedMissing(pdf, stripSignatures, fontDirs).requireAllEmbedded();
     }
 
     /**
      * The native bridge can rewrite {@code /CIDToGIDMap} and {@code /ToUnicode} for
      * Identity-encoded CID fonts and for predefined CJK CMaps (Adobe-Japan1 {@code 90ms-RKSJ-H},
-     * Adobe-Korea1 {@code KSC-EUC-H}, Adobe-GB1 {@code GB-EUC-H}), whose code-to-CID and
+     * {@code 90ms-RKSJ-V}, {@code 90msp-RKSJ-H}, {@code 90msp-RKSJ-V}, Adobe-Korea1 {@code KSC-EUC-H},
+     * {@code KSC-EUC-V}, Adobe-GB1 {@code GB-EUC-H}, {@code GB-EUC-V}), whose code-to-CID and
      * CID-to-Unicode mappings are bundled. Other predefined CMaps or an existing CID-to-GID stream carry an ordering that a substitute program does not
      * share; embedding them would keep the document renderable but change its text.
      */
     private static String substitutionBlocker(PdfFontAuditor.FontResource resource) {
-        if (!resource.hasToUnicode() && !isAscii(resource.baseName())) {
+        boolean supportedCjk = isSupportedCjkPredefinedCMap(resource.encoding());
+        if (!resource.hasToUnicode() && !isAscii(resource.baseName()) && !supportedCjk) {
             // Legacy CJK producers put GBK/Shift-JIS bytes in /BaseFont and rely on the
             // original font's glyph order. A substitute would change both text extraction
             // and the drawn glyphs because there is no /ToUnicode to preserve.
@@ -376,9 +431,7 @@ public final class PdfFontEmbedder {
         }
         boolean identityEncoding = "Identity-H".equals(resource.encoding())
                 || "Identity-V".equals(resource.encoding())
-                || "90ms-RKSJ-H".equals(resource.encoding())
-                || "KSC-EUC-H".equals(resource.encoding())
-                || "GB-EUC-H".equals(resource.encoding());
+                || supportedCjk;
         if (!identityEncoding) {
             return "CID encoding: predefined CMap " + resource.encoding()
                     + " cannot be rewritten without a verified code-to-glyph mapping";
@@ -390,6 +443,17 @@ public final class PdfFontEmbedder {
                     + " carries a glyph order a substitute program does not share";
         }
         return null;
+    }
+
+    private static boolean isSupportedCjkPredefinedCMap(String encoding) {
+        return "90ms-RKSJ-H".equals(encoding)
+                || "90ms-RKSJ-V".equals(encoding)
+                || "90msp-RKSJ-H".equals(encoding)
+                || "90msp-RKSJ-V".equals(encoding)
+                || "KSC-EUC-H".equals(encoding)
+                || "KSC-EUC-V".equals(encoding)
+                || "GB-EUC-H".equals(encoding)
+                || "GB-EUC-V".equals(encoding);
     }
 
     private static boolean isAscii(String value) {
@@ -424,11 +488,11 @@ public final class PdfFontEmbedder {
                         "available");
             }
         }
-        face = resolve(index, key);
+        face = resolveName(index, baseName);
         if (face != null) {
             return new FontStatus(baseName, source(face), face.fsType(), true, "available");
         }
-        Face restricted = restricted(index, key);
+        Face restricted = restrictedName(index, baseName);
         return restricted == null
                 ? new FontStatus(baseName, "", -1, false, "no matching font")
                 : new FontStatus(baseName, source(restricted), restricted.fsType(), false,
@@ -453,6 +517,12 @@ public final class PdfFontEmbedder {
     /** File-backed variant that lets native qpdf read the input and write the output. */
     public static FileResult embedMissingTo(Path input, Path output, Path... fontDirs)
             throws IOException {
+        return embedMissingTo(input, output, false, fontDirs);
+    }
+
+    /** File-backed variant that lets native qpdf read the input and write the output, optionally stripping signatures. */
+    public static FileResult embedMissingTo(
+            Path input, Path output, boolean stripSignatures, Path... fontDirs) throws IOException {
         List<PdfFontAuditor.FontResource> resources =
                 PdfFontAuditor.unembeddedResources(input);
         Set<String> names = new LinkedHashSet<>();
@@ -468,7 +538,7 @@ public final class PdfFontEmbedder {
             return new FileResult(List.of(), List.of());
         }
         Map<String, byte[]> found = programsFor(missing, blockers, fontDirs);
-        if (found.isEmpty() || !QpdfLib.embedFontsToFile(input, output, found, true)) {
+        if (found.isEmpty() || !QpdfLib.embedFontsToFile(input, output, found, true, stripSignatures)) {
             Files.copy(input, output, StandardCopyOption.REPLACE_EXISTING);
             return new FileResult(List.of(), missing);
         }
@@ -485,7 +555,7 @@ public final class PdfFontEmbedder {
         Map<Face, byte[]> operationPrograms = new HashMap<>();
         for (String name : missing) {
             if (blockers.containsKey(name)) continue;
-            Face face = resolve(index, key(name));
+            Face face = resolveName(index, name);
             if (face == null) continue;
             byte[] data = program(face, operationPrograms);
             if (!embeddableProgram(programFsType(face, data))) continue;
@@ -501,7 +571,49 @@ public final class PdfFontEmbedder {
 
     /** File-backed variant of {@link #embedMissing(byte[], Path...)}. */
     public static Result embedMissing(Path input, Path... fontDirs) throws IOException {
-        return embedMissing(Files.readAllBytes(input), fontDirs);
+        return embedMissing(input, false, fontDirs);
+    }
+
+    /** File-backed variant of {@link #embedMissing(byte[], boolean, Path...)}. */
+    public static Result embedMissing(Path input, boolean stripSignatures, Path... fontDirs) throws IOException {
+        return embedMissing(Files.readAllBytes(input), stripSignatures, fontDirs);
+    }
+
+    private static Face resolveName(Map<String, Face> index, String name) {
+        for (String candidate : nameKeys(name)) {
+            Face face = resolve(index, candidate);
+            if (face != null) return face;
+        }
+        return null;
+    }
+
+    private static Face restrictedName(Map<String, Face> index, String name) {
+        for (String candidate : nameKeys(name)) {
+            Face face = restricted(index, candidate);
+            if (face != null) return face;
+        }
+        return null;
+    }
+
+    static List<String> nameKeys(String name) {
+        List<String> keys = new ArrayList<>(2);
+        String direct = key(name);
+        if (!direct.isEmpty()) keys.add(direct);
+        boolean latin1 = !name.isEmpty() && name.chars().allMatch(c -> c <= 0xFF);
+        if (latin1) {
+            try {
+                String decoded = StandardCharsets.UTF_8.newDecoder()
+                        .onMalformedInput(CodingErrorAction.REPORT)
+                        .onUnmappableCharacter(CodingErrorAction.REPORT)
+                        .decode(ByteBuffer.wrap(name.getBytes(StandardCharsets.ISO_8859_1)))
+                        .toString();
+                String decodedKey = key(decoded);
+                if (!decodedKey.isEmpty() && !keys.contains(decodedKey)) keys.add(decodedKey);
+            } catch (CharacterCodingException ignored) {
+                // Not a UTF-8 byte sequence after the Latin-1 round trip.
+            }
+        }
+        return keys;
     }
 
     static String key(String name) {
@@ -520,7 +632,7 @@ public final class PdfFontEmbedder {
         boolean trimmed = true;
         while (trimmed) {
             trimmed = false;
-            for (String suffix : new String[] {"Regular", "Roman", "Book", "Normal"}) {
+            for (String suffix : STRIPPED_SUFFIXES) {
                 int separator = end - suffix.length() - 1;
                 if (separator >= start
                         && (name.charAt(separator) == '-' || name.charAt(separator) == ',')
@@ -573,13 +685,22 @@ public final class PdfFontEmbedder {
         if (key.isEmpty()) return null;
         Face exact = index.get(key);
         if (exact != null && (!embeddableOnly || exact.embeddable())) return exact;
-        if (CJK_FAMILY_HINTS.stream().anyMatch(key::contains)) {
-            Face cjk = index.get("notosansscregular");
-            if (cjk != null && (!embeddableOnly || cjk.embeddable())) return cjk;
+        for (String hint : CJK_FAMILY_HINTS) {
+            if (key.contains(hint)) {
+                Face cjk = index.get("notosansscregular");
+                if (cjk != null && (!embeddableOnly || cjk.embeddable())) return cjk;
+                break;
+            }
         }
         for (List<String> group : METRIC_COMPATIBLE) {
-            String family = group.stream().filter(key::startsWith)
-                    .max((a, b) -> a.length() - b.length()).orElse(null);
+            String family = null;
+            int familyLength = -1;
+            for (String member : group) {
+                if (member.length() > familyLength && key.startsWith(member)) {
+                    family = member;
+                    familyLength = member.length();
+                }
+            }
             if (family == null) continue;
             String style = styleOf(key.substring(family.length()));
             for (String member : group) {
@@ -604,6 +725,19 @@ public final class PdfFontEmbedder {
         return bold ? (italic ? "bolditalic" : "bold") : (italic ? "italic" : "");
     }
 
+    private static boolean isFontExtension(String name) {
+        int dot = name.lastIndexOf('.');
+        if (dot < 0 || dot == name.length() - 1) return false;
+        int length = name.length() - dot - 1;
+        for (String extension : FONT_EXTENSIONS) {
+            if (length == extension.length()
+                    && name.regionMatches(true, dot + 1, extension, 0, length)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static Map<String, Face> index(List<Path> dirs) {
         boolean bundledFirst = dirs.isEmpty();
         Map<String, Face> index = new HashMap<>();
@@ -622,7 +756,7 @@ public final class PdfFontEmbedder {
                                 if ((attrs.isRegularFile()
                                                 || (attrs.isSymbolicLink()
                                                     && Files.isRegularFile(file)))
-                                        && name.matches(".*\\.(ttf|otf|ttc|otc|pfb|pfa|t1)")) {
+                                        && isFontExtension(name)) {
                                     files.add(file);
                                 }
                                 return FileVisitResult.CONTINUE;
@@ -743,7 +877,9 @@ public final class PdfFontEmbedder {
         for (int i = 0, n = b.getShort(face + 4) & 0xFFFF; i < n; i++) {
             int record = face + 12 + 16 * i;
             if (b.getInt(record) == 0x4F532F32) {
-                return b.getShort(b.getInt(record + 8) + 8) & 0xFFFF;
+                int tableOffset = b.getInt(record + 8);
+                if (tableOffset < 0 || tableOffset > b.capacity() - 10) return 0;
+                return b.getShort(tableOffset + 8) & 0xFFFF;
             }
         }
         return 0;
@@ -951,6 +1087,8 @@ public final class PdfFontEmbedder {
             if (subRec + 8 > cmapOffset + cmapLength) break;
             int platformId = buf.getShort(subRec) & 0xFFFF;
             int encodingId = buf.getShort(subRec + 2) & 0xFFFF;
+            int subtableOffset = buf.getInt(subRec + 4);
+            if (subtableOffset < 0 || subtableOffset > cmapLength - 4) continue;
             if (platformId == 3 && encodingId == 0) {
                 return fontData;
             }
@@ -964,6 +1102,8 @@ public final class PdfFontEmbedder {
             selectedSubtableOffset = cmapOffset + 4;
         }
         if (selectedSubtableOffset + 8 > fontData.length) return fontData;
+        int selectedOffset = buf.getInt(selectedSubtableOffset + 4);
+        if (selectedOffset < 0 || selectedOffset > cmapLength - 4) return fontData;
 
         byte[] modified = fontData.clone();
         ByteBuffer out = ByteBuffer.wrap(modified);

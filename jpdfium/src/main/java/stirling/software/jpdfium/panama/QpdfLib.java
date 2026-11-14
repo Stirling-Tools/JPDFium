@@ -292,6 +292,11 @@ public final class QpdfLib {
     }
 
     public static byte[] embedFonts(byte[] input, Map<String, byte[]> fonts, boolean onlyMissing) {
+        return embedFonts(input, fonts, onlyMissing, false);
+    }
+
+    public static byte[] embedFonts(
+            byte[] input, Map<String, byte[]> fonts, boolean onlyMissing, boolean stripSignatures) {
         if (EMBED_FONTS_HANDLE == null) throw new JPDFiumException("font embedding requires native qpdf support");
         Semaphore held = acquireSlotOrThrow("font embedding");
         try (QpdfCall call = new QpdfCall()) {
@@ -303,8 +308,9 @@ public final class QpdfLib {
                 data.setAtIndex(ADDRESS, i, call.copyBytes(e.getValue()));
                 lens.setAtIndex(JAVA_LONG, i++, e.getValue().length);
             }
+            int flags = (onlyMissing ? 1 : 0) | (stripSignatures ? 2 : 0);
             int rc = (int) EMBED_FONTS_HANDLE.invokeExact(call.copyBytes(input), (long) input.length, n,
-                    names, data, lens, onlyMissing ? 1 : 0, call.outPtr, call.outLen);
+                    names, data, lens, flags, call.outPtr, call.outLen);
             if (rc == 0) return call.copyAndFree("qpdfEmbedFonts");
             if (rc == 1) return null;
             throw new JPDFiumException(switch (rc) {
@@ -331,6 +337,12 @@ public final class QpdfLib {
     public static boolean embedFontsToFile(
             Path input, Path output, Map<String, byte[]> fonts, boolean onlyMissing)
             throws IOException {
+        return embedFontsToFile(input, output, fonts, onlyMissing, false);
+    }
+
+    public static boolean embedFontsToFile(
+            Path input, Path output, Map<String, byte[]> fonts, boolean onlyMissing, boolean stripSignatures)
+            throws IOException {
         if (EMBED_FONTS_FILE_HANDLE == null) {
             throw new JPDFiumException("font embedding requires native qpdf support");
         }
@@ -350,6 +362,7 @@ public final class QpdfLib {
                 lens.setAtIndex(JAVA_LONG, i++, e.getValue().length);
             }
             staging = tx.staging();
+            int flags = (onlyMissing ? 1 : 0) | (stripSignatures ? 2 : 0);
             int rc =
                     (int)
                             EMBED_FONTS_FILE_HANDLE.invokeExact(
@@ -359,7 +372,7 @@ public final class QpdfLib {
                                     names,
                                     data,
                                     lens,
-                                    onlyMissing ? 1 : 0);
+                                    flags);
             if (rc == 1) return false;
             if (rc != 0) {
                 throw new JPDFiumException(
