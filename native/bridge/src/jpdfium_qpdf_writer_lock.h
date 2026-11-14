@@ -5,6 +5,10 @@
 // requests an explicit level takes it exclusively and restores qpdf's default
 // afterwards. This keeps concurrent jobs from recompressing each other's
 // streams at the wrong level without serializing ordinary qpdf work.
+//
+// The font passes (embed, subset, PDF/X write) request level 9, so while one
+// of them runs, other threads' writers wait rather than interleave: a font
+// pass is a whole-document rewrite that holds the mutex for its full duration.
 #ifndef JPDFIUM_QPDF_WRITER_LOCK_H
 #define JPDFIUM_QPDF_WRITER_LOCK_H
 
