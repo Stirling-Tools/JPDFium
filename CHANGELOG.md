@@ -187,8 +187,9 @@ publishing workflows, not library releases, so they are not listed here.
   pixels are now erased and the image is moved to the page, as crop already did.
 - Redacting or cropping part of an image that is drawn more than once on a page
   also erased the same pixels in the other placements, which nothing covered.
-  Such a request now fails with `RedactIncompleteException` before the page
-  changes, and the document can still be saved.
+  Cropping now keeps such straddling placements whole and clips them with the
+  page boxes instead of failing; redaction still fails with
+  `RedactIncompleteException` before the page changes.
 - Redacting part of a JPEG XL, HEIF or AVIF image (encodings PDFium cannot
   decode) dropped the whole picture. With an image codec registered (the
   `jpdfium-vips` module) the image is now decoded, only the covered pixels are

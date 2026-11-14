@@ -1398,8 +1398,10 @@ public final class JpdfiumLib {
      * content remains in the file; both are clipped only by the page boxes.
      * Straddling words and objects are kept whole, straddling images are
      * pixel-erased outside (soft masks kept when the image can be rendered,
-     * nested images promoted), fully outside objects are removed. A post-pass
-     * audit returns {@code JPDFIUM_ERR_REDACT_INCOMPLETE} or
+     * nested images promoted), fully outside objects are removed. A
+     * straddling image that cannot be erased safely or promoted without
+     * reordering form content is kept whole and clipped by the page boxes.
+     * A post-pass audit returns {@code JPDFIUM_ERR_REDACT_INCOMPLETE} or
      * {@code JPDFIUM_ERR_REDACT_UNVERIFIABLE} when content survives or the
      * audit cannot run.
      *
