@@ -2194,7 +2194,7 @@ static void repair_font_tounicode(QPDF& pdf, QPDFObjectHandle& font, FT_Face fac
 static void repair_simple_font_widths(QPDFObjectHandle& target, FT_Face face,
                                       SimpleEncoding const& simple_encoding, bool simple_any_gid,
                                       std::vector<SimpleGlyph> const& simple_glyphs,
-                                      FontNormalizeState& state) {
+                                      FontNormalizeState& state, bool full) {
     if (simple_encoding.unsupportedEncoding || !simple_any_gid) return;
     int first_char = 0;
     int last_char = 255;
@@ -2232,13 +2232,16 @@ static void repair_simple_font_widths(QPDFObjectHandle& target, FT_Face face,
         const bool resolved = simple_glyphs[code].gid != 0 &&
                               pdf_width_from_glyph(face, simple_glyphs[code].gid, computed);
         if (resolved) {
-            if (existing_number && (preserved > 0 || (computed == 0 && existing_nonnegative))) {
-                // Keep a positive producer width even when it differs from the
-                // program advance; keep a legitimate zero-advance glyph too.
+            const bool within_tolerance = existing_number && std::abs(preserved - computed) <= 1;
+            if (within_tolerance) {
+                width = preserved;
+            } else if (!full && existing_number &&
+                       (preserved > 0 || (computed == 0 && existing_nonnegative))) {
+                // In targeted width repair (repairWidths), keep a positive
+                // producer tracking width even when it differs from the program advance;
+                // keep a legitimate zero-advance glyph too.
                 width = preserved;
             } else {
-                // Only a missing, non-numeric, or non-positive width that
-                // disagrees with the program is demonstrably inconsistent.
                 width = std::max(0, computed);
                 needs_rewrite = true;
             }
@@ -2870,16 +2873,68 @@ static void process_font(QPDF& pdf, QPDFObjectHandle font, bool do_fix_tounicode
         }
         if (subtype_name == "/TrueType" && font.hasKey("/Encoding")) {
             QPDFObjectHandle flags_obj = descriptor.getKey("/Flags");
-            if (flags_obj.isInteger()) {
-                long long flags = flags_obj.getIntValue();
-                if ((flags & 4) != 0) {
-                    if (has_unicode_charmap) {
-                        flags = (flags & ~4LL) | 32LL;
-                        descriptor.replaceKey("/Flags", QPDFObjectHandle::newInteger(flags));
+            long long flags = flags_obj.isInteger() ? flags_obj.getIntValue() : 0LL;
+            if ((flags & 4) != 0) {
+                if (has_unicode_charmap) {
+                    flags = (flags & ~4LL) | 32LL;
+                    descriptor.replaceKey("/Flags", QPDFObjectHandle::newInteger(flags));
+                    state.changed = true;
+                } else {
+                    font.removeKey("/Encoding");
+                    state.changed = true;
+                }
+            }
+            if ((flags & 4) == 0 && font.hasKey("/Encoding")) {
+                QPDFObjectHandle enc_obj = font.getKey("/Encoding");
+                if (enc_obj.isDictionary()) {
+                    QPDFObjectHandle base_obj = enc_obj.getKey("/BaseEncoding");
+                    std::string base_name =
+                        base_obj.isName() ? base_obj.getName() : "/WinAnsiEncoding";
+                    if (!base_obj.isName() ||
+                        (base_name != "/WinAnsiEncoding" && base_name != "/MacRomanEncoding")) {
+                        base_name = "/WinAnsiEncoding";
+                        enc_obj.replaceKey("/BaseEncoding",
+                                           QPDFObjectHandle::newName("/WinAnsiEncoding"));
                         state.changed = true;
-                    } else {
-                        font.removeKey("/Encoding");
-                        state.changed = true;
+                    }
+                    if (enc_obj.hasKey("/Differences")) {
+                        QPDFObjectHandle diff_obj = enc_obj.getKey("/Differences");
+                        if (diff_obj.isArray()) {
+                            std::vector<std::pair<int, std::string>> clean_diffs;
+                            int cur_code = 0;
+                            for (auto& item : diff_obj.getArrayAsVector()) {
+                                if (item.isInteger()) {
+                                    cur_code = item.getIntValueAsInt();
+                                } else if (item.isName()) {
+                                    std::string gname = item.getName();
+                                    if (gname == "/.null") gname = "/.notdef";
+                                    const bool redundant_control =
+                                        cur_code < 32 && gname == "/.notdef";
+                                    if (!redundant_control && cur_code >= 0 && cur_code <= 255 &&
+                                        jpdfium_font_encoding::isAdobeGlyphListMember(
+                                            gname.substr(1))) {
+                                        clean_diffs.emplace_back(cur_code, gname);
+                                    }
+                                    if (cur_code < 256) ++cur_code;
+                                }
+                            }
+                            if (clean_diffs.empty()) {
+                                font.replaceKey("/Encoding", QPDFObjectHandle::newName(base_name));
+                                state.changed = true;
+                            } else {
+                                QPDFObjectHandle new_diffs = QPDFObjectHandle::newArray();
+                                int last_code = -2;
+                                for (auto const& [code, gname] : clean_diffs) {
+                                    if (code != last_code + 1) {
+                                        new_diffs.appendItem(QPDFObjectHandle::newInteger(code));
+                                    }
+                                    new_diffs.appendItem(QPDFObjectHandle::newName(gname));
+                                    last_code = code;
+                                }
+                                enc_obj.replaceKey("/Differences", new_diffs);
+                                state.changed = true;
+                            }
+                        }
                     }
                 }
             }
@@ -2890,17 +2945,17 @@ static void process_font(QPDF& pdf, QPDFObjectHandle font, bool do_fix_tounicode
         repair_font_tounicode(pdf, font, face.get(), cid, cid_to_gid, cid_identity, gid_to_cid,
                               gid_to_unicode, ambiguous_gids, simple_any_gid, simple_glyphs, state);
     }
+    const bool full = do_fix_tounicode && do_repair_widths;
     if (do_repair_widths && face->units_per_EM > 0) {
         if (!cid) {
             repair_simple_font_widths(target, face.get(), simple_encoding, simple_any_gid,
-                                      simple_glyphs, state);
+                                      simple_glyphs, state, full);
         } else {
             repair_cid_font_widths(pdf, font, target, face.get(), cid_to_gid, cid_identity,
                                    gid_to_cid, state);
         }
     }
 
-    const bool full = do_fix_tounicode && do_repair_widths;
     bool did_convert = false;
     if (full) {
         const int32_t converted_before = state.type1_converted;

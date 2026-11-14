@@ -76,17 +76,15 @@ class PdfFontVeraPdfTest {
         Path safedocsBase = Path.of("/private/var/folders/10/4hn925296yx_fqxp5g2z__v40000gn/T/safedocs/pdfs");
         assumeTrue(Files.isDirectory(safedocsBase), "SafeDocs base directory not found");
 
-        List<String> folders = List.of(
-                "0000", "0400", "0800", "1200", "1600", "2000",
-                "2400", "2800", "3200", "3600", "4000", "4400"
-        );
+        List<Path> candidateFolders;
+        try (Stream<Path> s = Files.list(safedocsBase)) {
+            candidateFolders = s.filter(Files::isDirectory).sorted().toList();
+        }
         List<Path> candidates = new ArrayList<>();
-        for (String folder : folders) {
-            Path dir = safedocsBase.resolve(folder);
-            if (!Files.isDirectory(dir)) continue;
+        for (Path dir : candidateFolders) {
             try (Stream<Path> s = Files.list(dir)) {
                 candidates.addAll(s.filter(p -> p.toString().endsWith(".pdf"))
-                        .limit(8)
+                        .limit(3)
                         .toList());
             }
         }
