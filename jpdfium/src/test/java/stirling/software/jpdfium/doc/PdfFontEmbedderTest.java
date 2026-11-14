@@ -423,6 +423,15 @@ class PdfFontEmbedderTest {
                 assertEquals(4, bytes.length, "CID 1 needs a two-byte glyph entry");
                 int gid = ((bytes[2] & 0xFF) << 8) | (bytes[3] & 0xFF);
                 assertEquals(36, gid, "CID 1 must select A in ArialMT");
+                COSBase file2 = descriptor.getDictionaryObject(COSName.FONT_FILE2);
+                assertTrue(file2 instanceof COSStream);
+                byte[] installed;
+                try (var in = ((COSStream) file2).createInputStream()) {
+                    installed = in.readAllBytes();
+                }
+                assertTrue(installed.length < source.data().length,
+                        "CID program must be subset, got " + installed.length + " of "
+                                + source.data().length);
             }
         } finally {
             try (var files = Files.list(dir)) {
@@ -480,12 +489,47 @@ class PdfFontEmbedderTest {
     }
 
     @Test
-    void cidSubstituteMissingAUsedWidthIsLeftUnresolved() throws Exception {
-        assertCidSubstituteUnresolved("<0001> <0041>", 1, 2);
+    void cidSubstituteMissingAUsedCidIsLeftUnresolved() throws Exception {
+        assertCidSubstituteUnresolvedForCode("<0001> <0041>", 2, 1, 2);
+    }
+
+    @Test
+    void cidSubstituteIgnoresWidthEntriesForUndrawnCids() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
+        FontProgram source = findEmbeddedFont(
+                Files.readAllBytes(Path.of(PdfFontEmbedderTest.class
+                        .getResource("/pdfs/general/basic-text.pdf").toURI())), "ArialMT");
+        assertNotNull(source, "fixture must contain ArialMT");
+        Path dir = Files.createTempDirectory("jpdfium-cid-unused-width");
+        try {
+            Files.write(dir.resolve(source.baseName() + ".ttf"), source.data());
+            byte[] input = identityCidPdfWithCode(
+                    source.baseName(), "<0001> <0041>", 1, 1, 2);
+            PdfFontEmbedder.Result result = PdfFontEmbedder.embedMissing(input, dir);
+            assertTrue(result.embedded().contains(source.baseName()),
+                    "an unused /W entry must not block a used CID: " + result);
+            assertTrue(result.unresolved().isEmpty(), "unresolved: " + result.unresolved());
+            try (PDDocument pdf = Loader.loadPDF(result.pdf())) {
+                assertTrue(identityCidDescendant(pdf)
+                                .getCOSDictionary(COSName.FONT_DESC)
+                                .containsKey(COSName.FONT_FILE2),
+                        "the substitute program must be installed");
+            }
+        } finally {
+            try (var files = Files.list(dir)) {
+                for (Path file : files.toList()) Files.deleteIfExists(file);
+            }
+            Files.deleteIfExists(dir);
+        }
     }
 
     private static void assertCidSubstituteUnresolved(
             String toUnicodeBody, int... widthCids) throws Exception {
+        assertCidSubstituteUnresolvedForCode(toUnicodeBody, 1, widthCids);
+    }
+
+    private static void assertCidSubstituteUnresolvedForCode(
+            String toUnicodeBody, int contentCid, int... widthCids) throws Exception {
         assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
         FontProgram source = findEmbeddedFont(
                 Files.readAllBytes(Path.of(PdfFontEmbedderTest.class
@@ -494,7 +538,8 @@ class PdfFontEmbedderTest {
         Path dir = Files.createTempDirectory("jpdfium-cid-unresolved");
         try {
             Files.write(dir.resolve(source.baseName() + ".ttf"), source.data());
-            byte[] input = identityCidPdf(source.baseName(), toUnicodeBody, widthCids);
+            byte[] input =
+                    identityCidPdfWithCode(source.baseName(), toUnicodeBody, contentCid, widthCids);
             PdfFontEmbedder.Result result = PdfFontEmbedder.embedMissing(input, dir);
             assertTrue(result.embedded().isEmpty(),
                     "an unusable mapping must not report the substitute as embedded");
@@ -568,6 +613,12 @@ class PdfFontEmbedderTest {
 
     private static byte[] identityCidPdf(String baseFont, String toUnicodeEntries, int... widthCids)
             throws Exception {
+        return identityCidPdfWithCode(baseFont, toUnicodeEntries, 1, widthCids);
+    }
+
+    private static byte[] identityCidPdfWithCode(
+            String baseFont, String toUnicodeEntries, int contentCid, int... widthCids)
+            throws Exception {
         try (PDDocument pdf = new PDDocument()) {
             PDPage page = new PDPage(PDRectangle.LETTER);
             pdf.addPage(page);
@@ -617,7 +668,7 @@ class PdfFontEmbedderTest {
             resources.setItem(COSName.FONT, fonts);
             page.setResources(new PDResources(resources));
             page.setContents(new PDStream(pdf, new ByteArrayInputStream(
-                    "BT /F1 12 Tf 72 700 Td <0001> Tj ET"
+                    ("BT /F1 12 Tf 72 700 Td <" + String.format("%04X", contentCid) + "> Tj ET")
                             .getBytes(StandardCharsets.US_ASCII))));
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             pdf.save(out);

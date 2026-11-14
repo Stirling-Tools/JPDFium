@@ -15,6 +15,7 @@ import java.lang.foreign.ValueLayout;
 import java.nio.ByteBuffer;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -343,27 +344,52 @@ public final class PdfFontAuditor {
             String json = QpdfLib.inspectFonts(pdf);
             if (json != null) {
                 List<FontResource> all = parseInventory(json);
-                if (!all.isEmpty()) {
-                    List<FontResource> resources = new ArrayList<>();
-                    for (FontResource resource : all) {
-                        if (resource.baseName().isEmpty() || resource.embedded()
-                                || "Type3".equals(resource.subtype())) continue;
-                        resources.add(resource);
-                    }
-                    return resources;
-                }
+                if (!all.isEmpty()) return nonEmbeddedResources(all);
             }
         }
         try (PdfDocument doc = PdfDocument.open(pdf)) {
-            List<FontResource> resources = new ArrayList<>();
-            for (FontInfo font : audit(doc).nonEmbeddedFonts()) {
-                resources.add(new FontResource(
-                        font.baseName(), "", "", false, false, false, false, "", Set.of(), ""));
-            }
-            return resources;
+            return auditFallback(doc);
         } catch (Exception e) {
             throw e instanceof JPDFiumException jpe ? jpe : new JPDFiumException(e);
         }
+    }
+
+    /**
+     * File-backed form of {@link #unembeddedResources(byte[])}. Uses the native file inventory
+     * when available so the input is never materialized on the Java heap.
+     */
+    static List<FontResource> unembeddedResources(Path pdf) {
+        if (QpdfLib.isFileFontInventorySupported()) {
+            String json = QpdfLib.inspectFonts(pdf);
+            if (json != null) {
+                List<FontResource> all = parseInventory(json);
+                if (!all.isEmpty()) return nonEmbeddedResources(all);
+            }
+        }
+        try (PdfDocument doc = PdfDocument.open(pdf)) {
+            return auditFallback(doc);
+        } catch (Exception e) {
+            throw e instanceof JPDFiumException jpe ? jpe : new JPDFiumException(e);
+        }
+    }
+
+    private static List<FontResource> nonEmbeddedResources(List<FontResource> all) {
+        List<FontResource> resources = new ArrayList<>();
+        for (FontResource resource : all) {
+            if (resource.baseName().isEmpty() || resource.embedded()
+                    || "Type3".equals(resource.subtype())) continue;
+            resources.add(resource);
+        }
+        return resources;
+    }
+
+    private static List<FontResource> auditFallback(PdfDocument doc) {
+        List<FontResource> resources = new ArrayList<>();
+        for (FontInfo font : audit(doc).nonEmbeddedFonts()) {
+            resources.add(new FontResource(
+                    font.baseName(), "", "", false, false, false, false, "", Set.of(), ""));
+        }
+        return resources;
     }
 
     static List<FontResource> inventoryBytes(byte[] pdf) {
