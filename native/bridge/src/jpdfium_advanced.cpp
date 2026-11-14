@@ -2005,7 +2005,8 @@ static std::string fn_subset_sfnt(FT_Library lib, const uint8_t* data, size_t si
               HB_TAG('E', 'B', 'D', 'T'), HB_TAG('E', 'B', 'L', 'C'), HB_TAG('E', 'B', 'S', 'C'),
               HB_TAG('C', 'B', 'D', 'T'), HB_TAG('C', 'B', 'L', 'C'), HB_TAG('s', 'b', 'i', 'x'),
               HB_TAG('S', 'V', 'G', ' '), HB_TAG('h', 'd', 'm', 'x'), HB_TAG('V', 'D', 'M', 'X'),
-              HB_TAG('L', 'T', 'S', 'H'), HB_TAG('P', 'C', 'L', 'T'), HB_TAG('D', 'S', 'I', 'G')}) {
+              HB_TAG('L', 'T', 'S', 'H'), HB_TAG('P', 'C', 'L', 'T'), HB_TAG('D', 'S', 'I', 'G'),
+              HB_TAG('k', 'e', 'r', 'n'), HB_TAG('m', 'e', 't', 'a'), HB_TAG('S', 'T', 'A', 'T')}) {
             hb_set_add(drop_tables, tag);
         }
         hb_subset_input_set_flags(input, HB_SUBSET_FLAGS_RETAIN_GIDS | HB_SUBSET_FLAGS_GLYPH_NAMES |
@@ -2894,7 +2895,7 @@ static void process_font(QPDF& pdf, QPDFObjectHandle font, bool do_fix_tounicode
                                               simple_glyphs, usage, state, &retained_glyphs);
     }
     if (cid && full) {
-        if (did_resubset) {
+        if (did_resubset && descriptor.hasKey("/CIDSet")) {
             // The FreeType face still describes the original program. Derive
             // CIDSet from the glyphs the subset actually retained, not from
             // the pre-subset program or from drawn CIDs alone.
@@ -2917,7 +2918,7 @@ static void process_font(QPDF& pdf, QPDFObjectHandle font, bool do_fix_tounicode
                 descriptor.replaceKey("/CIDSet", QPDFObjectHandle::newStream(&pdf, bits));
                 state.changed = true;
             }
-        } else {
+        } else if (descriptor.hasKey("/CIDSet")) {
             repair_cidset_stream(pdf, descriptor, face.get(), cid_to_gid, cid_identity, gid_to_cid,
                                  state);
         }
@@ -3328,7 +3329,7 @@ static std::vector<uint8_t> qpdf_write(QPDF& pdf) {
     // PDF/A validators expect the endstream keyword on its own line. Write it
     // explicitly instead of relying on the qpdf default.
     writer.setNewlineBeforeEndstream(true);
-    jpdfium_qpdf_internal::WriterLock lock{-1};
+    jpdfium_qpdf_internal::WriterLock lock{9};
     writer.write();
     std::shared_ptr<Buffer> buf = writer.getBufferSharedPointer();
     std::vector<uint8_t> result(buf->getSize());
