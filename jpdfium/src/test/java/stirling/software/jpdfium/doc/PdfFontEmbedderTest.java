@@ -1501,6 +1501,73 @@ class PdfFontEmbedderTest {
     }
 
     @Test
+    void signedDocumentIsEmbeddedWhenStripSignaturesTrue() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
+        Path source = Path.of(PdfFontEmbedderTest.class.getResource("/pdfs/general/basic-text.pdf").toURI());
+        byte[] input = Files.readAllBytes(source);
+        FontProgram font = findEmbeddedFont(input);
+        assertNotNull(font);
+
+        byte[] signedPdf;
+        try (PDDocument pdf = Loader.loadPDF(input)) {
+            var sigDict = new COSDictionary();
+            sigDict.setItem(COSName.TYPE, COSName.getPDFName("Sig"));
+            var byteRange = new COSArray();
+            byteRange.add(COSInteger.get(0));
+            byteRange.add(COSInteger.get(100));
+            byteRange.add(COSInteger.get(200));
+            byteRange.add(COSInteger.get(300));
+            sigDict.setItem(COSName.getPDFName("ByteRange"), byteRange);
+            pdf.getDocumentCatalog().getCOSObject().setItem(COSName.getPDFName("MockSig"), sigDict);
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            pdf.save(baos);
+            signedPdf = baos.toByteArray();
+        }
+
+        assertThrows(JPDFiumException.class,
+                () -> PdfFontEmbedder.embed(signedPdf, Map.of(font.baseName(), font.data()), false));
+
+        byte[] out = PdfFontEmbedder.embed(signedPdf, Map.of(font.baseName(), font.data()), true);
+        assertNotNull(out);
+        assertFalse(new String(out, StandardCharsets.ISO_8859_1).contains("/ByteRange"));
+
+        try (PdfDocument doc = PdfDocument.open(out)) {
+            assertEquals(1, doc.pageCount());
+            try (PdfPage page = doc.page(0)) {
+                assertNotNull(page.renderImage());
+            }
+        }
+
+        List<String> safeDocPaths = List.of(
+                "pdfs/1000/1000005.pdf",
+                "pdfs/2200/2200006.pdf",
+                "pdfs/2800/2800000.pdf",
+                "pdfs/5200/5200000.pdf",
+                "pdfs/5800/5800009.pdf",
+                "pdfs/6600/6600009.pdf",
+                "pdfs/7800/7800004.pdf",
+                "pdfs/0000/0000020.pdf");
+        Path safeBase = Path.of("/private/var/folders/10/4hn925296yx_fqxp5g2z__v40000gn/T/safedocs");
+        for (String rel : safeDocPaths) {
+            Path safeDoc = safeBase.resolve(rel);
+            if (Files.isRegularFile(safeDoc)) {
+                byte[] safeBytes = Files.readAllBytes(safeDoc);
+                assertThrows(JPDFiumException.class, () -> PdfFontEmbedder.embedMissing(safeBytes, false));
+                var res = PdfFontEmbedder.embedMissing(safeBytes, true);
+                assertNotNull(res.pdf());
+                assertFalse(res.embedded().isEmpty());
+                assertFalse(new String(res.pdf(), StandardCharsets.ISO_8859_1).contains("/ByteRange"));
+                try (PdfDocument doc = PdfDocument.open(res.pdf())) {
+                    assertTrue(doc.pageCount() > 0);
+                    try (PdfPage page = doc.page(0)) {
+                        assertNotNull(page.renderImage());
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
     void fontDataIsAppliedOnInMemoryOverloads() throws Exception {
         assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
         Path source = Path.of(PdfFontEmbedderTest.class.getResource("/pdfs/general/basic-text.pdf").toURI());
