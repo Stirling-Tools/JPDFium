@@ -78,7 +78,21 @@ public final class PdfMerger {
         if (inputs == null || inputs.isEmpty()) {
             return null;
         }
-        return QpdfLib.merge(inputs);
+        byte[] result = QpdfLib.merge(inputs);
+        if (result != null) {
+            return result;
+        }
+        List<byte[]> repaired = new ArrayList<>(inputs.size());
+        for (byte[] in : inputs) {
+            if (in == null) continue;
+            try {
+                byte[] rep = PdfRepair.builder().input(in).build().execute().repairedPdf();
+                repaired.add(rep != null && rep.length > 0 ? rep : in);
+            } catch (RuntimeException e) {
+                repaired.add(in);
+            }
+        }
+        return repaired.isEmpty() ? null : QpdfLib.merge(repaired);
     }
 
     /**
