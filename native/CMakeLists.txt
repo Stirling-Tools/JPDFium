@@ -208,6 +208,7 @@ if(JPDFIUM_USE_PDFIUM)
         bridge/src/jpdfium_pdfx.cpp
         bridge/src/jpdfium_repair.cpp
         bridge/src/jpdfium_qpdf.cpp
+        bridge/src/jpdfium_qpdf_cmap.cpp
         bridge/src/jpdfium_qpdf_sanitize.cpp
         bridge/src/jpdfium_sanitize.cpp
         bridge/src/jpdfium_brotli.cpp

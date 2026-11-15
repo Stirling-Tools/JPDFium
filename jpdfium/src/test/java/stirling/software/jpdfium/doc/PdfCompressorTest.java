@@ -5,9 +5,11 @@ import org.apache.pdfbox.cos.COSArray;
 import org.apache.pdfbox.cos.COSDictionary;
 import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.cos.COSObject;
+import org.apache.pdfbox.cos.COSStream;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
+import org.apache.pdfbox.pdmodel.PDResources;
 import org.apache.pdfbox.pdmodel.font.PDType0Font;
 import org.apache.pdfbox.pdmodel.font.PDTrueTypeFont;
 import org.apache.pdfbox.pdmodel.font.encoding.WinAnsiEncoding;
@@ -18,7 +20,9 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.awt.image.BufferedImage;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
@@ -105,6 +109,85 @@ class PdfCompressorTest {
             }
         }
         return diff;
+    }
+
+    private static int nonWhitePixels(BufferedImage a) {
+        int count = 0;
+        for (int y = 0; y < a.getHeight(); y++) {
+            for (int x = 0; x < a.getWidth(); x++) {
+                if ((a.getRGB(x, y) & 0x00FFFFFF) != 0x00FFFFFF) count++;
+            }
+        }
+        return count;
+    }
+
+    /**
+     * Type0 (Identity-H, fully embedded LiberationSans) page whose /Contents is
+     * an ARRAY of two streams with the seam inside a literal string:
+     * stream 1 ends with "(\000" and stream 2 opens with "\000e) Tj ET".
+     * PDFium's renderer joins a /Contents array by inserting one space after
+     * each stream (CPDF_ContentParser), so the rendered string is bytes
+     * {0x00, 0x20, 0x00, 0x65} and, with CIDToGIDMap /Identity, the drawn
+     * GIDs are 32 ('=') and 101. A CID scanner that joins the array with '\n'
+     * instead predicts {0x00, 0x0A, 0x00, 0x65} - GID 10 (''') - and would
+     * build a subset that drops the drawn glyph 32.
+     */
+    private static Path contentSeamType0Pdf(Path temp) throws Exception {
+        Path src = temp.resolve("type0-content-seam.pdf");
+        try (InputStream font = PdfCompressorTest.class.getResourceAsStream(
+                        "/org/apache/pdfbox/resources/ttf/LiberationSans-Regular.ttf");
+                PDDocument pdf = new PDDocument()) {
+            assertNotNull(font, "PDFBox no longer bundles LiberationSans");
+            PDPage page = new PDPage();
+            pdf.addPage(page);
+            PDType0Font typeface = PDType0Font.load(pdf, font, false);
+            if (typeface.getCOSObject().getDictionaryObject(COSName.DESCENDANT_FONTS)
+                            instanceof COSArray kids
+                    && kids.getObject(0) instanceof COSDictionary kid) {
+                kid.setItem(COSName.getPDFName("CIDToGIDMap"), COSName.IDENTITY);
+            }
+            PDResources resources = new PDResources();
+            resources.put(COSName.getPDFName("F1"), typeface);
+            page.setResources(resources);
+            COSStream first = pdf.getDocument().createCOSStream();
+            try (OutputStream out = first.createOutputStream()) {
+                out.write("BT /F1 24 Tf 72 700 Td (\\000"
+                        .getBytes(StandardCharsets.US_ASCII));
+            }
+            COSStream second = pdf.getDocument().createCOSStream();
+            try (OutputStream out = second.createOutputStream()) {
+                out.write("\\000e) Tj ET".getBytes(StandardCharsets.US_ASCII));
+            }
+            COSArray contents = new COSArray();
+            contents.add(first);
+            contents.add(second);
+            page.getCOSObject().setItem(COSName.CONTENTS, contents);
+            pdf.save(src.toFile());
+        }
+        return src;
+    }
+
+    @Test
+    void compressSubsetType0FontAcrossContentArraySeam(@TempDir Path temp) throws Exception {
+        assumeTrue(QpdfLib.isSubsetFontsSupported(), "native font subsetting unavailable");
+        Path src = contentSeamType0Pdf(temp);
+        BufferedImage before = render(Files.readAllBytes(src), 0);
+        assertTrue(nonWhitePixels(before) > 10,
+                "fixture must draw visible text through the seam");
+
+        try (PdfDocument doc = PdfDocument.open(src)) {
+            PdfCompressor.CompressResultWithBytes out = PdfCompressor.compress(
+                    doc, CompressOptions.builder().preset(CompressPreset.WEB).subsetFonts(true)
+                            .build());
+
+            assertTrue(out.result().actions().contains("Subsetted 1 embedded font(s)"),
+                    "expected one subsetted font, actions=" + out.result().actions());
+            int diff = differingPixels(before, render(out.bytes(), 0));
+            assertEquals(0, diff,
+                    "rendering must survive subsetting of a /Contents array seam: the CID "
+                            + "scanner must join streams with the same byte PDFium's renderer "
+                            + "inserts (a space, not a newline)");
+        }
     }
 
     @Test
