@@ -621,10 +621,57 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
 
 // Flatten
 
+namespace {
+
+// FPDFPage_Flatten skips only hidden and invisible annotations, so no-view
+// markup would be baked into content a viewer shows. Hide it for the bake and
+// put the original flags back afterwards; the two high bits are scratch only.
+constexpr int kScratchAddedHidden = 1 << 30;
+constexpr int kScratchWasHidden = 1 << 29;
+
+void hideNoViewAnnotations(FPDF_PAGE page) {
+    const int count = FPDFPage_GetAnnotCount(page);
+    for (int i = 0; i < count; ++i) {
+        FPDF_ANNOTATION annot = FPDFPage_GetAnnot(page, i);
+        if (!annot) continue;
+        const int flags = FPDFAnnot_GetFlags(annot);
+        if (flags >= 0 && (flags & FPDF_ANNOT_FLAG_NOVIEW)) {
+            const int scratch =
+                (flags & FPDF_ANNOT_FLAG_HIDDEN) ? kScratchWasHidden : kScratchAddedHidden;
+            FPDFAnnot_SetFlags(annot, flags | scratch | FPDF_ANNOT_FLAG_HIDDEN);
+        }
+        FPDFPage_CloseAnnot(annot);
+    }
+}
+
+void restoreNoViewFlags(FPDF_PAGE page) {
+    const int count = FPDFPage_GetAnnotCount(page);
+    for (int i = 0; i < count; ++i) {
+        FPDF_ANNOTATION annot = FPDFPage_GetAnnot(page, i);
+        if (!annot) continue;
+        const int flags = FPDFAnnot_GetFlags(annot);
+        if (flags >= 0 && (flags & (kScratchAddedHidden | kScratchWasHidden))) {
+            int restored = flags & ~(kScratchAddedHidden | kScratchWasHidden);
+            if (flags & kScratchAddedHidden) restored &= ~FPDF_ANNOT_FLAG_HIDDEN;
+            FPDFAnnot_SetFlags(annot, restored);
+        }
+        FPDFPage_CloseAnnot(annot);
+    }
+}
+
+int flattenForDisplay(FPDF_PAGE page) {
+    hideNoViewAnnotations(page);
+    const int rc = FPDFPage_Flatten(page, FLAT_NORMALDISPLAY);
+    restoreNoViewFlags(page);
+    return rc;
+}
+
+}  // namespace
+
 int32_t jpdfium_page_flatten(int64_t page) noexcept {
     PageWrapper* pw = decodePage(page);
     if (!pw || !pw->page) return JPDFIUM_ERR_INVALID;
-    int rc = FPDFPage_Flatten(pw->page, FLAT_NORMALDISPLAY);
+    int rc = flattenForDisplay(pw->page);
     return (rc == FLATTEN_SUCCESS || rc == FLATTEN_NOTHINGTODO) ? JPDFIUM_OK : JPDFIUM_ERR_NATIVE;
 }
 
@@ -637,7 +684,7 @@ int32_t jpdfium_doc_flatten_annotations(int64_t docHandle) noexcept {
         for (int i = 0; i < count; ++i) {
             UniquePage page(FPDF_LoadPage(dw->core->doc, i));
             if (!page) return mutated ? JPDFIUM_ERR_CONTENT_MUTATED : JPDFIUM_ERR_NOT_FOUND;
-            const int rc = FPDFPage_Flatten(page.get(), FLAT_NORMALDISPLAY);
+            const int rc = flattenForDisplay(page.get());
             if (rc != FLATTEN_SUCCESS && rc != FLATTEN_NOTHINGTODO) {
                 return mutated ? JPDFIUM_ERR_CONTENT_MUTATED : JPDFIUM_ERR_NATIVE;
             }

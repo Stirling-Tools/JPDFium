@@ -1176,7 +1176,12 @@ public final class PdfPage implements AutoCloseable {
         return PdfThumbnails.getAsImage(rawHandleForRead());
     }
 
-    /** Flatten all annotations (including applied redactions) into page content. */
+    /**
+     * Flatten all annotations (including applied redactions) into page content.
+     *
+     * <p>No-view, hidden and invisible annotations stay as annotations: a viewer
+     * does not draw them, so baking them into the content would expose them.
+     */
     public void flatten() {
         ensureOpen();
         JpdfiumLib.pageFlatten(handle);

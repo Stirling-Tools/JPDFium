@@ -31,6 +31,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.function.Consumer;
+import java.util.function.IntPredicate;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
@@ -48,6 +49,8 @@ class FlattenApiTest {
     private static final Path TWO_PAGE_PDF =
             Path.of("src/test/resources/pdfs/general/pdfjs_ZapfDingbats.pdf");
     private static final int FULL_DPI = 100;
+    /** ISO 32000-1 table 165, no-view flag. */
+    private static final int NO_VIEW = 1 << 5;
 
     @Test
     void annotationsBatchMatchesPerPage(@TempDir Path dir) throws IOException {
@@ -591,6 +594,64 @@ class FlattenApiTest {
                         "the baked annotation must keep its visible appearance");
             }
         }
+    }
+
+    @Test
+    void fullBatchBakesScreenMarkupButNotNoView(@TempDir Path dir) throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "full flattening needs the real PDFium natives");
+        Path base = writePdfBoxFixture(
+                dir.resolve("display-annotations-base.pdf"),
+                pdf -> pdf.addPage(new PDPage(new PDRectangle(300, 300))));
+        Path fixture = dir.resolve("display-annotations.pdf");
+        try (PdfDocument doc = PdfDocument.open(base)) {
+            try (PdfPage page = doc.page(0)) {
+                PdfAnnotationBuilder.on(page.rawHandle())
+                        .type(AnnotationType.HIGHLIGHT)
+                        .rect(20, 200, 100, 40)
+                        .color(255, 200, 0)
+                        .generateAppearance()
+                        .build();
+                int noView = PdfAnnotationBuilder.on(page.rawHandle())
+                        .type(AnnotationType.HIGHLIGHT)
+                        .rect(20, 100, 100, 40)
+                        .color(255, 0, 0)
+                        .generateAppearance()
+                        .build();
+                PdfAnnotations.setFlags(page.rawHandle(), noView, NO_VIEW);
+            }
+            doc.save(fixture);
+        }
+        try (PdfDocument doc = PdfDocument.open(fixture)) {
+            try (PdfPage page = doc.page(0)) {
+                assertEquals(2, PdfAnnotations.count(page.rawHandleForRead()),
+                        "the fixture must carry both highlights");
+            }
+            doc.flatten(FlattenMode.FULL, 72);
+            byte[] out = doc.saveBytes();
+            try (PdfDocument flat = PdfDocument.open(out); PdfPage page = flat.page(0)) {
+                RenderResult rendered = page.renderAt(72);
+                assertTrue(
+                        countPixels(rendered, rgb ->
+                                (rgb >> 16) > 200 && ((rgb >> 8) & 255) > 150 && (rgb & 255) < 120)
+                                > 0,
+                        "screen-only markup is visible to a viewer, so FULL must bake it");
+                assertEquals(
+                        0,
+                        countPixels(rendered, rgb ->
+                                (rgb >> 16) > 200 && ((rgb >> 8) & 255) < 90 && (rgb & 255) < 90),
+                        "no-view markup is hidden on screen and must not be baked");
+            }
+        }
+    }
+
+    private static int countPixels(RenderResult page, IntPredicate match) {
+        byte[] px = page.rgba();
+        int matched = 0;
+        for (int i = 0; i + 3 < px.length; i += 4) {
+            int rgb = ((px[i] & 0xFF) << 16) | ((px[i + 1] & 0xFF) << 8) | (px[i + 2] & 0xFF);
+            if (match.test(rgb)) matched++;
+        }
+        return matched;
     }
 
     /** Counts pixels that differ from the white page background. */

@@ -1040,7 +1040,9 @@ public final class PdfDocument implements AutoCloseable {
      *       the content stream. Text remains selectable. Runs {@code
      *       jpdfium_doc_flatten_annotations}.</li>
      *   <li>{@link FlattenMode#FULL}: rasterizes each page at the given DPI,
-     *       replacing all content with an image. Nothing is selectable. Runs {@code
+     *       replacing all content with an image. Nothing is selectable. Follows the
+     *       on-screen view: screen-only markup is baked, while no-view, hidden and
+     *       invisible annotations are left out. Runs {@code
      *       jpdfium_doc_flatten_to_images}.</li>
      * </ul>
      *
