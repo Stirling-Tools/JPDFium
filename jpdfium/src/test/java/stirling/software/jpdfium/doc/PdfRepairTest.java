@@ -317,7 +317,10 @@ class PdfRepairTest {
             "/pdfs/repair/corrupt_xref_offsets.pdf",
             "/pdfs/repair/missing_startxref.pdf",
             "/pdfs/repair/corrupt_stream_length.pdf",
-            "/pdfs/repair/multiple_eof.pdf"
+            "/pdfs/repair/multiple_eof.pdf",
+            "/pdfs/repair/unclosed_stream_obj.pdf",
+            "/pdfs/repair/stale_linearized.pdf",
+            "/pdfs/repair/noncontiguous_xref_index.pdf"
         };
         for (String fixture : fixtures) {
             byte[] input;
