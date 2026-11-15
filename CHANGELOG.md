@@ -141,6 +141,12 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Fixed
 
+- The bundled `JPDFiumCompactCmyk.icc` fallback is now generated only from the
+  CC0 `CGATS001Compat-v2-micro.icc` measurements. Its B2A table inverts the same
+  CMYK -> Lab data with a strong black-generation preference and a 245% total
+  area coverage cap, neutrals print with single-channel K, and the
+  Ghostscript-derived calibration table is gone. The profile stays under 24 KB.
+
 - PDF/X-1a and PDF/X-3 no longer accept images with soft masks, which the page
   transparency probe missed, and drop transparency groups from pages that have
   no transparent content.
