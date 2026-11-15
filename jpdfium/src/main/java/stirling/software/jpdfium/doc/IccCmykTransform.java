@@ -14,9 +14,10 @@ import stirling.software.jpdfium.exception.JPDFiumException;
  * <p>The profile is sampled once into a 33x33x33 RGB lookup table. Both vector
  * colours and image pixels go through that same table, so an sRGB fill and an
  * sRGB image pixel with identical components produce identical ink values.
- * Exact neutral RGB values are taken from a separate 256-entry K ramp, which
- * keeps greys single-channel even when interpolation between the RGB table
- * corners would otherwise introduce chromatic ink.
+ * Exact neutral RGB values are taken from a separate 256-entry neutral ramp,
+ * which avoids off-diagonal LUT interpolation between RGB cube corners while
+ * preserving the profile's own neutral separation (single-channel K for
+ * K-only profiles and rich black for four-colour profiles).
  *
  * <p>Instances are immutable after construction and can be shared between
  * threads. The one-entry source-profile cache is process-wide; it is bounded
@@ -39,7 +40,7 @@ final class IccCmykTransform {
     private final ICC_ColorSpace cmyk;
     private final byte[] targetIcc;
     private final byte[] lut = new byte[LUT_BYTES];
-    private final int[] neutralK = new int[256];
+    private final byte[] neutral = new byte[256 * 4];
     private final float[] rgb = new float[3];
 
     /** Build from a 4-component CMYK ICC profile. */
@@ -63,13 +64,16 @@ final class IccCmykTransform {
     }
 
     private void buildNeutralRamp() {
-        for (int i = 0; i < neutralK.length; i++) {
+        for (int i = 0; i < 256; i++) {
             float value = i / 255f;
             rgb[0] = value;
             rgb[1] = value;
             rgb[2] = value;
             float[] device = cmyk.fromCIEXYZ(srgb.toCIEXYZ(rgb));
-            neutralK[i] = clamp255(device[3]);
+            int base = i * 4;
+            for (int c = 0; c < 4; c++) {
+                neutral[base + c] = (byte) clamp255(device[c]);
+            }
         }
     }
 
@@ -96,10 +100,9 @@ final class IccCmykTransform {
         int gi = clampByte(g);
         int bi = clampByte(b);
         if (ri == gi && gi == bi) {
-            out[0] = 0;
-            out[1] = 0;
-            out[2] = 0;
-            out[3] = neutralK[ri];
+            for (int c = 0; c < 4; c++) {
+                out[c] = neutral[ri * 4 + c] & 0xFF;
+            }
             return;
         }
         for (int c = 0; c < 4; c++) {
