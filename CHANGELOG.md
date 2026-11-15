@@ -137,13 +137,6 @@ publishing workflows, not library releases, so they are not listed here.
 - The qpdf writer only raises the minimum PDF version to 1.4 when a JBIG2
   stream was actually written, so requesting JBIG2 on a document with no
   qualifying image no longer bumps the version.
-- `PdfXConverter` converts colours through a QPDF content-stream rewrite instead
-  of PDFium page regeneration. Conversion time is now linear in page count (a
-  6,269-page spreadsheet went from 582 s to 2 s), text runs and marked content
-  are kept, and `applyMetadata(PdfDocument, ...)` no longer modifies its input.
-  Form XObjects, patterns, Type 3 glyphs and annotation appearances are always
-  converted, so `convertForms` and `convertLosslessImages` no longer affect
-  PDF/X output.
 
 - `PdfFontAuditor.hasNonEmbeddedFonts` now includes fonts that only exist in unused
   resource dictionaries or AcroForm `/DR`, matching `auditAll`. Documents that
@@ -180,6 +173,23 @@ publishing workflows, not library releases, so they are not listed here.
   CMYK -> Lab data with a strong black-generation preference and a 245% total
   area coverage cap, neutrals print with single-channel K, and the
   Ghostscript-derived calibration table is gone. The profile stays under 24 KB.
+
+- Font normalization rebuilds `/CIDSet` from every CID present in the embedded
+  program, including CIDs mapped to GID 0, and corrects an existing `/W` array
+  when it disagrees with the program's advances. `issue20065.pdf` now passes
+  veraPDF 6.2.11.4.2-2 and 6.2.11.5-1 without changing extracted text.
+
+- Compression font subsetting is opt-in (`subsetFonts(false)` by default) and
+  verifies extracted text and rendering before adopting the smaller bytes.
+  `PdfFontEmbedder.embedMissingStrict` rejects a result that still has an
+  unembedded font instead of returning a document that silently fails
+  PDF/A font-embedding checks.
+
+- The Adobe Glyph List table covers all 4,281 names, including the 81
+  multi-scalar Arabic/Hebrew sequences, and `uXXXX` escapes accept lowercase
+  only when they contain a decimal digit, so ordinary names such as `uface`
+  no longer resolve to U+FACE while `u00e9` still works.
+
 
 - PDF/X-1a and PDF/X-3 no longer accept images with soft masks, which the page
   transparency probe missed, and drop transparency groups from pages that have
