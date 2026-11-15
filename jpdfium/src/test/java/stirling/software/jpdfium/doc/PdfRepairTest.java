@@ -15,6 +15,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Locale;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.stream.Collectors;
@@ -48,7 +49,7 @@ class PdfRepairTest {
                 startxref
                 190
                 %%EOF""")
-                .getBytes();
+                .getBytes(StandardCharsets.US_ASCII);
     }
 
     @Test
@@ -345,6 +346,64 @@ class PdfRepairTest {
                 assertTrue(text.contains("Repair Test"),
                         "Expected repaired text 'Repair Test' in " + fixture + ", got: " + text);
             }
+        }
+    }
+
+    @Test
+    void repairsBrokenPagesTreePreservingInheritedAttributes() throws Exception {
+        Assumptions.assumeTrue(NativeRuntime.isFull(), "Requires full native repair bridge");
+        String obj1 = "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n";
+        String obj2 = "2 0 obj\n<< /Type /Pages /Kids [] /Count 0 /MediaBox [0 0 500 700] >>\nendobj\n";
+        String obj3 = "3 0 obj\n<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 4 0 R >> >> >>\nendobj\n";
+        String obj4 = "4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n";
+        String stream = "BT /F1 14 Tf 40 600 Td (BrokenPagesRecovered) Tj ET\n";
+        String obj5 = "5 0 obj\n<< /Length " + stream.length() + " >>\nstream\n" + stream + "endstream\nendobj\n";
+
+        StringBuilder sb = new StringBuilder(1024);
+        sb.append("%PDF-1.4\n");
+        String[] objs = {obj1, obj2, obj3, obj4, obj5};
+        int[] offsets = new int[objs.length];
+        for (int i = 0; i < objs.length; i++) {
+            offsets[i] = sb.length();
+            sb.append(objs[i]);
+        }
+        int xrefStart = sb.length();
+        sb.append("xref\n0 6\n0000000000 65535 f \n");
+        for (int off : offsets) {
+            sb.append(String.format(Locale.ROOT, "%010d 00000 n ", off)).append('\n');
+        }
+        sb.append("trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n")
+                .append(xrefStart).append("\n%%EOF\n");
+
+        byte[] damaged = sb.toString().getBytes(StandardCharsets.US_ASCII);
+        RepairResult result = PdfRepair.builder().input(damaged).all().build().execute();
+        assertTrue(result.isUsable(), "Expected broken /Pages tree to be repaired: " + result.status());
+        try (PDDocument reopened = Loader.loadPDF(result.repairedPdf())) {
+            assertEquals(1, reopened.getNumberOfPages());
+            assertEquals(500f, reopened.getPage(0).getMediaBox().getWidth(), 0.5f);
+            assertTrue(new PDFTextStripper().getText(reopened).contains("BrokenPagesRecovered"));
+        }
+    }
+
+    @Test
+    void repairsTruncatedIncrementalUpdateWithLargeTail() throws Exception {
+        Assumptions.assumeTrue(NativeRuntime.isFull(), "Requires full native repair bridge");
+        byte[] base = RepairCorpus.validMultiPage();
+        StringBuilder tail = new StringBuilder(6144);
+        for (int id = 200; id < 340; id++) {
+            tail.append(id).append(" 0 obj\n<< /Type /ExtGState /CA 1.0 >>\nendobj\n");
+        }
+        tail.append("340 0 obj\n<< /Length 120 >>\nstream\nBT (PARTIAL_UPDATE");
+        byte[] tailBytes = tail.toString().getBytes(StandardCharsets.US_ASCII);
+        byte[] damaged = new byte[base.length + tailBytes.length];
+        System.arraycopy(base, 0, damaged, 0, base.length);
+        System.arraycopy(tailBytes, 0, damaged, base.length, tailBytes.length);
+
+        RepairResult result = PdfRepair.builder().input(damaged).all().build().execute();
+        assertTrue(result.isUsable(), "Expected truncated incremental update to repair: " + result.status());
+        try (PDDocument reopened = Loader.loadPDF(result.repairedPdf())) {
+            assertTrue(reopened.getNumberOfPages() >= 2,
+                    "Expected base document pages preserved after truncated incremental rebuild");
         }
     }
 
