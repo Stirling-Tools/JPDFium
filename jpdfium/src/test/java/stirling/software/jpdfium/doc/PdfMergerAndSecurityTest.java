@@ -1,5 +1,14 @@
 package stirling.software.jpdfium.doc;
 
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.cos.COSDictionary;
+import org.apache.pdfbox.cos.COSName;
+import org.apache.pdfbox.cos.COSObject;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.PDPageContentStream;
+import org.apache.pdfbox.pdmodel.font.PDType0Font;
+import org.apache.pdfbox.text.PDFTextStripper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import stirling.software.jpdfium.PdfDocument;
@@ -7,12 +16,17 @@ import stirling.software.jpdfium.SyntheticPdfFactory;
 import stirling.software.jpdfium.exception.PdfPasswordException;
 import stirling.software.jpdfium.panama.NativeRuntime;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -139,5 +153,119 @@ class PdfMergerAndSecurityTest {
         assertThrows(OutOfMemoryError.class,
                 () -> NativeRuntime.rethrowFatal(new OutOfMemoryError("synthetic oom")));
         NativeRuntime.rethrowFatal(new RuntimeException("non-fatal runtime exception"));
+    }
+
+    @Test
+    void mergeDisambiguatesCollidingSubsetFontTags() throws IOException {
+        if (!PdfMerger.isSupported() || !NativeRuntime.isFull()) {
+            return;
+        }
+        byte[] pdf1 = subsetFontPdfWithFixedTag("AAAAAA+LiberationSans", "Alpha");
+        byte[] pdf2 = subsetFontPdfWithFixedTag("AAAAAA+LiberationSans", "Zeta");
+
+        byte[] merged = PdfMerger.mergeBytes(List.of(pdf1, pdf2));
+        assertNotNull(merged);
+        try (PDDocument loaded = Loader.loadPDF(merged)) {
+            assertEquals(2, loaded.getNumberOfPages());
+            String text = new PDFTextStripper().getText(loaded);
+            assertTrue(text.contains("Alpha"), "page 1 text missing: " + text);
+            assertTrue(text.contains("Zeta"), "page 2 text missing: " + text);
+
+            Set<String> baseFonts = new HashSet<>();
+            for (COSObject obj : loaded.getDocument().getObjectsByType(COSName.FONT)) {
+                if (obj.getObject() instanceof COSDictionary font
+                        && COSName.TYPE0.equals(font.getCOSName(COSName.SUBTYPE))) {
+                    COSName bf = font.getCOSName(COSName.BASE_FONT);
+                    if (bf != null) {
+                        baseFonts.add(bf.getName());
+                    }
+                }
+            }
+            assertEquals(2, baseFonts.size(),
+                    "colliding subset tags must be disambiguated: " + baseFonts);
+        }
+    }
+
+    @Test
+    void removeUnreferencedResourcesDropsUnusedPageFont() throws IOException {
+        if (!NativeRuntime.isFull()) {
+            return;
+        }
+        byte[] src;
+        try (InputStream fontIn = PdfMergerAndSecurityTest.class.getResourceAsStream(
+                        "/org/apache/pdfbox/resources/ttf/LiberationSans-Regular.ttf");
+                PDDocument doc = new PDDocument()) {
+            assertNotNull(fontIn);
+            PDPage page = new PDPage();
+            doc.addPage(page);
+            PDType0Font typeface = PDType0Font.load(doc, fontIn, true);
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.beginText();
+                cs.setFont(typeface, 14);
+                cs.newLineAtOffset(72, 700);
+                cs.showText("UsedText");
+                cs.endText();
+            }
+            COSDictionary unusedFont = new COSDictionary();
+            unusedFont.setItem(COSName.TYPE, COSName.FONT);
+            unusedFont.setItem(COSName.SUBTYPE, COSName.TYPE1);
+            unusedFont.setName(COSName.BASE_FONT, "Courier");
+            COSDictionary resFonts = page.getResources().getCOSObject().getCOSDictionary(COSName.FONT);
+            resFonts.setItem(COSName.getPDFName("FUnused"), unusedFont);
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            doc.save(out);
+            src = out.toByteArray();
+        }
+
+        byte[] cleaned = PdfOptimizer.removeUnreferencedResources(src);
+        assertNotNull(cleaned);
+        try (PDDocument loaded = Loader.loadPDF(cleaned)) {
+            COSDictionary resFonts = loaded.getPage(0).getResources()
+                    .getCOSObject().getCOSDictionary(COSName.FONT);
+            assertNotNull(resFonts);
+            assertFalse(resFonts.containsKey(COSName.getPDFName("FUnused")),
+                    "unreferenced font /FUnused must be pruned");
+            String text = new PDFTextStripper().getText(loaded).trim();
+            assertEquals("UsedText", text);
+        }
+    }
+
+    private static byte[] subsetFontPdfWithFixedTag(String tagName, String text) throws IOException {
+        byte[] raw;
+        try (InputStream fontIn = PdfMergerAndSecurityTest.class.getResourceAsStream(
+                        "/org/apache/pdfbox/resources/ttf/LiberationSans-Regular.ttf");
+                PDDocument doc = new PDDocument()) {
+            assertNotNull(fontIn);
+            PDPage page = new PDPage();
+            doc.addPage(page);
+            PDType0Font typeface = PDType0Font.load(doc, fontIn, true);
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.beginText();
+                cs.setFont(typeface, 14);
+                cs.newLineAtOffset(72, 700);
+                cs.showText(text);
+                cs.endText();
+            }
+            ByteArrayOutputStream first = new ByteArrayOutputStream();
+            doc.save(first);
+            raw = first.toByteArray();
+        }
+        try (PDDocument doc = Loader.loadPDF(raw)) {
+            COSName tagged = COSName.getPDFName(tagName);
+            for (COSObject obj : doc.getDocument().getObjectsByType(COSName.FONT)) {
+                if (!(obj.getObject() instanceof COSDictionary font)) {
+                    continue;
+                }
+                font.setItem(COSName.BASE_FONT, tagged);
+                COSDictionary desc = font.getCOSDictionary(COSName.FONT_DESC);
+                if (desc != null) {
+                    desc.setItem(COSName.FONT_NAME, tagged);
+                }
+            }
+            // Also rewrite /BaseFont in any stream content not needed; save clean copy.
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            doc.save(out);
+            return out.toByteArray();
+        }
     }
 }

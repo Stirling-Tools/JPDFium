@@ -1,6 +1,7 @@
 // jpdfium_repair.cpp - PDF structural repair pipeline.
 
 #if !defined(_WIN32) && !defined(_FILE_OFFSET_BITS)
+// NOLINTNEXTLINE(bugprone-reserved-identifier)
 #define _FILE_OFFSET_BITS 64
 #endif
 
@@ -21,15 +22,20 @@
 #include <unistd.h>
 #endif
 
+#include <algorithm>
 #include <atomic>
 #include <cerrno>
+#include <cmath>
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <memory>
+#include <set>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include "jpdfium.h"
@@ -177,8 +183,336 @@ bool publish_staged(const std::string& staging, const char* destination) {
 #include <qpdf/QPDFExc.hh>
 #include <qpdf/QPDFObjectHandle.hh>
 #include <qpdf/QPDFWriter.hh>
+#include <qpdf/QPDFXRefEntry.hh>
 
+#include "jpdfium_qpdf_internal.h"
 #include "jpdfium_qpdf_writer_lock.h"
+
+namespace {
+
+bool isPdfWs(uint8_t c) {
+    return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\f' || c == '\0';
+}
+
+bool isPdfDelim(uint8_t c) {
+    return isPdfWs(c) || c == '<' || c == '>' || c == '[' || c == ']' || c == '{' || c == '}' ||
+           c == '/' || c == '%' || c == '(' || c == ')';
+}
+
+// Detect a cut-off incremental update: more than 4 KiB of bytes containing at least
+// one "N G obj" definition appended after the document's final startxref / %%EOF.
+bool findTruncatedIncrementalStartxref(const uint8_t* data, size_t len, size_t& startxrefPos) {
+    if (!data || len < 64) return false;
+    static constexpr char kNeedle[] = "startxref";
+    static constexpr size_t kNeedleLen = 9;
+    size_t pos = len;
+    bool found = false;
+    for (size_t i = len - kNeedleLen + 1; i > 0; --i) {
+        size_t candidate = i - 1;
+        if (std::memcmp(data + candidate, kNeedle, kNeedleLen) != 0) continue;
+        if (candidate > 0 && !isPdfWs(data[candidate - 1])) continue;
+        size_t after = candidate + kNeedleLen;
+        while (after < len && isPdfWs(data[after])) ++after;
+        if (after == candidate + kNeedleLen || after >= len || data[after] < '0' ||
+            data[after] > '9') {
+            continue;
+        }
+        while (after < len && data[after] >= '0' && data[after] <= '9') ++after;
+        while (after < len && isPdfWs(data[after])) ++after;
+        if (after + 5 <= len && std::memcmp(data + after, "%%EOF", 5) == 0) {
+            after += 5;
+            while (after < len && isPdfWs(data[after])) ++after;
+        }
+        startxrefPos = candidate;
+        pos = after;
+        found = true;
+        break;
+    }
+    if (!found || len <= pos || (len - pos) <= 4096) return false;
+
+    size_t p = pos;
+    while (p + 5 <= len) {
+        if (p > pos && !isPdfWs(data[p - 1])) {
+            ++p;
+            continue;
+        }
+        if (data[p] < '0' || data[p] > '9') {
+            ++p;
+            continue;
+        }
+        size_t q = p;
+        while (q < len && data[q] >= '0' && data[q] <= '9') ++q;
+        if (q >= len || !isPdfWs(data[q])) {
+            // Skip past the non-whitespace token so linear scans never backtrack.
+            p = q + 1;
+            continue;
+        }
+        while (q < len && isPdfWs(data[q])) ++q;
+        size_t genStart = q;
+        while (q < len && data[q] >= '0' && data[q] <= '9') ++q;
+        if (q == genStart || q >= len || !isPdfWs(data[q])) {
+            p = (genStart > p) ? genStart : (p + 1);
+            continue;
+        }
+        while (q < len && isPdfWs(data[q])) ++q;
+        if (q + 3 <= len && std::memcmp(data + q, "obj", 3) == 0 &&
+            (q + 3 == len || isPdfDelim(data[q + 3]))) {
+            return true;
+        }
+        p = (genStart > p) ? genStart : (p + 1);
+    }
+    return false;
+}
+
+bool fileHasTruncatedIncremental(const char* path) {
+    if (!path) return false;
+    std::unique_ptr<FILE, int (*)(FILE*)> f(std::fopen(path, "rb"), &std::fclose);
+    if (!f) return false;
+#if defined(_WIN32)
+    if (_fseeki64(f.get(), 0, SEEK_END) != 0) return false;
+    const int64_t size = _ftelli64(f.get());
+#else
+    if (fseeko(f.get(), 0, SEEK_END) != 0) return false;
+    const int64_t size = static_cast<int64_t>(ftello(f.get()));
+#endif
+    if (size <= 4096) return false;
+    static constexpr int64_t kTailWindow = 2LL * 1024 * 1024;
+    const int64_t offset = size > kTailWindow ? (size - kTailWindow) : 0;
+#if defined(_WIN32)
+    if (_fseeki64(f.get(), offset, SEEK_SET) != 0) return false;
+#else
+    if (fseeko(f.get(), offset, SEEK_SET) != 0) return false;
+#endif
+    std::vector<uint8_t> tail(static_cast<size_t>(size - offset));
+    const size_t got = std::fread(tail.data(), 1, tail.size(), f.get());
+    tail.resize(got);
+    size_t startxrefPos = 0;
+    return findTruncatedIncrementalStartxref(tail.data(), tail.size(), startxrefPos);
+}
+
+bool isMissingOrZeroBox(QPDFObjectHandle const& box) {
+    if (!box.isArray() || box.getArrayNItems() != 4) return true;
+    QPDFObjectHandle x0 = box.getArrayItem(0);
+    QPDFObjectHandle y0 = box.getArrayItem(1);
+    QPDFObjectHandle x1 = box.getArrayItem(2);
+    QPDFObjectHandle y1 = box.getArrayItem(3);
+    if (!x0.isNumber() || !y0.isNumber() || !x1.isNumber() || !y1.isNumber()) return true;
+    return std::abs(x0.getNumericValue() - x1.getNumericValue()) <= 1e-6 ||
+           std::abs(y0.getNumericValue() - y1.getNumericValue()) <= 1e-6;
+}
+
+// Materializes inherited /MediaBox, /CropBox, /Resources, and /Rotate attributes
+// directly onto recovered pages before flat tree re-parenting breaks ancestor chains.
+void inheritMissingPageAttributes(QPDFObjectHandle page, QPDFObjectHandle const& oldPagesRoot) {
+    static constexpr char const* kInheritable[] = {"/MediaBox", "/CropBox", "/Resources",
+                                                   "/Rotate"};
+    for (char const* key : kInheritable) {
+        const bool isMediaBox = std::strcmp(key, "/MediaBox") == 0;
+        bool needKey = isMediaBox ? isMissingOrZeroBox(page.getKey(key)) : !page.hasKey(key);
+        if (!needKey) continue;
+
+        // Guard against /Parent cycles while climbing original page-tree ancestors.
+        std::set<QPDFObjGen> seen;
+        if (page.isIndirect()) seen.insert(page.getObjGen());
+        QPDFObjectHandle cur = page.getKey("/Parent");
+        for (int depth = 0; depth < 32 && cur.isDictionary(); ++depth) {
+            if (cur.isIndirect() && !seen.insert(cur.getObjGen()).second) break;
+            QPDFObjectHandle val = cur.getKey(key);
+            if (isMediaBox ? !isMissingOrZeroBox(val) : !val.isNull()) {
+                page.replaceKey(key, val);
+                needKey = false;
+                break;
+            }
+            cur = cur.getKey("/Parent");
+        }
+        if (needKey && oldPagesRoot.isDictionary()) {
+            QPDFObjectHandle val = oldPagesRoot.getKey(key);
+            if (isMediaBox ? !isMissingOrZeroBox(val) : !val.isNull()) {
+                page.replaceKey(key, val);
+                needKey = false;
+            }
+        }
+        if (needKey && isMediaBox) {
+            // ISO 32000-1 requires /MediaBox; synthesize US Letter if none survived.
+            page.replaceKey("/MediaBox", QPDFObjectHandle::parse("[0 0 612 792]"));
+        }
+    }
+}
+
+// Rebuild a missing, cyclic, or empty /Pages tree in physical file offset order
+// while preserving inheritable attributes and skipping signed PDFs.
+bool repairBrokenPageTree(QPDF& pdf) {
+    // Never salvage signed documents; rewriting /Pages breaks cryptographic ByteRange digests.
+    if (jpdfium::qpdf_detail::pdfHasDigitalSignature(pdf)) return false;
+
+    // QPDF throws or returns empty when /Pages is missing, cyclic, or lacks leaf /Count.
+    bool pagesBroken = false;
+    try {
+        pagesBroken = pdf.getAllPages().empty();
+    } catch (...) {
+        pagesBroken = true;
+    }
+    if (!pagesBroken) return false;
+
+    QPDFObjectHandle root;
+    try {
+        root = pdf.getRoot();
+    } catch (...) {
+        return false;
+    }
+    if (!root.isDictionary()) return false;
+
+    std::map<QPDFObjGen, QPDFXRefEntry> xref;
+    try {
+        xref = pdf.getXRefTable();
+    } catch (...) {
+        xref.clear();
+    }
+
+    // Order orphan /Page objects by byte offset (or host /ObjStm offset + index) to match reading
+    // order.
+    auto orderKeyFor = [&xref](QPDFObjGen const& og) {
+        auto it = xref.find(og);
+        if (it != xref.end()) {
+            QPDFXRefEntry const& entry = it->second;
+            if (entry.getType() == 1) {
+                return std::tuple<qpdf_offset_t, int, int, int>{entry.getOffset(), 0, og.getObj(),
+                                                                og.getGen()};
+            }
+            if (entry.getType() == 2) {
+                auto stmIt = xref.find(QPDFObjGen(entry.getObjStreamNumber(), 0));
+                qpdf_offset_t stmOffset = (stmIt != xref.end() && stmIt->second.getType() == 1)
+                                              ? stmIt->second.getOffset()
+                                              : std::numeric_limits<qpdf_offset_t>::max();
+                return std::tuple<qpdf_offset_t, int, int, int>{
+                    stmOffset, entry.getObjStreamIndex(), og.getObj(), og.getGen()};
+            }
+        }
+        return std::tuple<qpdf_offset_t, int, int, int>{std::numeric_limits<qpdf_offset_t>::max(),
+                                                        0, og.getObj(), og.getGen()};
+    };
+
+    struct RecoveredPage {
+        std::tuple<qpdf_offset_t, int, int, int> order;
+        QPDFObjectHandle page;
+    };
+    std::vector<RecoveredPage> recovered;
+    for (auto const& obj : pdf.getAllObjects()) {
+        if (!obj.isDictionary() || obj.isStream()) continue;
+        QPDFObjectHandle type = obj.getKey("/Type");
+        if (!type.isName() || type.getName() != "/Page") continue;
+        recovered.push_back({orderKeyFor(obj.getObjGen()), obj});
+    }
+    if (recovered.empty()) return false;
+
+    std::sort(recovered.begin(), recovered.end(),
+              [](RecoveredPage const& a, RecoveredPage const& b) { return a.order < b.order; });
+
+    QPDFObjectHandle oldPagesRoot = root.getKey("/Pages");
+    QPDFObjectHandle newPages = pdf.makeIndirectObject(
+        QPDFObjectHandle::newDictionary({{"/Type", QPDFObjectHandle::newName("/Pages")}}));
+    std::vector<QPDFObjectHandle> kids;
+    kids.reserve(recovered.size());
+
+    for (auto& item : recovered) {
+        QPDFObjectHandle page = item.page;
+        inheritMissingPageAttributes(page, oldPagesRoot);
+        page.replaceKey("/Parent", newPages);
+        kids.push_back(page);
+    }
+
+    newPages.replaceKey("/Kids", QPDFObjectHandle::newArray(kids));
+    newPages.replaceKey("/Count",
+                        QPDFObjectHandle::newInteger(static_cast<long long>(kids.size())));
+    root.replaceKey("/Pages", newPages);
+    return true;
+}
+
+size_t safePageCount(QPDF& pdf) {
+    try {
+        return pdf.getAllPages().size();
+    } catch (...) {
+        return 0;
+    }
+}
+
+std::shared_ptr<QPDF> tryRebuildTruncatedUpdate(const uint8_t* input, size_t inputLen,
+                                                size_t startxrefPos, bool& treeRepaired) {
+    std::vector<uint8_t> patched(input, input + inputLen);
+    if (startxrefPos < patched.size()) patched[startxrefPos] = '%';
+
+    auto tryBytes = [&](std::vector<uint8_t> const& buf) -> std::shared_ptr<QPDF> {
+        try {
+            auto candidate = std::make_shared<QPDF>();
+            candidate->setSuppressWarnings(true);
+            candidate->processMemoryFile("repair-trunc", reinterpret_cast<const char*>(buf.data()),
+                                         buf.size());
+            if (jpdfium::qpdf_detail::pdfHasDigitalSignature(*candidate)) return {};
+            treeRepaired = repairBrokenPageTree(*candidate);
+            if (safePageCount(*candidate) == 0) return {};
+            return candidate;
+        } catch (...) {
+            return {};
+        }
+    };
+
+    if (auto ok = tryBytes(patched)) return ok;
+
+    // If the final incremental object was truncated mid-stream or mid-dict, clip back to
+    // the last complete "endobj" after the neutralized startxref and retry recovery.
+    static constexpr char kEndobj[] = "endobj";
+    for (size_t pos = patched.size(); pos >= startxrefPos + 6; --pos) {
+        if (std::memcmp(patched.data() + pos - 6, kEndobj, 6) == 0 &&
+            (pos == patched.size() || isPdfDelim(patched[pos])) &&
+            (pos - 6 == 0 || isPdfDelim(patched[pos - 7]))) {
+            patched.resize(pos);
+            if (auto ok = tryBytes(patched)) return ok;
+            break;
+        }
+    }
+    return {};
+}
+
+std::shared_ptr<QPDF> loadAndRepairMemory(const uint8_t* input, size_t inputLen, bool& fixed) {
+    fixed = false;
+    std::shared_ptr<QPDF> primary;
+    bool primaryLoaded = false;
+    try {
+        primary = std::make_shared<QPDF>();
+        primary->setSuppressWarnings(true);
+        primary->processMemoryFile("repair", reinterpret_cast<const char*>(input), inputLen);
+        primaryLoaded = true;
+    } catch (...) {
+        primary.reset();
+    }
+
+    size_t startxrefPos = 0;
+    const bool hasTruncUpdate = findTruncatedIncrementalStartxref(input, inputLen, startxrefPos);
+    if (hasTruncUpdate &&
+        (!primaryLoaded || !primary || !jpdfium::qpdf_detail::pdfHasDigitalSignature(*primary))) {
+        size_t basePages = primaryLoaded ? safePageCount(*primary) : 0;
+        bool altTreeFixed = false;
+        if (auto rebuilt = tryRebuildTruncatedUpdate(input, inputLen, startxrefPos, altTreeFixed)) {
+            size_t altPages = safePageCount(*rebuilt);
+            if (!primaryLoaded || altPages > basePages || (altPages > 0 && altPages >= basePages)) {
+                fixed = true;
+                return rebuilt;
+            }
+        }
+    }
+
+    if (!primaryLoaded) {
+        auto direct = std::make_shared<QPDF>();
+        direct->setSuppressWarnings(true);
+        direct->processMemoryFile("repair", reinterpret_cast<const char*>(input), inputLen);
+        return direct;
+    }
+
+    if (repairBrokenPageTree(*primary)) fixed = true;
+    return primary;
+}
+
+}  // namespace
 
 // Helper: serialize qpdf warnings to JSON array
 static std::string warnings_to_json(const std::vector<QPDFExc>& warnings) {
@@ -207,37 +541,40 @@ static std::string warnings_to_json(const std::vector<QPDFExc>& warnings) {
     return os.str();
 }
 
+static void configureRepairWriter(QPDFWriter& writer, int32_t flags) {
+    if (flags & JPDFIUM_REPAIR_NORMALIZE_XREF) {
+        writer.setObjectStreamMode(qpdf_o_disable);
+    }
+    writer.setLinearization(false);
+    writer.setCompressStreams(true);
+    if (flags & JPDFIUM_REPAIR_FORCE_V14) {
+        // Object streams require PDF 1.5 (ISO 32000-1 §7.5.7); keep 1.4 clean.
+        writer.setObjectStreamMode(qpdf_o_disable);
+        writer.forcePDFVersion("1.4");
+    }
+}
+
 // Helper: attempt qpdf recovery on raw bytes
 static int try_qpdf_repair(const uint8_t* input, int64_t inputLen, uint8_t** output,
                            int64_t* outputLen, int32_t flags, std::string& errorMsg) {
     try {
-        QPDF pdf;
-        pdf.setSuppressWarnings(true);
-        pdf.processMemoryFile("repair", reinterpret_cast<const char*>(input),
-                              static_cast<size_t>(inputLen));
+        bool structurallyFixed = false;
+        auto pdf = loadAndRepairMemory(input, static_cast<size_t>(inputLen), structurallyFixed);
 
-        QPDFWriter writer(pdf);
+        QPDFWriter writer(*pdf);
         writer.setOutputMemory();
-
-        // Normalize xref type if requested
-        if (flags & JPDFIUM_REPAIR_NORMALIZE_XREF) {
-            writer.setObjectStreamMode(qpdf_o_disable);
-        }
-
-        writer.setLinearization(false);
-        writer.setCompressStreams(true);
-
-        // Force PDF 1.4 if requested
-        if (flags & JPDFIUM_REPAIR_FORCE_V14) {
-            writer.forcePDFVersion("1.4");
-        }
+        configureRepairWriter(writer, flags);
 
         jpdfium_qpdf_internal::WriterLock lock{-1};
         writer.write();
 
-        auto warnings = pdf.getWarnings();
+        auto warnings = pdf->getWarnings();
 
         std::shared_ptr<Buffer> buf = writer.getBufferSharedPointer();
+        if (!buf || buf->getSize() == 0) {
+            errorMsg = "QPDF produced an empty repaired output buffer";
+            return JPDFIUM_REPAIR_FAILED;
+        }
         *outputLen = static_cast<int64_t>(buf->getSize());
         // malloc (not new[]) - the caller frees this buffer with
         // jpdfium_free_buffer, which calls free().
@@ -245,7 +582,8 @@ static int try_qpdf_repair(const uint8_t* input, int64_t inputLen, uint8_t** out
         if (!*output) return JPDFIUM_REPAIR_FAILED;
         memcpy(*output, buf->getBuffer(), static_cast<size_t>(*outputLen));
 
-        return warnings.empty() ? JPDFIUM_REPAIR_CLEAN : JPDFIUM_REPAIR_FIXED;
+        return (structurallyFixed || !warnings.empty()) ? JPDFIUM_REPAIR_FIXED
+                                                        : JPDFIUM_REPAIR_CLEAN;
     } catch (QPDFExc& e) {
         errorMsg = e.what();
         return JPDFIUM_REPAIR_FAILED;
@@ -271,30 +609,30 @@ static int try_qpdf_repair_file(const char* inputPath, const char* outputPath, i
     int result = JPDFIUM_REPAIR_FAILED;
     try {
         {
-            QPDF pdf;
-            pdf.setSuppressWarnings(true);
-            pdf.processFile(inputPath);
+            bool structurallyFixed = false;
+            std::shared_ptr<QPDF> pdf;
+            std::vector<uint8_t> memInput;
+            if (fileHasTruncatedIncremental(inputPath) && read_whole_file(inputPath, memInput)) {
+                pdf = loadAndRepairMemory(memInput.data(), memInput.size(), structurallyFixed);
+            } else {
+                pdf = std::make_shared<QPDF>();
+                pdf->setSuppressWarnings(true);
+                pdf->processFile(inputPath);
+                structurallyFixed = repairBrokenPageTree(*pdf);
+            }
 
-            QPDFWriter writer(pdf);
+            QPDFWriter writer(*pdf);
             // qpdf writes to our fd and leaves closure to us (close_file=false).
             writer.setOutputFile(staging.c_str(), probe, false);
-
-            if (flags & JPDFIUM_REPAIR_NORMALIZE_XREF) {
-                writer.setObjectStreamMode(qpdf_o_disable);
-            }
-            writer.setLinearization(false);
-            writer.setCompressStreams(true);
-            if (flags & JPDFIUM_REPAIR_FORCE_V14) {
-                writer.forcePDFVersion("1.4");
-            }
+            configureRepairWriter(writer, flags);
 
             jpdfium_qpdf_internal::WriterLock lock{-1};
             writer.write();
             const bool closed = std::fclose(probe) == 0;
             probe = nullptr;
-            result = !closed                     ? JPDFIUM_REPAIR_FAILED
-                     : pdf.getWarnings().empty() ? JPDFIUM_REPAIR_CLEAN
-                                                 : JPDFIUM_REPAIR_FIXED;
+            result = !closed                                              ? JPDFIUM_REPAIR_FAILED
+                     : (structurallyFixed || !pdf->getWarnings().empty()) ? JPDFIUM_REPAIR_FIXED
+                                                                          : JPDFIUM_REPAIR_CLEAN;
         }
     } catch (QPDFExc& e) {
         if (probe) {
@@ -464,8 +802,11 @@ JPDFIUM_EXPORT int32_t jpdfium_repair_inspect(const uint8_t* input, int64_t inpu
             QPDFObjectHandle root = pdf.getRoot();
             if (root.hasKey("/Pages")) {
                 QPDFObjectHandle pages = root.getKey("/Pages");
-                if (pages.hasKey("/Count")) {
-                    pageCount = static_cast<int>(pages.getKey("/Count").getIntValue());
+                if (pages.isDictionary() && pages.hasKey("/Count")) {
+                    QPDFObjectHandle cnt = pages.getKey("/Count");
+                    if (cnt.isInteger()) {
+                        pageCount = static_cast<int>(cnt.getIntValue());
+                    }
                 }
             }
         } catch (...) {
@@ -520,6 +861,10 @@ JPDFIUM_EXPORT int32_t jpdfium_repair_pdf(const uint8_t* input, int64_t inputLen
     // Without qpdf, just pass through the bytes unchanged
     *outputLen = inputLen;
     *output = (uint8_t*)malloc(static_cast<size_t>(inputLen));
+    if (!*output) {
+        *outputLen = 0;
+        return JPDFIUM_REPAIR_FAILED;
+    }
     memcpy(*output, input, static_cast<size_t>(inputLen));
     return JPDFIUM_REPAIR_CLEAN;
 }
