@@ -154,7 +154,8 @@ public final class PdfFontAuditor {
             try {
                 page = doc.page(pageIdx);
             } catch (JPDFiumException unopenablePage) {
-                continue;
+                throw new JPDFiumException(
+                        "font audit is incomplete: unable to open page " + pageIdx, unopenablePage);
             }
             try (page) {
                 MemorySegment rawPage = page.rawHandleForRead();
