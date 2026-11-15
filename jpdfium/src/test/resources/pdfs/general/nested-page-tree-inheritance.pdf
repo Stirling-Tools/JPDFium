@@ -1,0 +1,68 @@
+%PDF-1.6
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [10 0 R 4 0 R] /Count 2 /MediaBox [0 0 612 792] /Resources 7 0 R >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 10 0 R /Contents 8 0 R >>
+endobj
+4 0 obj
+<< /Type /Page /Parent 2 0 R /Contents 9 0 R /CropBox [0 0 612 792] >>
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type3 /Name /A /FontBBox [0 0 100 100] /FontMatrix [0.01 0 0 0.01 0 0] /CharProcs << /a0 11 0 R >> /Encoding << /Type /Encoding /Differences [0 /a0] >> /FirstChar 0 /LastChar 0 /Widths [100.0] /Resources << >> >>
+endobj
+6 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Times-Roman /Encoding /WinAnsiEncoding >>
+endobj
+7 0 obj
+<< /Font << /A 5 0 R /T1 6 0 R >> >>
+endobj
+8 0 obj
+<< /Length 101  >>
+stream
+BT /A 12 Tf 72 700 Td <00> Tj ET
+q 1 0 0 1 72 650 cm BI /IM true /W 1 /H 1 /BPC 1 /D [1 0] ID 0 EI Q
+
+endstream
+endobj
+9 0 obj
+<< /Length 51  >>
+stream
+BT /T1 12 Tf 72 700 Td (Inherited resources) Tj ET
+
+endstream
+endobj
+10 0 obj
+<< /Type /Pages /Parent 2 0 R /Kids [3 0 R] /Count 1 >>
+endobj
+11 0 obj
+<< /Length 26  >>
+stream
+100 0 d0
+0 0 100 100 re f
+
+endstream
+endobj
+xref
+0 12
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000169 00000 n 
+0000000233 00000 n 
+0000000319 00000 n 
+0000000572 00000 n 
+0000000671 00000 n 
+0000000723 00000 n 
+0000000876 00000 n 
+0000000978 00000 n 
+0000001050 00000 n 
+trailer
+<< /Size 12 /Root 1 0 R >>
+startxref
+1128
+%%EOF

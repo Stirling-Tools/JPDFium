@@ -1176,10 +1176,20 @@ public final class PdfPage implements AutoCloseable {
         return PdfThumbnails.getAsImage(rawHandleForRead());
     }
 
-    /** Flatten all annotations (including applied redactions) into page content. */
+    /**
+     * Flatten all drawable annotations (including applied redactions and no-view markup) into page
+     * content. Hidden and invisible annotations are not drawn.
+     */
     public void flatten() {
         ensureOpen();
         JpdfiumLib.pageFlatten(handle);
+        ownerDoc.markContentModified();
+    }
+
+    /** Bake the annotations a viewer draws, leaving no-view markup out. */
+    void flattenForDisplay() {
+        ensureOpen();
+        JpdfiumLib.pageFlattenDisplay(handle);
         ownerDoc.markContentModified();
     }
 
@@ -1194,13 +1204,15 @@ public final class PdfPage implements AutoCloseable {
      * Flatten this page using the specified mode.
      *
      * <ul>
-     *   <li>{@link FlattenMode#ANNOTATIONS} - bakes annotations and form fields into the
-     *       page content stream. Text remains selectable.</li>
+     *   <li>{@link FlattenMode#ANNOTATIONS} - bakes every drawable annotation, including
+     *       no-view markup, and form fields into the page content stream. Text remains
+     *       selectable.</li>
      *   <li>{@link FlattenMode#FULL} - rasterizes the page into an image-based page
-     *       at the given DPI. Invalidates this {@link PdfPage} instance <strong>and
-     *       every other open page</strong> on the document, because the native
-     *       page is deleted and replaced; callers must reopen pages via
-     *       {@link PdfDocument#page(int)} for subsequent operations.</li>
+     *       at the given DPI. Follows the on-screen view, so no-view markup stays out.
+     *       Invalidates this {@link PdfPage} instance <strong>and every other open
+     *       page</strong> on the document, because the native page is deleted and
+     *       replaced; callers must reopen pages via {@link PdfDocument#page(int)} for
+     *       subsequent operations.</li>
      * </ul>
      */
     public void flatten(FlattenMode mode, int dpi) {

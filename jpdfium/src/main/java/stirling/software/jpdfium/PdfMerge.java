@@ -58,18 +58,16 @@ public final class PdfMerge {
      * Merge multiple open PDF documents with explicit storage control.
      * FILE mode fails loudly when the native file-backed merge is unavailable
      * or fails; live documents are materialized to temp files first.
+     *
+     * <p>Bookmarks from every source are carried into the result with their
+     * page targets remapped to the merged page order.
      */
     public static PdfDocument merge(List<PdfDocument> documents, StorageOptions options) {
         if (documents.isEmpty()) throw new IllegalArgumentException("At least one document is required");
         if (documents.size() == 1) return reopenViaBytes(documents.getFirst());
 
-        List<Bookmark> mergedBookmarks = new ArrayList<>();
         int pageOffset = 0;
         for (PdfDocument sourceDoc : documents) {
-            List<Bookmark> sourceBookmarks = sourceDoc.bookmarks();
-            if (!sourceBookmarks.isEmpty()) {
-                mergedBookmarks.addAll(offsetBookmarks(sourceBookmarks, pageOffset));
-            }
             pageOffset += sourceDoc.pageCount();
         }
 
@@ -91,19 +89,10 @@ public final class PdfMerge {
                     Path tmp = options.createTempFile("jpdfium-merge", ".pdf");
                     cleanup.add(tmp);
                     if (QpdfLib.mergeFiles(filePaths, tmp, false)) {
-                        Path result = tmp;
-                        if (!mergedBookmarks.isEmpty()) {
-                            Path tmpBookmarks = options.createTempFile("jpdfium-merge-bm", ".pdf");
-                            cleanup.add(tmpBookmarks);
-                            try (PdfDocument merged = PdfDocument.open(tmp)) {
-                                PdfBookmarkEditor.setBookmarks(merged, mergedBookmarks, tmpBookmarks, false);
-                            }
-                            result = tmpBookmarks;
-                        }
-                        try (PdfDocument verify = PdfDocument.open(result)) {
+                        try (PdfDocument verify = PdfDocument.open(tmp)) {
                             if (verify.pageCount() == pageOffset) {
-                                cleanup.remove(result);
-                                return PdfDocument.openTemp(result);
+                                cleanup.remove(tmp);
+                                return PdfDocument.openTemp(tmp);
                             }
                         }
                     }
@@ -123,9 +112,6 @@ public final class PdfMerge {
         if (PdfMerger.isSupported()) {
             byte[] mergedBytes = PdfMerger.mergeDocuments(documents.toArray(new PdfDocument[0]));
             if (mergedBytes != null) {
-                if (!mergedBookmarks.isEmpty()) {
-                    mergedBytes = PdfBookmarkEditor.setBookmarks(mergedBytes, mergedBookmarks);
-                }
                 PdfDocument candidate = null;
                 try {
                     candidate = PdfDocument.open(mergedBytes);
@@ -149,15 +135,16 @@ public final class PdfMerge {
 
         // FPDF_ImportPages leaves imported pages referencing objects owned by source documents;
         // serialize and reload while sources remain open so the returned document is standalone.
-        return detachWithBookmarks(destinationDoc, mergedBookmarks, options);
+        return detachWithBookmarks(destinationDoc, collectMergedBookmarks(documents), options);
     }
 
     /**
      * Merge PDF files from paths into a new document.
      *
      * <p>Opens each file, imports all pages, closes the sources, and returns a
-     * fully self-contained document. The caller owns the returned document and
-     * must close it.
+     * fully self-contained document. Bookmarks are carried into the result
+     * with their page targets remapped to the merged page order. The caller
+     * owns the returned document and must close it.
      *
      * @param paths file paths to merge
      * @return merged document
@@ -302,10 +289,10 @@ public final class PdfMerge {
      * by native code. Peak heap stays flat regardless of input size, which is
      * what makes multi-gigabyte merges feasible.
      *
-     * <p>No bookmarks are merged by this method. Read source bookmarks first
-     * (via short-lived {@link PdfDocument#open(Path)} handles, which only
-     * parse the catalog) and apply the combined tree afterwards with
-     * {@code PdfBookmarkEditor}.
+     * <p>Bookmarks from every input are merged natively with their titles,
+     * hierarchy and page destinations remapped to the output page order. An
+     * outline item whose source destination is not a page (a URI or file
+     * action) keeps its title and position but loses the action.
      *
      * <p>Falls back to {@link #mergeFiles(List)} plus save when the
      * file-backed native path is unavailable.
@@ -412,6 +399,19 @@ public final class PdfMerge {
                 Files.deleteIfExists(path);
             } catch (IOException _) {}
         }
+    }
+
+    private static List<Bookmark> collectMergedBookmarks(List<PdfDocument> documents) {
+        List<Bookmark> merged = new ArrayList<>();
+        int pageOffset = 0;
+        for (PdfDocument document : documents) {
+            List<Bookmark> sourceBookmarks = document.bookmarks();
+            if (!sourceBookmarks.isEmpty()) {
+                merged.addAll(offsetBookmarks(sourceBookmarks, pageOffset));
+            }
+            pageOffset += document.pageCount();
+        }
+        return merged;
     }
 
     private static List<Bookmark> offsetBookmarks(List<Bookmark> bookmarks, int pageOffset) {

@@ -215,7 +215,9 @@ JPDFIUM_EXPORT int32_t jpdfium_redact_region(int64_t page, float x, float y, flo
                                              uint32_t argb,
                                              int32_t remove_content) JPDFIUM_NOEXCEPT;
 // Hard crop: removes page objects lying outside the crop rectangle [x,y,x+w,y+h] (PDF coordinates).
-// A text word or object that only partly falls outside the crop is preserved whole.
+// A text word or object that only partly falls outside the crop is preserved whole. An image that
+// cannot be erased without changing another surviving placement is also preserved whole; the page
+// boxes set by the caller clip the outside part.
 JPDFIUM_EXPORT int32_t jpdfium_crop_remove_content(int64_t page, float x, float y, float w,
                                                    float h) JPDFIUM_NOEXCEPT;
 // Hard crop with a content-removal margin in PDF points. A non-negative margin
@@ -254,14 +256,20 @@ JPDFIUM_EXPORT int32_t jpdfium_redact_words_ex(int64_t page, const char** words,
                                                int32_t caseSensitive,
                                                int32_t* matchCount) JPDFIUM_NOEXCEPT;
 JPDFIUM_EXPORT int32_t jpdfium_page_flatten(int64_t page) JPDFIUM_NOEXCEPT;
+// Same bake, but skips annotations with the no-view flag so the result matches
+// what a viewer draws on screen. Used before rasterizing a page.
+JPDFIUM_EXPORT int32_t jpdfium_page_flatten_display(int64_t page) JPDFIUM_NOEXCEPT;
 JPDFIUM_EXPORT int32_t jpdfium_page_to_image(int64_t doc, int32_t pageIndex, int32_t dpi);
 
 // Document-wide flatten over a file-backed document handle.
 //
-// jpdfium_doc_flatten_annotations: bakes annotations/form fields into page content on every page
-// (FPDFPage_Flatten). Returns JPDFIUM_OK when every page flattened or had nothing to do. Flattening
-// rewrites page content in place: the FPDF_PAGE handles stay valid, so this does not bump the
-// structural generation.
+// jpdfium_doc_flatten_annotations: bakes every drawable annotation/form field into page content
+// on every page (FPDFPage_Flatten). Returns JPDFIUM_OK when every page flattened or had nothing to
+// do. Flattening rewrites page content in place: the FPDF_PAGE handles stay valid, so this does
+// not bump the structural generation.
+//
+// jpdfium_doc_flatten_annotations_display: same pass, but hides annotations with the no-view flag
+// for the bake so the content matches the on-screen view. Used before rasterizing every page.
 //
 // jpdfium_doc_flatten_to_images: rasterizes every page at `dpi` and replaces its content with the
 // resulting image, borrowing one scratch frame from the document. It returns
@@ -269,6 +277,7 @@ JPDFIUM_EXPORT int32_t jpdfium_page_to_image(int64_t doc, int32_t pageIndex, int
 // (the document no longer matches the one that was opened); a failure before any page was replaced
 // reports its own code.
 JPDFIUM_EXPORT int32_t jpdfium_doc_flatten_annotations(int64_t doc) JPDFIUM_NOEXCEPT;
+JPDFIUM_EXPORT int32_t jpdfium_doc_flatten_annotations_display(int64_t doc) JPDFIUM_NOEXCEPT;
 JPDFIUM_EXPORT int32_t jpdfium_doc_flatten_to_images(int64_t doc, int32_t dpi) JPDFIUM_NOEXCEPT;
 
 // Returns JSON: [{"i":0,"ox":10.1,"oy":20.2,"l":10.0,"r":18.0,"b":15.0,"t":27.0}, ...]

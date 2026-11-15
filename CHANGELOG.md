@@ -138,6 +138,12 @@ publishing workflows, not library releases, so they are not listed here.
   the source page tree cannot be rewritten, and refuses signed documents
   instead of silently invalidating the signature.
 
+- Full flatten rasterizes populated AcroForm widgets instead of dropping their
+  values: widget appearances are baked into page content before the page image
+  is generated, and the resulting document has no AcroForm left. The bake
+  follows the on-screen view, so no-view markup stays out of the image.
+- Cropping with content removal paints erased image pixels white instead of
+  black, so a full-bleed image no longer shows a dark fringe at the crop edge.
 - Word and regex redaction finds words PDFium reports hyphenated across a line
   break (`Trace-` / `Monkey`), and removes the hyphen with them; it previously
   missed them, and with eight or more words the keyword prefilter skipped such
@@ -212,8 +218,9 @@ publishing workflows, not library releases, so they are not listed here.
   pixels are now erased and the image is moved to the page, as crop already did.
 - Redacting or cropping part of an image that is drawn more than once on a page
   also erased the same pixels in the other placements, which nothing covered.
-  Such a request now fails with `RedactIncompleteException` before the page
-  changes, and the document can still be saved.
+  Cropping now keeps such straddling placements whole and clips them with the
+  page boxes instead of failing; redaction still fails with
+  `RedactIncompleteException` before the page changes.
 - Redacting part of a JPEG XL, HEIF or AVIF image (encodings PDFium cannot
   decode) dropped the whole picture. With an image codec registered (the
   `jpdfium-vips` module) the image is now decoded, only the covered pixels are

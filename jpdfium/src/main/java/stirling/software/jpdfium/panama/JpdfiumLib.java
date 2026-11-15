@@ -1401,8 +1401,10 @@ public final class JpdfiumLib {
      * content remains in the file; both are clipped only by the page boxes.
      * Straddling words and objects are kept whole, straddling images are
      * pixel-erased outside (soft masks kept when the image can be rendered,
-     * nested images promoted), fully outside objects are removed. A post-pass
-     * audit returns {@code JPDFIUM_ERR_REDACT_INCOMPLETE} or
+     * nested images promoted), fully outside objects are removed. A
+     * straddling image that cannot be erased safely or promoted without
+     * reordering form content is kept whole and clipped by the page boxes.
+     * A post-pass audit returns {@code JPDFIUM_ERR_REDACT_INCOMPLETE} or
      * {@code JPDFIUM_ERR_REDACT_UNVERIFIABLE} when content survives or the
      * audit cannot run.
      *
@@ -1586,6 +1588,24 @@ public final class JpdfiumLib {
         });
     }
 
+    /**
+     * Bakes the annotations a viewer draws into page content, leaving no-view markup out. Used
+     * before rasterizing a page.
+     */
+    public static void pageFlattenDisplay(long page) {
+        PdfiumRuntime.execute(() -> {
+            try {
+                check(
+                        (int) FlattenBindings.jpdfium_page_flatten_display.invokeExact(page),
+                        "pageFlattenDisplay");
+            } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
+                if (t instanceof JPDFiumException jpdfiumException) throw jpdfiumException;
+                throw new JPDFiumException("pageFlattenDisplay failed", t);
+            }
+        });
+    }
+
     public static String textGetCharPositions(long page) {
         return PdfiumRuntime.execute(() -> {
             check(JpdfiumH.jpdfium_text_get_char_positions(page, ADDR_SCRATCH), "textGetCharPositions");
@@ -1610,6 +1630,26 @@ public final class JpdfiumLib {
     public static void docFlattenAnnotations(long doc) {
         PdfiumRuntime.execute(() -> {
             check(JpdfiumH.jpdfium_doc_flatten_annotations(doc), "docFlattenAnnotations");
+        });
+    }
+
+    /**
+     * Bakes the annotations a viewer draws on every page, leaving no-view markup out. Used before
+     * rasterizing the document.
+     */
+    public static void docFlattenAnnotationsDisplay(long doc) {
+        PdfiumRuntime.execute(() -> {
+            try {
+                check(
+                        (int)
+                                FlattenBindings.jpdfium_doc_flatten_annotations_display.invokeExact(
+                                        doc),
+                        "docFlattenAnnotationsDisplay");
+            } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
+                if (t instanceof JPDFiumException jpdfiumException) throw jpdfiumException;
+                throw new JPDFiumException("docFlattenAnnotationsDisplay failed", t);
+            }
         });
     }
 
