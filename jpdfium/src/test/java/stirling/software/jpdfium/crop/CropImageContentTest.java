@@ -93,7 +93,9 @@ class CropImageContentTest {
     void fullBleedImageCropHasNoDarkEdge() throws Exception {
         byte[] input = solidFullPageImagePdf(new Color(210, 225, 240));
         byte[] output = crop(input, new Rect(100, 350, 200, 200));
-        BufferedImage page = render(output); // 144 DPI -> 400x400
+        BufferedImage page = renderAt(output, 144);
+        assertEquals(400, page.getWidth(), "144 DPI must rasterize the 200pt crop at 400px");
+        assertEquals(400, page.getHeight(), "144 DPI must rasterize the 200pt crop at 400px");
         int darkBorder = 0;
         int border = 0;
         for (int y = 0; y < page.getHeight(); y++) {
@@ -110,6 +112,9 @@ class CropImageContentTest {
         }
         assertTrue(darkBorder * 100 < border,
                 "crop must not paint a dark border: " + darkBorder + "/" + border);
+        int interior = page.getRGB(page.getWidth() / 2, page.getHeight() / 2) & 0xFFFFFF;
+        assertColorNear(0xD2E1F0, interior, 8,
+                "the full-bleed image must survive the crop, not be erased");
     }
 
     private static byte[] solidFullPageImagePdf(Color color) throws IOException {
@@ -400,9 +405,22 @@ class CropImageContentTest {
     // rendering helpers (JPDFium renders the MediaBox with its origin in view)
 
     private static BufferedImage render(byte[] pdf) {
+        return renderAt(pdf, 72);
+    }
+
+    private static BufferedImage renderAt(byte[] pdf, int dpi) {
         try (PdfDocument doc = PdfDocument.open(pdf); PdfPage page = doc.page(0)) {
-            return page.renderAt(72).toBufferedImage();
+            return page.renderAt(dpi).toBufferedImage();
         }
+    }
+
+    private static void assertColorNear(int expected, int actual, int tolerance, String ctx) {
+        int dr = Math.abs(((expected >> 16) & 255) - ((actual >> 16) & 255));
+        int dg = Math.abs(((expected >> 8) & 255) - ((actual >> 8) & 255));
+        int db = Math.abs((expected & 255) - (actual & 255));
+        assertTrue(dr <= tolerance && dg <= tolerance && db <= tolerance,
+                String.format("%s: pixel %06X, expected %06X +/- %d", ctx, actual, expected,
+                        tolerance));
     }
 
     private static int pixelAt(BufferedImage img, byte[] pdf, int pdfX, int pdfY) {

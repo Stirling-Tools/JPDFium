@@ -1,9 +1,11 @@
 package stirling.software.jpdfium;
 
+import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
+import org.apache.pdfbox.pdmodel.interactive.form.PDAcroForm;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import stirling.software.jpdfium.doc.AnnotationType;
@@ -532,7 +534,75 @@ class FlattenApiTest {
                         "full flatten must bake the filled widget, leaving no field: "
                                 + after.stream().map(FormField::name).toList());
             }
+            try (PDDocument pdf = Loader.loadPDF(out)) {
+                PDAcroForm form = pdf.getDocumentCatalog().getAcroForm();
+                assertTrue(
+                        form == null || form.getFields().isEmpty(),
+                        "full flatten must clear the catalog /AcroForm field tree, but it still has "
+                                + (form == null ? 0 : form.getFields().size()));
+            }
         }
+    }
+
+    @Test
+    void failedRasterPassKeepsBakedAnnotation(@TempDir Path dir) throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "full flattening needs the real PDFium natives");
+        Path base = writePdfBoxFixture(dir.resolve("annotated-oversized-base.pdf"), pdf -> {
+            pdf.addPage(new PDPage(new PDRectangle(300, 300)));
+            // Page 1 exceeds the raster budget, so the pass fails after page 0 was prepared.
+            pdf.addPage(new PDPage(new PDRectangle(500000, 500000)));
+        });
+        Path fixture = dir.resolve("annotated-oversized-last-page.pdf");
+        try (PdfDocument doc = PdfDocument.open(base)) {
+            try (PdfPage page = doc.page(0)) {
+                PdfAnnotationBuilder.on(page.rawHandle())
+                        .type(AnnotationType.HIGHLIGHT)
+                        .rect(20, 200, 120, 40)
+                        .color(255, 200, 0)
+                        .contents("annotation-survivor")
+                        .generateAppearance()
+                        .build();
+            }
+            doc.save(fixture);
+        }
+        try (PdfDocument doc = PdfDocument.open(fixture)) {
+            try (PdfPage page = doc.page(0)) {
+                assertEquals(1, PdfAnnotations.count(page.rawHandleForRead()),
+                        "the fixture must carry the highlight before flattening");
+            }
+            JPDFiumException failure = assertThrows(
+                    JPDFiumException.class, () -> doc.flatten(FlattenMode.FULL, 72));
+            assertFalse(
+                    failure.isContentMutated(),
+                    "a pass that failed before the originals were dropped must roll back instead"
+                            + " of reporting a mutation: "
+                            + failure.getMessage());
+            assertEquals(2, doc.pageCount(), "a rolled-back raster must keep every page");
+            assertTrue(
+                    doc.isContentModified(),
+                    "a baked annotation must mark the document modified even when raster rolls back");
+            try (PdfPage page = doc.page(0)) {
+                assertEquals(
+                        0,
+                        PdfAnnotations.count(page.rawHandleForRead()),
+                        "the bake must consume the annotation instead of dropping it");
+                assertTrue(
+                        nonWhitePixels(page.renderAt(72)) > 0,
+                        "the baked annotation must keep its visible appearance");
+            }
+        }
+    }
+
+    /** Counts pixels that differ from the white page background. */
+    private static int nonWhitePixels(RenderResult page) {
+        byte[] px = page.rgba();
+        int colored = 0;
+        for (int i = 0; i + 3 < px.length; i += 4) {
+            if ((px[i] & 0xFF) < 250 || (px[i + 1] & 0xFF) < 250 || (px[i + 2] & 0xFF) < 250) {
+                colored++;
+            }
+        }
+        return colored;
     }
 
     @Test

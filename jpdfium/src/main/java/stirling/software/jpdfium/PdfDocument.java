@@ -5,6 +5,7 @@ import stirling.software.jpdfium.doc.Attachment;
 import stirling.software.jpdfium.doc.Bookmark;
 import stirling.software.jpdfium.doc.MetadataTag;
 import stirling.software.jpdfium.doc.PageBoxes;
+import stirling.software.jpdfium.doc.PdfAnnotations;
 import stirling.software.jpdfium.doc.PdfAttachments;
 import stirling.software.jpdfium.doc.PdfBookmarks;
 import stirling.software.jpdfium.doc.PdfMerger;
@@ -1074,7 +1075,15 @@ public final class PdfDocument implements AutoCloseable {
                 // PDFium's raster pass does not initialize a form-fill
                 // environment, so bake widgets into page content first; the
                 // raster then contains the same values a viewer shows.
-                JpdfiumLib.docFlattenAnnotations(handle);
+                boolean hadAnnotations = hasAnnotations();
+                try {
+                    JpdfiumLib.docFlattenAnnotations(handle);
+                } finally {
+                    // The bake rewrites page content and keeps open pages valid.
+                    // A later raster failure only rolls back the raster pass, so
+                    // the annotation edit must stay visible as a modified document.
+                    if (hadAnnotations) markContentModified();
+                }
                 // The native pass rolls back any failure it can still undo and reports
                 // CONTENT_MUTATED only once the replaced pages can no longer be restored.
                 boolean replacedPages = false;
@@ -1093,6 +1102,17 @@ public final class PdfDocument implements AutoCloseable {
                 }
             }
         }
+    }
+
+    /** True when any page still carries an annotation for the bake pass to consume. */
+    private boolean hasAnnotations() {
+        int pages = pageCount();
+        for (int i = 0; i < pages; i++) {
+            try (PdfPage open = page(i)) {
+                if (PdfAnnotations.count(open.rawHandleForRead()) > 0) return true;
+            }
+        }
+        return false;
     }
 
     /**
