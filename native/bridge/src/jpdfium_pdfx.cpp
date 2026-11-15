@@ -213,6 +213,9 @@ class Converter {
                    int64_t height, bool as_jpeg);
     std::shared_ptr<Buffer> DecodeImage(QPDFObjectHandle image, bool was_dct);
     void ConvertGroup(QPDFObjectHandle holder);
+    void ConvertShading(QPDFObjectHandle shading);
+    bool AuditAnnotationEntry(QPDFObjectHandle entry, std::set<QPDFObjGen>* seen, std::string* why,
+                              int depth);
     bool AuditResources(QPDFObjectHandle resources, std::set<QPDFObjGen>* seen, std::string* why,
                         int depth);
     void RemoveTransparencyGroups(QPDFObjectHandle resources, std::set<QPDFObjGen>* seen,
@@ -223,6 +226,7 @@ class Converter {
     std::map<QPDFObjGen, ColourSpaceInfo> cs_memo_;
     std::set<QPDFObjGen> done_streams_;
     std::set<QPDFObjGen> done_images_;
+    std::set<QPDFObjGen> done_shadings_;
     std::set<QPDFObjGen> done_functions_;
     std::set<QPDFObjGen> done_resources_;
     std::vector<QPDFObjectHandle> done_direct_resources_;
@@ -309,8 +313,13 @@ ColourSpaceInfo ClassifyDeviceIndependent(const std::string& family, QPDFObjectH
 std::string IndexedLookupBytes(QPDFObjectHandle lookup) {
     if (lookup.isString()) return lookup.getStringValue();
     if (!lookup.isStream()) return {};
-    std::shared_ptr<Buffer> b = lookup.getStreamData(qpdf_dl_all);
-    return std::string(reinterpret_cast<const char*>(b->getBuffer()), b->getSize());
+    try {
+        std::shared_ptr<Buffer> b = lookup.getStreamData(qpdf_dl_all);
+        if (!b || b->getSize() == 0) return {};
+        return std::string(reinterpret_cast<const char*>(b->getBuffer()), b->getSize());
+    } catch (std::exception&) {
+        return {};
+    }
 }
 
 ColourSpaceInfo Converter::ClassifyIndexed(QPDFObjectHandle cs, int depth) {
@@ -356,6 +365,25 @@ ColourSpaceInfo Converter::ClassifyIndexed(QPDFObjectHandle cs, int depth) {
 ColourSpaceInfo Converter::ClassifySpecial(const std::string& family, QPDFObjectHandle cs,
                                            int depth) {
     ColourSpaceInfo info;
+    if (family == "/DeviceN" && cs.getArrayNItems() >= 5 && cs.getArrayItem(4).isDictionary()) {
+        QPDFObjectHandle attrs = cs.getArrayItem(4);
+        QPDFObjectHandle colorants = attrs.getKey("/Colorants");
+        if (colorants.isDictionary()) {
+            for (const std::string& key : colorants.getKeys()) {
+                ColourSpaceInfo cinfo = Classify(colorants.getKey(key), depth + 1);
+                if (cinfo.replacement.isInitialized() && !cinfo.replacement.isNull()) {
+                    colorants.replaceKey(key, cinfo.replacement);
+                }
+            }
+        }
+        QPDFObjectHandle proc = attrs.getKey("/Process");
+        if (proc.isDictionary() && proc.hasKey("/ColorSpace")) {
+            ColourSpaceInfo pinfo = Classify(proc.getKey("/ColorSpace"), depth + 1);
+            if (pinfo.replacement.isInitialized() && !pinfo.replacement.isNull()) {
+                proc.replaceKey("/ColorSpace", pinfo.replacement);
+            }
+        }
+    }
     const int alt_index = 2;
     ColourSpaceInfo alt = Classify(cs.getArrayItem(alt_index), depth + 1);
     if (alt.kind == Kind::Keep) return info;
@@ -545,6 +573,17 @@ bool Converter::ConvertFunction(QPDFObjectHandle fn, int inputs, Kind kind,
             }
             ColourSpaceInfo cs = base;
             cs.kind = kind;
+            bool validEndpoints = true;
+            for (QPDFObjectHandle* endpoint : {&c0, &c1}) {
+                for (int i = 0; i < 3; ++i) {
+                    if (!endpoint->getArrayItem(i).isNumber()) {
+                        validEndpoints = false;
+                        break;
+                    }
+                }
+                if (!validEndpoints) break;
+            }
+            if (!validEndpoints) break;
             for (QPDFObjectHandle* endpoint : {&c0, &c1}) {
                 std::vector<double> in;
                 for (int i = 0; i < 3; ++i)
@@ -606,6 +645,12 @@ Converter::Resources Converter::PrepareResources(QPDFObjectHandle resources) {
             spaces.replaceKey(key, info.replacement);
         }
         res.spaces[key] = info;
+    }
+    // Never leave a /DeviceCMYK replacement bound under /DefaultRGB (which must
+    // be 3-component per ISO 32000-1 §8.6.5.6) after converting RGB colors.
+    if (spaces.hasKey("/DefaultRGB") &&
+        (ForbidsDeviceIndependent(o_.level) || o_.convert_colours)) {
+        spaces.removeKey("/DefaultRGB");
     }
     if (spaces.isIndirect()) {
         spaces_memo_[spaces.getObjGen()] = res.spaces;
@@ -813,6 +858,7 @@ std::string ExpandInlineName(const std::string& n) {
 
 void ColourFilter::FlushInline() {
     using T = QPDFTokenizer;
+    // Inline images bundle abbreviated keys between BI..ID..EI; normalize before inspecting color.
     in_inline_ = false;
     std::vector<QPDFTokenizer::Token> tokens;
     tokens.swap(inline_);
@@ -849,17 +895,34 @@ void ColourFilter::FlushInline() {
             QPDFObjectHandle cs = dict.getKey("/ColorSpace");
             ColourSpaceInfo info = cs.isName() ? Resolve(cs.getName()) : ColourSpaceInfo{};
             if (cs.isName() && (cs.getName() == "/DeviceRGB")) info.kind = Kind::Rgb;
-            convert = info.kind == Kind::Rgb && !dict.getKey("/ImageMask").isBool() &&
+            bool is_mask =
+                dict.getKey("/ImageMask").isBool() && dict.getKey("/ImageMask").getBoolValue();
+            bool is_rgb_image = info.kind == Kind::Rgb && !is_mask;
+            convert = is_rgb_image && owner_.o_.convert_images &&
                       dict.getKey("/BitsPerComponent").isInteger() &&
                       dict.getKey("/BitsPerComponent").getIntValue() == 8;
             QPDFObjectHandle filter = dict.getKey("/Filter");
-            if (filter.isName() && filter.getName() == "/DCTDecode") convert = false;
+            // Skip DCT-encoded inline images whose JPEG payload cannot be losslessly re-encoded as
+            // CMYK without user transcoding flags.
+            bool has_dct = filter.isName() && filter.getName() == "/DCTDecode";
+            if (!has_dct && filter.isArray()) {
+                for (int fi = 0; fi < filter.getArrayNItems(); ++fi) {
+                    if (Name(filter.getArrayItem(fi)) == "/DCTDecode") {
+                        has_dct = true;
+                        break;
+                    }
+                }
+            }
+            if (has_dct) convert = false;
+            if (is_rgb_image && !convert) owner_.images_skipped_++;
         } catch (std::exception&) {
             convert = false;
         }
     }
     if (convert) {
         try {
+            // Strip QPDF tokenizer trailing whitespace before re-wrapping raw bytes in a temp
+            // stream for CMYK conversion.
             std::string bytes = data->getValue();
             while (!bytes.empty() &&
                    (bytes.back() == ' ' || bytes.back() == '\n' || bytes.back() == '\r')) {
@@ -932,6 +995,49 @@ void Converter::ConvertGroup(QPDFObjectHandle holder) {
     if (info.replacement.isInitialized() && !info.replacement.isNull()) {
         group.replaceKey("/CS", info.replacement);
     }
+}
+
+void Converter::ConvertShading(QPDFObjectHandle shading) {
+    if (!shading.isDictionary() && !shading.isStream()) return;
+    if (shading.isIndirect() && !done_shadings_.insert(shading.getObjGen()).second) return;
+    QPDFObjectHandle dict = shading.isStream() ? shading.getDict() : shading;
+    QPDFObjectHandle type_obj = dict.getKey("/ShadingType");
+    const int shading_type = type_obj.isInteger() ? type_obj.getIntValueAsInt() : 0;
+    ColourSpaceInfo cs = Classify(dict.getKey("/ColorSpace"));
+    if (cs.kind == Kind::Keep) {
+        if (cs.replacement.isInitialized() && !cs.replacement.isNull()) {
+            dict.replaceKey("/ColorSpace", cs.replacement);
+        }
+        return;
+    }
+    if (cs.kind == Kind::AsGray || cs.kind == Kind::AsCmyk) {
+        dict.replaceKey("/ColorSpace", cs.replacement);
+        spaces_++;
+        return;
+    }
+    QPDFObjectHandle fn = dict.getKey("/Function");
+    const int inputs = shading_type == 1 ? 2 : 1;
+    if (fn.isNull() || !ConvertFunction(fn, inputs, cs.kind, cs)) return;
+    QPDFObjectHandle bg = dict.getKey("/Background");
+    if (bg.isArray() && bg.getArrayNItems() == 3) {
+        bool valid_bg = true;
+        std::vector<double> in;
+        for (int i = 0; i < 3; ++i) {
+            if (!bg.getArrayItem(i).isNumber()) {
+                valid_bg = false;
+                break;
+            }
+            in.push_back(bg.getArrayItem(i).getNumericValue());
+        }
+        if (valid_bg) {
+            std::vector<double> cmyk = ConvertComponents(cs, in, false);
+            QPDFObjectHandle arr = QPDFObjectHandle::newArray();
+            for (double v : cmyk) arr.appendItem(QPDFObjectHandle::newReal(v, 4));
+            dict.replaceKey("/Background", arr);
+        }
+    }
+    dict.replaceKey("/ColorSpace", cs.replacement);
+    spaces_++;
 }
 
 void Converter::ConvertImage(QPDFObjectHandle image) {
@@ -1170,8 +1276,11 @@ QPDFObjectHandle Converter::ColourKeyToStencil(const Raster& raster, QPDFObjectH
     int64_t lo[3];
     int64_t hi[3];
     for (int c = 0; c < 3; ++c) {
-        lo[c] = mask.getArrayItem(c * 2).getIntValue();
-        hi[c] = mask.getArrayItem(c * 2 + 1).getIntValue();
+        QPDFObjectHandle lo_obj = mask.getArrayItem(c * 2);
+        QPDFObjectHandle hi_obj = mask.getArrayItem(c * 2 + 1);
+        if (!lo_obj.isInteger() || !hi_obj.isInteger()) return {};
+        lo[c] = lo_obj.getIntValue();
+        hi[c] = hi_obj.getIntValue();
     }
     const int64_t mask_row = (raster.width + 7) / 8;
     std::string bits(static_cast<size_t>(mask_row * raster.height), '\0');
@@ -1193,6 +1302,7 @@ QPDFObjectHandle Converter::ColourKeyToStencil(const Raster& raster, QPDFObjectH
     sd.replaceKey("/Subtype", QPDFObjectHandle::newName("/Image"));
     sd.replaceKey("/Width", QPDFObjectHandle::newInteger(raster.width));
     sd.replaceKey("/Height", QPDFObjectHandle::newInteger(raster.height));
+    sd.replaceKey("/BitsPerComponent", QPDFObjectHandle::newInteger(1));
     sd.replaceKey("/ImageMask", QPDFObjectHandle::newBool(true));
     return stencil;
 }
@@ -1202,7 +1312,10 @@ void Converter::ConvertMatte(QPDFObjectHandle smask, const ColourSpaceInfo& cs) 
     QPDFObjectHandle matte = smask.getDict().getKey("/Matte");
     if (!matte.isArray() || matte.getArrayNItems() != 3) return;
     std::vector<double> mv;
-    for (int i = 0; i < 3; ++i) mv.push_back(matte.getArrayItem(i).getNumericValue());
+    for (int i = 0; i < 3; ++i) {
+        if (!matte.getArrayItem(i).isNumber()) return;
+        mv.push_back(matte.getArrayItem(i).getNumericValue());
+    }
     QPDFObjectHandle arr = QPDFObjectHandle::newArray();
     for (double v : ConvertComponents(cs, mv, false))
         arr.appendItem(QPDFObjectHandle::newReal(v, 4));
@@ -1271,13 +1384,18 @@ bool Converter::ConvertImagePixels(QPDFObjectHandle image, const ColourSpaceInfo
     QPDFObjectHandle mask = dict.getKey("/Mask");
     if (mask.isArray() && mask.getArrayNItems() != 6) return false;
     std::vector<uint8_t> cmyk = RasterToCmyk(raster, cs);
-    if (mask.isArray()) dict.replaceKey("/Mask", ColourKeyToStencil(raster, mask));
+    if (mask.isArray()) {
+        QPDFObjectHandle stencil = ColourKeyToStencil(raster, mask);
+        if (!stencil.isInitialized()) return false;
+        dict.replaceKey("/Mask", stencil);
+    }
     ConvertMatte(dict.getKey("/SMask"), cs);
     StoreCmyk(image, cmyk, raster.width, raster.height, was_dct);
     return true;
 }
 
 void Converter::ProcessResources(Resources& res, int depth) {
+    // Guard against cyclic /Resources graphs; ISO 32000 nesting rarely exceeds a handful of levels.
     if (!res.dict.isDictionary() || depth > 32) return;
     if (res.dict.isIndirect()) {
         if (!done_resources_.insert(res.dict.getObjGen()).second) return;
@@ -1293,6 +1411,8 @@ void Converter::ProcessResources(Resources& res, int depth) {
             QPDFObjectHandle x = xobjects.getKey(key);
             if (!x.isStream()) continue;
             const std::string subtype = Name(x.getDict().getKey("/Subtype"));
+            // PostScript XObjects (/PS) and /OPI proxies are forbidden in PDF/X; replace with empty
+            // zero-BBox form placeholders.
             if (subtype == "/PS") {
                 QPDFObjectHandle empty = QPDFObjectHandle::newStream(&pdf_, "");
                 QPDFObjectHandle ed = empty.getDict();
@@ -1305,6 +1425,7 @@ void Converter::ProcessResources(Resources& res, int depth) {
                 continue;
             }
             x.getDict().removeKey("/PS");
+            x.getDict().removeKey("/OPI");
             if (subtype == "/Image") {
                 ConvertImage(x);
             } else if (subtype == "/Form") {
@@ -1312,16 +1433,32 @@ void Converter::ProcessResources(Resources& res, int depth) {
             }
         }
     }
+    QPDFObjectHandle shadings = res.dict.getKey("/Shading");
+    if (shadings.isDictionary()) {
+        for (const std::string& key : shadings.getKeys()) {
+            ConvertShading(shadings.getKey(key));
+        }
+    }
     QPDFObjectHandle patterns = res.dict.getKey("/Pattern");
     if (patterns.isDictionary()) {
+        // Clamp pattern /XStep / /YStep and sanitize Type 2 shading dictionaries recursively.
         for (const std::string& key : patterns.getKeys()) {
             QPDFObjectHandle pat = patterns.getKey(key);
-            ClampPatternSteps(pat);
+            QPDFObjectHandle pat_dict = pat.isStream() ? pat.getDict() : pat;
+            if (pat_dict.isDictionary()) {
+                ClampPatternSteps(pat);
+                if (pat_dict.getKey("/PatternType").isInteger() &&
+                    pat_dict.getKey("/PatternType").getIntValueAsInt() == 2) {
+                    ConvertShading(pat_dict.getKey("/Shading"));
+                }
+            }
             if (pat.isStream()) ProcessContentHolder(pat, res.dict, depth + 1);
         }
     }
     QPDFObjectHandle fonts = res.dict.getKey("/Font");
     if (fonts.isDictionary()) {
+        // Rewrite Type 3 /CharProcs content streams too, since their strokes inherit graphics
+        // color.
         for (const std::string& key : fonts.getKeys()) {
             QPDFObjectHandle font = fonts.getKey(key);
             if (!font.isDictionary() || Name(font.getKey("/Subtype")) != "/Type3") continue;
@@ -1335,7 +1472,13 @@ void Converter::ProcessResources(Resources& res, int depth) {
                 QPDFObjectHandle proc = procs.getKey(glyph);
                 if (!proc.isStream()) continue;
                 if (proc.isIndirect() && !done_streams_.insert(proc.getObjGen()).second) continue;
-                std::shared_ptr<Buffer> data = proc.getStreamData(qpdf_dl_all);
+                std::shared_ptr<Buffer> data;
+                try {
+                    data = proc.getStreamData(qpdf_dl_all);
+                } catch (std::exception&) {
+                    continue;
+                }
+                if (!data) continue;
                 std::string content(reinterpret_cast<const char*>(data->getBuffer()),
                                     data->getSize());
                 bool changed = false;
@@ -1351,6 +1494,9 @@ void Converter::ProcessResources(Resources& res, int depth) {
         for (const std::string& key : states.getKeys()) {
             QPDFObjectHandle gs = states.getKey(key);
             if (!gs.isDictionary()) continue;
+            gs.removeKey("/TR");
+            QPDFObjectHandle tr2 = gs.getKey("/TR2");
+            if (!tr2.isNull() && Name(tr2) != "/Default") gs.removeKey("/TR2");
             QPDFObjectHandle smask = gs.getKey("/SMask");
             if (!smask.isDictionary()) continue;
             QPDFObjectHandle group = smask.getKey("/G");
@@ -1361,12 +1507,21 @@ void Converter::ProcessResources(Resources& res, int depth) {
                     gdict.isDictionary() ? Classify(gdict.getKey("/CS")) : ColourSpaceInfo{};
                 if (bc.isArray() && bc.getArrayNItems() == 3 &&
                     (gcs.kind == Kind::Rgb || gcs.kind == Kind::Lab)) {
+                    bool valid_bc = true;
                     std::vector<double> v;
-                    for (int i = 0; i < 3; ++i) v.push_back(bc.getArrayItem(i).getNumericValue());
-                    std::vector<double> c = ConvertComponents(gcs, v, false);
-                    QPDFObjectHandle arr = QPDFObjectHandle::newArray();
-                    for (double x : c) arr.appendItem(QPDFObjectHandle::newReal(x, 4));
-                    smask.replaceKey("/BC", arr);
+                    for (int i = 0; i < 3; ++i) {
+                        if (!bc.getArrayItem(i).isNumber()) {
+                            valid_bc = false;
+                            break;
+                        }
+                        v.push_back(bc.getArrayItem(i).getNumericValue());
+                    }
+                    if (valid_bc) {
+                        std::vector<double> c = ConvertComponents(gcs, v, false);
+                        QPDFObjectHandle arr = QPDFObjectHandle::newArray();
+                        for (double x : c) arr.appendItem(QPDFObjectHandle::newReal(x, 4));
+                        smask.replaceKey("/BC", arr);
+                    }
                 }
                 ProcessContentHolder(group, res.dict, depth + 1);
             }
@@ -1388,6 +1543,7 @@ void Converter::ProcessContentHolder(QPDFObjectHandle stream, QPDFObjectHandle i
     } catch (std::exception&) {
         return;
     }
+    if (!data) return;
     std::string content(reinterpret_cast<const char*>(data->getBuffer()), data->getSize());
     bool changed = false;
     bool sets_font = true;
@@ -1440,6 +1596,7 @@ void Converter::Run() {
 
 bool Converter::AuditResources(QPDFObjectHandle resources, std::set<QPDFObjGen>* seen,
                                std::string* why, int depth) {
+    // Reject transparency, non-Normal blend modes, and PDF 1.4+ filters forbidden in PDF/X-1a/3.
     if (!resources.isDictionary() || depth > 32) return false;
     if (resources.isIndirect() && !seen->insert(resources.getObjGen()).second) return false;
     QPDFObjectHandle states = resources.getKey("/ExtGState");
@@ -1475,6 +1632,8 @@ bool Converter::AuditResources(QPDFObjectHandle resources, std::set<QPDFObjGen>*
             QPDFObjectHandle x = xobjects.getKey(key);
             if (!x.isStream()) continue;
             QPDFObjectHandle d = x.getDict();
+            // JBIG2Decode / JPXDecode and image /SMask /SMaskInData require PDF 1.4+
+            // transparency/filters.
             if (Name(d.getKey("/Subtype")) == "/Image") {
                 QPDFObjectHandle filter = d.getKey("/Filter");
                 std::vector<std::string> filters;
@@ -1505,6 +1664,7 @@ bool Converter::AuditResources(QPDFObjectHandle resources, std::set<QPDFObjGen>*
     }
     QPDFObjectHandle patterns = resources.getKey("/Pattern");
     if (patterns.isDictionary()) {
+        // Recurse into tiling pattern resource trees and local ExtGState dictionaries.
         for (const std::string& key : patterns.getKeys()) {
             QPDFObjectHandle pat = patterns.getKey(key);
             QPDFObjectHandle d = pat.isStream() ? pat.getDict() : pat;
@@ -1551,6 +1711,20 @@ void Converter::RemoveTransparencyGroups(QPDFObjectHandle resources, std::set<QP
     }
 }
 
+bool Converter::AuditAnnotationEntry(QPDFObjectHandle entry, std::set<QPDFObjGen>* seen,
+                                     std::string* why, int depth) {
+    if (depth > 8) return false;
+    if (entry.isStream()) {
+        return AuditResources(entry.getDict().getKey("/Resources"), seen, why, depth + 1);
+    }
+    if (entry.isDictionary()) {
+        for (const std::string& state : entry.getKeys()) {
+            if (AuditAnnotationEntry(entry.getKey(state), seen, why, depth + 1)) return true;
+        }
+    }
+    return false;
+}
+
 void Converter::AuditTransparency() {
     QPDFPageDocumentHelper pages(pdf_);
     int index = 0;
@@ -1571,10 +1745,13 @@ void Converter::AuditTransparency() {
                     why = "a semi-transparent annotation";
                 }
                 QPDFObjectHandle ap = annot.getKey("/AP");
-                QPDFObjectHandle normal = ap.isDictionary() ? ap.getKey("/N") : QPDFObjectHandle();
-                if (!transparent && normal.isStream() &&
-                    AuditResources(normal.getDict().getKey("/Resources"), &seen, &why, 1)) {
-                    transparent = true;
+                if (!transparent && ap.isDictionary()) {
+                    for (const char* sub : {"/N", "/R", "/D"}) {
+                        if (AuditAnnotationEntry(ap.getKey(sub), &seen, &why, 0)) {
+                            transparent = true;
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -1597,21 +1774,49 @@ std::string Converter::Report() const {
            " spaces=" + std::to_string(spaces_);
 }
 
-bool IsJavaScriptAction(QPDFObjectHandle action) {
-    return action.isDictionary() && Name(action.getKey("/S")) == "/JavaScript";
+bool IsForbiddenAction(QPDFObjectHandle action, int depth = 0) {
+    if (depth > 8) return false;
+    if (action.isArray()) {
+        for (int i = 0; i < action.getArrayNItems(); ++i) {
+            if (IsForbiddenAction(action.getArrayItem(i), depth + 1)) return true;
+        }
+        return false;
+    }
+    if (!action.isDictionary()) return false;
+    const std::string s = Name(action.getKey("/S"));
+    if (s == "/JavaScript" || s == "/Launch" || s == "/Sound" || s == "/Movie" ||
+        s == "/ResetForm" || s == "/ImportData" || s == "/Rendition" || s == "/Trans" ||
+        s == "/GoTo3DView") {
+        return true;
+    }
+    return IsForbiddenAction(action.getKey("/Next"), depth + 1);
 }
 
-void StripActions(QPDFObjectHandle dict) {
-    if (!dict.isDictionary()) return;
+void StripActions(QPDFObjectHandle dict, int depth = 0) {
+    if (!dict.isDictionary() || depth > 8) return;
     dict.removeKey("/AA");
-    if (IsJavaScriptAction(dict.getKey("/A"))) dict.removeKey("/A");
+    if (IsForbiddenAction(dict.getKey("/A"))) dict.removeKey("/A");
+    QPDFObjectHandle kids = dict.getKey("/Kids");
+    if (kids.isArray()) {
+        for (int i = 0; i < kids.getArrayNItems(); ++i) {
+            StripActions(kids.getArrayItem(i), depth + 1);
+        }
+    }
 }
 
-void RemoveJavaScript(QPDF& pdf) {
+void RemoveForbiddenActionsAndFiles(QPDF& pdf, Level level) {
     QPDFObjectHandle root = pdf.getRoot();
     QPDFObjectHandle names = root.getKey("/Names");
-    if (names.isDictionary()) names.removeKey("/JavaScript");
-    if (IsJavaScriptAction(root.getKey("/OpenAction"))) root.removeKey("/OpenAction");
+    if (names.isDictionary()) {
+        names.removeKey("/JavaScript");
+        if (level == Level::X1a || level == Level::X3 || level == Level::X4) {
+            names.removeKey("/EmbeddedFiles");
+        }
+    }
+    if (level == Level::X1a || level == Level::X3 || level == Level::X4) {
+        root.removeKey("/AF");
+    }
+    if (IsForbiddenAction(root.getKey("/OpenAction"))) root.removeKey("/OpenAction");
     root.removeKey("/AA");
     QPDFPageDocumentHelper pages(pdf);
     for (QPDFPageObjectHelper& page : pages.getAllPages()) {
@@ -1677,6 +1882,54 @@ void FixPageBoxes(QPDF& pdf) {
     for (QPDFPageObjectHelper& page : pages.getAllPages()) {
         QPDFObjectHandle dict = page.getObjectHandle();
         if (dict.hasKey("/TrimBox") && dict.hasKey("/ArtBox")) dict.removeKey("/ArtBox");
+        QPDFObjectHandle media = page.getAttribute("/MediaBox", true);
+        if (!media.isArray() || media.getArrayNItems() != 4) continue;
+        double mx[4]{};
+        bool valid_media = true;
+        for (int i = 0; i < 4; ++i) {
+            if (!media.getArrayItem(i).isNumber()) {
+                valid_media = false;
+                break;
+            }
+            mx[i] = media.getArrayItem(i).getNumericValue();
+        }
+        if (!valid_media) continue;
+        const double mlx = std::min(mx[0], mx[2]);
+        const double mly = std::min(mx[1], mx[3]);
+        const double mux = std::max(mx[0], mx[2]);
+        const double muy = std::max(mx[1], mx[3]);
+        for (const char* key : {"/CropBox", "/BleedBox", "/TrimBox", "/ArtBox"}) {
+            QPDFObjectHandle box = dict.getKey(key);
+            if (!box.isArray() || box.getArrayNItems() != 4) continue;
+            double bx[4]{};
+            bool valid_box = true;
+            for (int i = 0; i < 4; ++i) {
+                if (!box.getArrayItem(i).isNumber()) {
+                    valid_box = false;
+                    break;
+                }
+                bx[i] = box.getArrayItem(i).getNumericValue();
+            }
+            if (!valid_box) continue;
+            double nx0 = std::clamp(std::min(bx[0], bx[2]), mlx, mux);
+            double ny0 = std::clamp(std::min(bx[1], bx[3]), mly, muy);
+            double nx1 = std::clamp(std::max(bx[0], bx[2]), mlx, mux);
+            double ny1 = std::clamp(std::max(bx[1], bx[3]), mly, muy);
+            if (nx1 <= nx0 || ny1 <= ny0) {
+                nx0 = mlx;
+                ny0 = mly;
+                nx1 = mux;
+                ny1 = muy;
+            }
+            if (std::fabs(nx0 - bx[0]) > 1e-6 || std::fabs(ny0 - bx[1]) > 1e-6 ||
+                std::fabs(nx1 - bx[2]) > 1e-6 || std::fabs(ny1 - bx[3]) > 1e-6) {
+                QPDFObjectHandle clamped = QPDFObjectHandle::newArray();
+                for (double v : {nx0, ny0, nx1, ny1}) {
+                    clamped.appendItem(QPDFObjectHandle::newReal(v, 4));
+                }
+                dict.replaceKey(key, clamped);
+            }
+        }
     }
 }
 
@@ -1696,7 +1949,7 @@ Level ParseLevel(int32_t level) {
 }
 
 void Normalise(QPDF& pdf, const Options& options) {
-    RemoveJavaScript(pdf);
+    RemoveForbiddenActionsAndFiles(pdf, options.level);
     FlattenPrintableAnnotations(pdf);
     if (ForbidsTransparency(options.level)) RemoveOptionalContent(pdf);
     FixPageBoxes(pdf);
@@ -1710,11 +1963,13 @@ void Normalise(QPDF& pdf, const Options& options) {
     if (ForbidsTransparency(options.level)) converter.AuditTransparency();
 }
 
-void ConfigureWriter(QPDFWriter& writer) {
+void ConfigureWriter(QPDFWriter& writer, const Options& options) {
     writer.setPreserveEncryption(false);
     writer.setDecodeLevel(qpdf_dl_none);
     writer.setCompressStreams(true);
-    writer.setObjectStreamMode(qpdf_o_preserve);
+    writer.setObjectStreamMode((options.level == Level::X1a || options.level == Level::X3)
+                                   ? qpdf_o_disable
+                                   : qpdf_o_preserve);
 }
 
 void CopyMessage(const std::string& text, char* message, int32_t cap) {
@@ -1773,7 +2028,7 @@ JPDFIUM_EXPORT int32_t jpdfium_pdfx_prepare_bytes(const uint8_t* input, int64_t 
                                static_cast<size_t>(input_len));
         Normalise(*pdf, options);
         QPDFWriter writer{*pdf};
-        ConfigureWriter(writer);
+        ConfigureWriter(writer, options);
         writer.setOutputMemory();
         {
             jpdfium_qpdf_internal::WriterLock lock{-1};
@@ -1830,7 +2085,7 @@ JPDFIUM_EXPORT int32_t jpdfium_pdfx_prepare_file(const char* in_path, const char
             out_path,
             [&](jpdfium_staging::StagedFile& staged) {
                 QPDFWriter writer{*pdf};
-                ConfigureWriter(writer);
+                ConfigureWriter(writer, options);
                 writer.setOutputFile(staged.path.c_str(), staged.file, false);
                 jpdfium_qpdf_internal::WriterLock lock{-1};
                 writer.write();

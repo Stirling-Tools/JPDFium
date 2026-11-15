@@ -29,28 +29,6 @@ void updateCidSet(QPDF& qpdf, QPDFObjectHandle descriptor, std::set<uint32_t> co
     if (!bits.empty()) descriptor.replaceKey("/CIDSet", QPDFObjectHandle::newStream(&qpdf, bits));
 }
 
-std::set<uint32_t> cidsForRetainedGlyphs(QPDFObjectHandle const& target,
-                                         std::string const& mapBytes,
-                                         std::set<FT_UInt> const& glyphs) {
-    std::set<uint32_t> cids{0};
-    auto map = target.getKey("/CIDToGIDMap");
-    if (map.isStream() && !mapBytes.empty()) {
-        const auto* bytes = reinterpret_cast<const uint8_t*>(mapBytes.data());
-        const size_t entries = mapBytes.size() / 2;
-        for (size_t c = 0; c < entries && c <= jpdfium::font::kMaxCid; ++c) {
-            const uint32_t gid = (static_cast<uint32_t>(bytes[2 * c]) << 8) | bytes[2 * c + 1];
-            if (glyphs.contains(static_cast<FT_UInt>(gid))) cids.insert(static_cast<uint32_t>(c));
-        }
-        return cids;
-    }
-    if (map.isNull() || map.isNameAndEquals("/Identity")) {
-        for (FT_UInt gid : glyphs) {
-            if (gid <= jpdfium::font::kMaxCid) cids.insert(static_cast<uint32_t>(gid));
-        }
-    }
-    return cids;
-}
-
 std::set<uint32_t> cidsPresentInProgram(QPDFObjectHandle const& target, FT_Face face) {
     std::set<uint32_t> cids;
     auto map = target.getKey("/CIDToGIDMap");
@@ -337,21 +315,23 @@ bool subsetEmbeddedCidFont(QPDF& qpdf, FT_Library lib, QPDFObjectHandle& font,
     descriptor.replaceKey(program.kind == ProgramKind::TrueType ? "/FontFile2" : "/FontFile3",
                           makeProgramStream(qpdf, program, program.kind, true, chosenSubset));
 
-    // Recompute /CIDSet when present so every bit matches the subset's retained CIDs.
+    // Recompute /CIDSet when present so every bit matches all CIDs present in the embedded
+    // subset program (ISO 19005-2 §6.2.11.4.2).
     if (descriptor.hasKey("/CIDSet")) {
-        if (useCompactedMap) {
-            std::set<uint32_t> mappedCids;
-            for (uint32_t c = 0; c <= maxUsedCid; ++c) mappedCids.insert(c);
-            updateCidSet(qpdf, descriptor, mappedCids);
+        FT_Face subFace = nullptr;
+        jpdfium::font::FtFaceGuard subGuard;
+        std::set<uint32_t> presentCids;
+        if (!chosenSubset.empty() &&
+            FT_New_Memory_Face(lib, reinterpret_cast<const FT_Byte*>(chosenSubset.data()),
+                               FT_Long(chosenSubset.size()), 0, &subFace) == 0 &&
+            subFace) {
+            subGuard.reset(subFace);
+            presentCids = cidsPresentInProgram(target, subFace);
+        }
+        if (!presentCids.empty()) {
+            updateCidSet(qpdf, descriptor, presentCids);
         } else {
-            std::string mapView;
-            if (!identity && mapBytes) {
-                size_t mapSize = std::min<size_t>(
-                    mapBytes->getSize(), 2 * (static_cast<size_t>(jpdfium::font::kMaxCid) + 1));
-                mapView.assign(reinterpret_cast<const char*>(mapBytes->getBuffer()), mapSize);
-            }
-            auto retainedCids = cidsForRetainedGlyphs(target, mapView, targetGlyphs);
-            if (!retainedCids.empty()) updateCidSet(qpdf, descriptor, retainedCids);
+            descriptor.removeKey("/CIDSet");
         }
     }
     return true;

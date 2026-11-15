@@ -740,23 +740,21 @@ void populateEmbeddedFontProgram(QPDF& qpdf, FT_Library lib, QPDFObjectHandle& f
 
     if (cid) {
         std::set<uint32_t> activeCids;
-        if (!glyphs.empty()) {
-            std::string mapView;
-            auto map = target.getKey("/CIDToGIDMap");
-            if (map.isStream()) {
-                try {
-                    auto data = map.getStreamData(qpdf_dl_generalized);
-                    if (data) {
-                        mapView.assign(reinterpret_cast<const char*>(data->getBuffer()),
-                                       data->getSize());
-                    }
-                } catch (...) {
-                    mapView.clear();
-                }
+        FT_Face activeFace = program.face;
+        jpdfium::font::FtFaceGuard subGuard;
+        if (!subset.empty()) {
+            FT_Face subFace = nullptr;
+            if (FT_New_Memory_Face(lib, reinterpret_cast<const FT_Byte*>(subset.data()),
+                                   FT_Long(subset.size()), 0, &subFace) == 0 &&
+                subFace) {
+                subGuard.reset(subFace);
+                activeFace = subFace;
+            } else {
+                activeFace = nullptr;
             }
-            activeCids = cidsForRetainedGlyphs(target, mapView, glyphs);
-        } else {
-            activeCids = cidsPresentInProgram(target, program.face);
+        }
+        if (activeFace) {
+            activeCids = cidsPresentInProgram(target, activeFace);
         }
         if (activeCids.empty()) {
             activeCids.insert(0);
@@ -1004,6 +1002,7 @@ int32_t embedFontsExport(const uint8_t* input, int64_t inputLen, int32_t count,
             std::fprintf(stderr, "jpdfium qpdf embed fonts: %s\n", result.error.c_str());
             return result.rc;
         }
+        if (!result.buffer || result.buffer->getSize() == 0) return -1;
         *outputLen = static_cast<int64_t>(result.buffer->getSize());
         *output = static_cast<uint8_t*>(malloc(static_cast<size_t>(*outputLen)));
         if (!*output) {
