@@ -337,53 +337,78 @@ struct RustBuffer {
     RustBuffer& operator=(RustBuffer const&) = delete;
 };
 
-// Re-encode 1-bit DeviceGray images as JBIG2 when the page and globals
-// streams together are smaller. The same conservative image checks as the
-// CCITT pass apply; JBIG2 is skipped when a mask or non-default decode could
-// change appearance.
-void encodeBilevelJbig2(QPDF& pdf) {
+// Shared eligibility check for the bilevel re-encoders. Both the CCITT and
+// JBIG2 passes accept exactly the same images: 1-bit DeviceGray, no mask or
+// soft mask, default decode array, no existing DCT/JPX/JBIG2 filter, and a
+// pixel count the encoders can handle. Keeping this in one place stops the two
+// passes from drifting apart.
+struct BilevelImage {
+    QPDFObjectHandle dict;
+    int width = 0;
+    int height = 0;
+    std::shared_ptr<Buffer> decoded;
+};
+
+bool readBilevelImage(QPDFObjectHandle& image, BilevelImage& out) {
+    auto dict = image.getDict();
+    if (hasFilter(dict, "/JBIG2Decode") || hasFilter(dict, "/DCTDecode") ||
+        hasFilter(dict, "/JPXDecode")) {
+        return false;
+    }
+    if (!dict.hasKey("/Width") || !dict.hasKey("/Height") || !dict.hasKey("/BitsPerComponent")) {
+        return false;
+    }
+    if (dict.getKey("/BitsPerComponent").getIntValue() != 1) return false;
+    if (dict.hasKey("/ImageMask") || dict.hasKey("/Mask") || dict.hasKey("/SMask")) {
+        return false;
+    }
+    if (!dict.hasKey("/ColorSpace") || !dict.getKey("/ColorSpace").isName() ||
+        dict.getKey("/ColorSpace").getName() != "/DeviceGray") {
+        return false;
+    }
+    if (dict.hasKey("/Decode")) {
+        auto decode = dict.getKey("/Decode");
+        if (!decode.isArray() || decode.getArrayNItems() != 2 ||
+            !decode.getArrayItem(0).isNumber() || !decode.getArrayItem(1).isNumber() ||
+            decode.getArrayItem(0).getNumericValue() != 0 ||
+            decode.getArrayItem(1).getNumericValue() != 1) {
+            return false;
+        }
+    }
+    int64_t widthValue = dict.getKey("/Width").getIntValue();
+    int64_t heightValue = dict.getKey("/Height").getIntValue();
+    if (widthValue <= 0 || heightValue <= 0 || widthValue > 32768 || heightValue > 32768 ||
+        widthValue * heightValue > kBilevelMaxPixels) {
+        return false;
+    }
+    auto decoded = image.getStreamData(qpdf_dl_all);
+    if (!decoded) return false;
+    size_t rowBytes = (static_cast<size_t>(widthValue) + 7) / 8;
+    if (decoded->getSize() < rowBytes * static_cast<size_t>(heightValue)) return false;
+    out.dict = std::move(dict);
+    out.width = static_cast<int>(widthValue);
+    out.height = static_cast<int>(heightValue);
+    out.decoded = std::move(decoded);
+    return true;
+}
+
+// Walks every image on every page once, applying the shared eligibility and
+// decode logic and asking `encode` for a replacement. `encode` receives the
+// decoded samples and the smallest current encoded size it must beat; returning
+// a null handle leaves the image untouched. Repeated indirect images are
+// encoded once and the cached replacement is reused for every placement.
+template <typename Encode>
+int32_t forEachBilevelImage(QPDF& pdf, Encode encode) {
     QPDFPageDocumentHelper helper{pdf};
     std::map<std::string, QPDFObjectHandle> replacements;
     std::set<std::string> attempted;
+    int32_t replaced = 0;
     for (auto& page : helper.getAllPages()) {
-        page.forEachImage(true, [&pdf, &replacements, &attempted](QPDFObjectHandle& image,
-                                                                  QPDFObjectHandle& resources,
-                                                                  std::string const& key) {
+        page.forEachImage(true, [&](QPDFObjectHandle& image, QPDFObjectHandle& resources,
+                                    std::string const& key) {
             try {
-                auto dict = image.getDict();
-                if (hasFilter(dict, "/JBIG2Decode") || hasFilter(dict, "/DCTDecode") ||
-                    hasFilter(dict, "/JPXDecode")) {
-                    return;
-                }
-                if (!dict.hasKey("/Width") || !dict.hasKey("/Height") ||
-                    !dict.hasKey("/BitsPerComponent")) {
-                    return;
-                }
-                if (dict.getKey("/BitsPerComponent").getIntValue() != 1) return;
-                if (dict.hasKey("/ImageMask") || dict.hasKey("/Mask") || dict.hasKey("/SMask")) {
-                    return;
-                }
-                if (!dict.hasKey("/ColorSpace") || !dict.getKey("/ColorSpace").isName() ||
-                    dict.getKey("/ColorSpace").getName() != "/DeviceGray") {
-                    return;
-                }
-                if (dict.hasKey("/Decode")) {
-                    auto decode = dict.getKey("/Decode");
-                    if (!decode.isArray() || decode.getArrayNItems() != 2 ||
-                        !decode.getArrayItem(0).isNumber() || !decode.getArrayItem(1).isNumber() ||
-                        decode.getArrayItem(0).getNumericValue() != 0 ||
-                        decode.getArrayItem(1).getNumericValue() != 1) {
-                        return;
-                    }
-                }
-                int64_t widthValue = dict.getKey("/Width").getIntValue();
-                int64_t heightValue = dict.getKey("/Height").getIntValue();
-                if (widthValue <= 0 || heightValue <= 0 || widthValue > 32768 ||
-                    heightValue > 32768 || widthValue * heightValue > kBilevelMaxPixels) {
-                    return;
-                }
-                int width = static_cast<int>(widthValue);
-                int height = static_cast<int>(heightValue);
+                BilevelImage candidate;
+                if (!readBilevelImage(image, candidate)) return;
                 std::string objectKey =
                     image.isIndirect() ? image.getObjGen().unparse() : std::string();
                 if (!objectKey.empty()) {
@@ -394,156 +419,103 @@ void encodeBilevelJbig2(QPDF& pdf) {
                     }
                     if (!attempted.insert(objectKey).second) return;
                 }
-                auto decoded = image.getStreamData(qpdf_dl_all);
-                if (!decoded) return;
-                size_t rowBytes = (static_cast<size_t>(width) + 7) / 8;
-                if (decoded->getSize() < rowBytes * static_cast<size_t>(height)) return;
-
-                RustBuffer pageData;
-                RustBuffer globalsData;
-                int64_t pageLen = 0;
-                int64_t globalsLen = 0;
-                if (jpdfium_rust_encode_jbig2(decoded->getBuffer(), decoded->getSize(), width,
-                                              height, 0, &pageData.ptr, &pageLen, &globalsData.ptr,
-                                              &globalsLen) != 0 ||
-                    pageData.ptr == nullptr || pageLen <= 0) {
-                    return;
-                }
                 auto raw = image.getRawStreamData();
                 if (!raw) return;
-                int64_t encodedLen = pageLen + globalsLen;
                 size_t baseline = raw->getSize();
-                size_t flateSize = recompressedFlateSize(decoded.get());
+                size_t flateSize = recompressedFlateSize(candidate.decoded.get());
                 if (flateSize > 0 && flateSize < baseline) baseline = flateSize;
-                if (!bilevelSmallEnough(encodedLen, baseline)) return;
-
-                auto replacement = pdf.newStream();
-                auto replacementDict = dict.shallowCopy();
-                replacementDict.removeKey("/Filter");
-                replacementDict.removeKey("/DecodeParms");
-                replacement.replaceDict(replacementDict);
-                QPDFObjectHandle parms = QPDFObjectHandle::newNull();
-                if (globalsLen > 0) {
-                    auto globalsStream = pdf.newStream();
-                    globalsStream.replaceStreamData(
-                        std::string(reinterpret_cast<const char*>(globalsData.ptr),
-                                    static_cast<size_t>(globalsLen)),
-                        QPDFObjectHandle::newNull(), QPDFObjectHandle::newNull());
-                    auto globalsRef = pdf.makeIndirectObject(globalsStream);
-                    parms = QPDFObjectHandle::newDictionary();
-                    parms.replaceKey("/JBIG2Globals", globalsRef);
-                }
-                replacement.replaceStreamData(
-                    std::string(reinterpret_cast<const char*>(pageData.ptr),
-                                static_cast<size_t>(pageLen)),
-                    QPDFObjectHandle::newName("/JBIG2Decode"), parms);
+                QPDFObjectHandle replacement = encode(pdf, candidate, baseline);
+                if (replacement.isNull()) return;
                 if (!objectKey.empty()) replacements[objectKey] = replacement;
                 resources.replaceKey(key, replacement);
+                ++replaced;
             } catch (...) {
                 // A malformed image must not abort the structural pass.
+                return;
             }
         });
     }
+    return replaced;
+}
+
+// Re-encode 1-bit DeviceGray images as JBIG2 when the page and globals streams
+// together are smaller. Returns the number of streams actually replaced.
+int32_t encodeBilevelJbig2(QPDF& pdf) {
+    return forEachBilevelImage(
+        pdf, [](QPDF& pdf, BilevelImage const& image, size_t baseline) -> QPDFObjectHandle {
+            RustBuffer pageData;
+            RustBuffer globalsData;
+            int64_t pageLen = 0;
+            int64_t globalsLen = 0;
+            if (jpdfium_rust_encode_jbig2(image.decoded->getBuffer(),
+                                          static_cast<int64_t>(image.decoded->getSize()),
+                                          image.width, image.height, 0, &pageData.ptr, &pageLen,
+                                          &globalsData.ptr, &globalsLen) != 0 ||
+                pageData.ptr == nullptr || pageLen <= 0) {
+                return QPDFObjectHandle::newNull();
+            }
+            if (!bilevelSmallEnough(pageLen + globalsLen, baseline)) {
+                return QPDFObjectHandle::newNull();
+            }
+
+            auto replacement = pdf.newStream();
+            QPDFObjectHandle dictCopy = image.dict;
+            auto replacementDict = dictCopy.shallowCopy();
+            replacementDict.removeKey("/Filter");
+            replacementDict.removeKey("/DecodeParms");
+            replacement.replaceDict(replacementDict);
+            QPDFObjectHandle parms = QPDFObjectHandle::newNull();
+            if (globalsLen > 0) {
+                auto globalsStream = pdf.newStream();
+                globalsStream.replaceStreamData(
+                    std::string(reinterpret_cast<const char*>(globalsData.ptr),
+                                static_cast<size_t>(globalsLen)),
+                    QPDFObjectHandle::newNull(), QPDFObjectHandle::newNull());
+                auto globalsRef = pdf.makeIndirectObject(globalsStream);
+                parms = QPDFObjectHandle::newDictionary();
+                parms.replaceKey("/JBIG2Globals", globalsRef);
+            }
+            replacement.replaceStreamData(std::string(reinterpret_cast<const char*>(pageData.ptr),
+                                                      static_cast<size_t>(pageLen)),
+                                          QPDFObjectHandle::newName("/JBIG2Decode"), parms);
+            return replacement;
+        });
 }
 
 // Re-encode 1-bit DeviceGray images as CCITT G4 when the encoded stream is
-// smaller. Only the default (0=black, 1=white) decode is accepted; masks and
-// non-gray color spaces are left untouched so appearance cannot change.
-void encodeBilevelImages(QPDF& pdf) {
-    QPDFPageDocumentHelper helper{pdf};
-    std::map<std::string, QPDFObjectHandle> replacements;
-    std::set<std::string> attempted;
-    for (auto& page : helper.getAllPages()) {
-        page.forEachImage(true, [&pdf, &replacements, &attempted](QPDFObjectHandle& image,
-                                                                  QPDFObjectHandle& resources,
-                                                                  std::string const& key) {
-            try {
-                auto dict = image.getDict();
-                if (hasFilter(dict, "/JBIG2Decode") || hasFilter(dict, "/DCTDecode") ||
-                    hasFilter(dict, "/JPXDecode")) {
-                    return;
-                }
-                if (!dict.hasKey("/Width") || !dict.hasKey("/Height") ||
-                    !dict.hasKey("/BitsPerComponent")) {
-                    return;
-                }
-                if (dict.getKey("/BitsPerComponent").getIntValue() != 1) return;
-                if (dict.hasKey("/ImageMask") || dict.hasKey("/Mask") || dict.hasKey("/SMask")) {
-                    return;
-                }
-                if (!dict.hasKey("/ColorSpace") || !dict.getKey("/ColorSpace").isName() ||
-                    dict.getKey("/ColorSpace").getName() != "/DeviceGray") {
-                    return;
-                }
-                if (dict.hasKey("/Decode")) {
-                    auto decode = dict.getKey("/Decode");
-                    if (!decode.isArray() || decode.getArrayNItems() != 2 ||
-                        !decode.getArrayItem(0).isNumber() || !decode.getArrayItem(1).isNumber() ||
-                        decode.getArrayItem(0).getNumericValue() != 0 ||
-                        decode.getArrayItem(1).getNumericValue() != 1) {
-                        return;
-                    }
-                }
-                int64_t widthValue = dict.getKey("/Width").getIntValue();
-                int64_t heightValue = dict.getKey("/Height").getIntValue();
-                if (widthValue <= 0 || heightValue <= 0 || widthValue > 32768 ||
-                    heightValue > 32768 || widthValue * heightValue > kBilevelMaxPixels) {
-                    return;
-                }
-                int width = static_cast<int>(widthValue);
-                int height = static_cast<int>(heightValue);
-                std::string objectKey =
-                    image.isIndirect() ? image.getObjGen().unparse() : std::string();
-                if (!objectKey.empty()) {
-                    auto cached = replacements.find(objectKey);
-                    if (cached != replacements.end()) {
-                        resources.replaceKey(key, cached->second);
-                        return;
-                    }
-                    if (!attempted.insert(objectKey).second) return;
-                }
-                auto decoded = image.getStreamData(qpdf_dl_all);
-                if (!decoded) return;
-                size_t rowBytes = (static_cast<size_t>(width) + 7) / 8;
-                if (decoded->getSize() < rowBytes * static_cast<size_t>(height)) return;
-
-                RustBuffer out;
-                int64_t outLen = 0;
-                if (jpdfium_rust_encode_ccitt_g4(decoded->getBuffer(), decoded->getSize(), width,
-                                                 height, 0, &out.ptr, &outLen) != 0 ||
-                    out.ptr == nullptr || outLen <= 0) {
-                    return;
-                }
-                auto raw = image.getRawStreamData();
-                if (!raw) return;
-                size_t baseline = raw->getSize();
-                size_t flateSize = recompressedFlateSize(decoded.get());
-                if (flateSize > 0 && flateSize < baseline) baseline = flateSize;
-                if (!bilevelSmallEnough(outLen, baseline)) return;
-
-                auto replacement = pdf.newStream();
-                auto replacementDict = dict.shallowCopy();
-                replacementDict.removeKey("/Filter");
-                replacementDict.removeKey("/DecodeParms");
-                auto parms = QPDFObjectHandle::newDictionary();
-                parms.replaceKey("/K", QPDFObjectHandle::newInteger(-1));
-                parms.replaceKey("/Columns", QPDFObjectHandle::newInteger(width));
-                parms.replaceKey("/Rows", QPDFObjectHandle::newInteger(height));
-                parms.replaceKey("/BlackIs1", QPDFObjectHandle::newBool(false));
-                replacement.replaceDict(replacementDict);
-                replacement.replaceStreamData(std::string(reinterpret_cast<const char*>(out.ptr),
-                                                          static_cast<size_t>(outLen)),
-                                              QPDFObjectHandle::newName("/CCITTFaxDecode"), parms);
-                if (!objectKey.empty()) replacements[objectKey] = replacement;
-                resources.replaceKey(key, replacement);
-            } catch (...) {
-                // A malformed image must not abort the structural pass.
+// smaller. Returns the number of streams actually replaced.
+int32_t encodeBilevelImages(QPDF& pdf) {
+    return forEachBilevelImage(
+        pdf, [](QPDF& pdf, BilevelImage const& image, size_t baseline) -> QPDFObjectHandle {
+            RustBuffer out;
+            int64_t outLen = 0;
+            if (jpdfium_rust_encode_ccitt_g4(
+                    image.decoded->getBuffer(), static_cast<int64_t>(image.decoded->getSize()),
+                    image.width, image.height, 0, &out.ptr, &outLen) != 0 ||
+                out.ptr == nullptr || outLen <= 0) {
+                return QPDFObjectHandle::newNull();
             }
+            if (!bilevelSmallEnough(outLen, baseline)) return QPDFObjectHandle::newNull();
+
+            auto replacement = pdf.newStream();
+            QPDFObjectHandle dictCopy = image.dict;
+            auto replacementDict = dictCopy.shallowCopy();
+            replacementDict.removeKey("/Filter");
+            replacementDict.removeKey("/DecodeParms");
+            auto parms = QPDFObjectHandle::newDictionary();
+            parms.replaceKey("/K", QPDFObjectHandle::newInteger(-1));
+            parms.replaceKey("/Columns", QPDFObjectHandle::newInteger(image.width));
+            parms.replaceKey("/Rows", QPDFObjectHandle::newInteger(image.height));
+            parms.replaceKey("/BlackIs1", QPDFObjectHandle::newBool(false));
+            replacement.replaceDict(replacementDict);
+            replacement.replaceStreamData(
+                std::string(reinterpret_cast<const char*>(out.ptr), static_cast<size_t>(outLen)),
+                QPDFObjectHandle::newName("/CCITTFaxDecode"), parms);
+            return replacement;
         });
-    }
 }
 
-void applyDocumentOptions(QPDF& pdf, const OptimizeOptions& options) {
+int32_t applyDocumentOptions(QPDF& pdf, const OptimizeOptions& options) {
     if (options.flags & JPDFIUM_QPDF_QDF) {
         if (options.flags & JPDFIUM_QPDF_LINEARIZE) {
             throw std::runtime_error("QDF mode cannot be combined with linearization");
@@ -552,8 +524,12 @@ void applyDocumentOptions(QPDF& pdf, const OptimizeOptions& options) {
     if (options.flags & JPDFIUM_QPDF_OPTIMIZE_IMAGES) {
         optimizeImages(pdf, options.jpegQuality);
     }
+    // JBIG2 needs PDF 1.4, but only when it actually replaced a stream. Count
+    // JBIG2 replacements separately: a CCITT-only replacement must not bump the
+    // version just because both passes were requested.
+    int32_t jbig2Replaced = 0;
     if (options.flags & JPDFIUM_QPDF_JBIG2) {
-        encodeBilevelJbig2(pdf);
+        jbig2Replaced = encodeBilevelJbig2(pdf);
     }
     if (options.flags & JPDFIUM_QPDF_CCITT_G4) {
         encodeBilevelImages(pdf);
@@ -564,10 +540,11 @@ void applyDocumentOptions(QPDF& pdf, const OptimizeOptions& options) {
     if (options.flags & JPDFIUM_QPDF_REMOVE_UNREFERENCED_RESOURCES) {
         QPDFPageDocumentHelper{pdf}.removeUnreferencedResources();
     }
+    return jbig2Replaced;
 }
 
 // Shared writer setup; QDF defaults are applied before explicit flags.
-void configureWriter(QPDFWriter& w, const OptimizeOptions& options) {
+void configureWriter(QPDFWriter& w, const OptimizeOptions& options, int32_t jbig2Replaced = 0) {
     if (options.flags & JPDFIUM_QPDF_QDF) {
         w.setQDFMode(true);
         w.setPreserveEncryption(false);
@@ -577,7 +554,12 @@ void configureWriter(QPDFWriter& w, const OptimizeOptions& options) {
     if (options.flags & JPDFIUM_QPDF_COMPRESS_STREAMS) w.setCompressStreams(true);
     if (options.flags & JPDFIUM_QPDF_PRESERVE_UNREFERENCED) w.setPreserveUnreferencedObjects(true);
     if (options.flags & JPDFIUM_QPDF_NORMALIZE_CONTENT) w.setContentNormalization(true);
-    if (options.flags & JPDFIUM_QPDF_JBIG2) w.setMinimumPDFVersion("1.4");
+    // Only raise the floor when a JBIG2 stream was actually written. qpdf's
+    // minimum-version setter never lowers an already higher version, so a 1.7
+    // source stays 1.7.
+    if ((options.flags & JPDFIUM_QPDF_JBIG2) && jbig2Replaced > 0) {
+        w.setMinimumPDFVersion("1.4");
+    }
     if (options.objectStreamMode >= 0)
         w.setObjectStreamMode(static_cast<qpdf_object_stream_e>(options.objectStreamMode));
     if (options.streamDataMode >= 0)
@@ -602,7 +584,7 @@ int writeToFile(const std::shared_ptr<QPDF>& qpdf, const char* out_path,
                      options.compressionLevel);
         return -1;
     }
-    applyDocumentOptions(*qpdf, options);
+    int32_t jbig2Replaced = applyDocumentOptions(*qpdf, options);
     FILE* out = createOutputFile(out_path);
     if (!out) return -1;
     bool writerOwnsFile = false;
@@ -614,7 +596,7 @@ int writeToFile(const std::shared_ptr<QPDF>& qpdf, const char* out_path,
         // opts out explicitly because readable output cannot stay encrypted.
         w.setOutputFile("jpdfium-out", out, true);
         writerOwnsFile = true;
-        configureWriter(w, options);
+        configureWriter(w, options, jbig2Replaced);
         WriterLock lock{options.compressionLevel};
         w.write();
         return 0;
@@ -639,11 +621,11 @@ QpdfResult optimize(std::span<const uint8_t> input, const OptimizeOptions& optio
         auto qpdf = QPDF::create();
         qpdf->processMemoryFile("jpdfium-input", reinterpret_cast<const char*>(input.data()),
                                 input.size());
-        applyDocumentOptions(*qpdf, options);
+        int32_t jbig2Replaced = applyDocumentOptions(*qpdf, options);
 
         QPDFWriter w{*qpdf};
         w.setOutputMemory();
-        configureWriter(w, options);
+        configureWriter(w, options, jbig2Replaced);
         WriterLock lock{options.compressionLevel};
         w.write();
         return {w.getBufferSharedPointer(), ""};

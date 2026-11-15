@@ -25,6 +25,7 @@ import java.util.Random;
 import stirling.software.jpdfium.PdfDocument;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -72,28 +73,92 @@ class PdfImageEdgeAndReencodeTest {
         }
     }
 
-    private static void assertBilevelPolarity(BufferedImage rendered, String codec) {
-        int black = rendered.getRGB(400, 24) & 0x00FFFFFF;
-        int white = rendered.getRGB(400, 100) & 0x00FFFFFF;
-        assertTrue((black & 0xFF) < 64 && (white & 0xFF) > 192,
-                codec + " polarity changed: bar=" + Integer.toHexString(black)
-                        + " gap=" + Integer.toHexString(white));
+    // 1-bit page whose content is a repeated grid of near-identical glyph-like
+    // shapes. Each shape is a hollow box with one distinguishing pixel, so the
+    // set exercises the same near-identical-symbol case as 'c'/'e', '0'/'O'
+    // and '1'/'l' in a scanned page. The page is sized in points equal to the
+    // image's pixels, so a 72 DPI render is exactly 1:1.
+    private static BufferedImage glyphScanImage(int width, int height) {
+        BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_BYTE_BINARY);
+        Graphics2D graphics = image.createGraphics();
+        graphics.setColor(Color.WHITE);
+        graphics.fillRect(0, 0, width, height);
+        graphics.setColor(Color.BLACK);
+        // Horizontal rules give the page the long runs a scanned page has, so
+        // the bilevel encoders beat the Flate baseline; the glyphs sit in the
+        // white gaps at deterministic jittered offsets, which keeps Flate from
+        // collapsing the whole page into a periodic pattern.
+        for (int y = 20; y + 20 < height; y += 120) {
+            graphics.fillRect(20, y, width - 40, 20);
+        }
+        int i = 0;
+        int s = 2;
+        long jitter = 0x9E3779B97F4A7C15L;
+        // Sparse on purpose: the rules carry the compression win, while the
+        // glyphs only need to be present, distinct and exactly reproduced.
+        for (int oy = 48; oy + 10 * s < height; oy += 300) {
+            for (int ox = 24; ox + 10 * s < width; ox += 160) {
+                jitter = jitter * 6364136223846793005L + 1442695040888963407L;
+                int dx = (int) ((jitter >>> 33) % 4);
+                drawGlyph(graphics, ox + dx, oy, i++ % 6, s);
+            }
+        }
+        graphics.dispose();
+        return image;
     }
 
-    private static byte[] bitonalBarsPdf() throws Exception {
-        try (PDDocument doc = new PDDocument()) {
-            BufferedImage image = new BufferedImage(2480, 3508, BufferedImage.TYPE_BYTE_BINARY);
-            Graphics2D graphics = image.createGraphics();
-            graphics.setColor(Color.WHITE);
-            graphics.fillRect(0, 0, image.getWidth(), image.getHeight());
-            graphics.setColor(Color.BLACK);
-            for (int y = 20; y < image.getHeight(); y += 120) {
-                graphics.fillRect(20, y, image.getWidth() - 40, 20);
+    private static void drawGlyph(Graphics2D g, int ox, int oy, int kind, int s) {
+        // Hollow 8x10 box at scale s. Each variant differs from its neighbour
+        // by exactly one scaled pixel.
+        g.drawRect(ox + s, oy + s, 5 * s, 7 * s);
+        switch (kind) {
+            case 0 -> g.fillRect(ox + 2 * s, oy + 4 * s, 3 * s, s);   // 'e' crossbar
+            case 1 -> {
+                g.fillRect(ox + 2 * s, oy + 4 * s, 3 * s, s);
+                g.fillRect(ox + 4 * s, oy + 3 * s, s, s);
             }
-            graphics.dispose();
-            addImagePage(doc, LosslessFactory.createFromImage(doc, image), 2480, 3508);
+            case 2 -> g.fillRect(ox + 4 * s, oy + 2 * s, s, s);       // '0' dot
+            case 3 -> {
+                g.fillRect(ox + 4 * s, oy + 2 * s, s, s);
+                g.fillRect(ox + 4 * s, oy + 6 * s, s, s);
+            }
+            case 4 -> g.fillRect(ox + 2 * s, oy + 2 * s, s, 5 * s);   // 'l' stem
+            default -> g.fillRect(ox + 3 * s, oy + 8 * s, 2 * s, s);
+        }
+    }
+
+    private static byte[] bitonalGlyphsPdf(int width, int height) throws Exception {
+        try (PDDocument doc = new PDDocument()) {
+            addImagePage(doc, LosslessFactory.createFromImage(doc, glyphScanImage(width, height)),
+                    width, height);
             return save(doc);
         }
+    }
+
+    // Every pixel must match. A single differing pixel means the codec changed
+    // a glyph, which is exactly the failure mode a spot check hides.
+    private static void assertExactBilevel(BufferedImage rendered, BufferedImage expected,
+            String codec) {
+        assertEquals(expected.getWidth(), rendered.getWidth(), codec + " width");
+        assertEquals(expected.getHeight(), rendered.getHeight(), codec + " height");
+        int diffs = 0;
+        int firstX = -1;
+        int firstY = -1;
+        for (int y = 0; y < expected.getHeight(); y++) {
+            for (int x = 0; x < expected.getWidth(); x++) {
+                int a = expected.getRGB(x, y) & 0x00FFFFFF;
+                int b = rendered.getRGB(x, y) & 0x00FFFFFF;
+                if (a != b) {
+                    if (diffs == 0) {
+                        firstX = x;
+                        firstY = y;
+                    }
+                    diffs++;
+                }
+            }
+        }
+        assertEquals(0, diffs, codec + " changed " + diffs + " pixel(s), first at ("
+                + firstX + "," + firstY + ")");
     }
 
     private static byte[] formImagePdf(int width, int height) throws Exception {
@@ -161,6 +226,48 @@ class PdfImageEdgeAndReencodeTest {
                     "the DPI-only overload must not quality-reencode a below-threshold JPEG");
             assertEquals(0, PdfImageOptimizer.optimize(doc, 300, 60),
                     "the legacy three-argument overload keeps its downsampling-only behavior");
+        }
+    }
+
+    @Test
+    void presetsDoNotReencodeImagesBelowTheirThreshold() throws Exception {
+        byte[] jpeg = noisyJpegPdf(800, 800, 0.95f);
+        try (PdfDocument doc = PdfDocument.open(jpeg)) {
+            PdfCompressor.CompressResultWithBytes out = PdfCompressor.compress(doc,
+                    CompressOptions.builder()
+                            .preset(CompressPreset.WEB)
+                            .preservationMode(PreservationMode.DESTRUCTIVE)
+                            .build());
+            assertEquals(0, out.result().imagesOptimized(),
+                    "CompressPreset.WEB must not quality-reencode a below-threshold JPEG");
+        }
+
+        byte[] png = noisyPngPdf(800, 800);
+        try (PdfDocument doc = PdfDocument.open(png)) {
+            PdfCompressor.CompressResultWithBytes out = PdfCompressor.compress(doc,
+                    CompressOptions.builder()
+                            .preset(CompressPreset.WEB)
+                            .preservationMode(PreservationMode.DESTRUCTIVE)
+                            .build());
+            assertEquals(0, out.result().imagesOptimized(),
+                    "CompressPreset.WEB must not convert an unresized PNG to JPEG");
+            assertFalse(new String(out.bytes(), StandardCharsets.ISO_8859_1).contains("DCTDecode"),
+                    "an unresized PNG must keep its lossless stream");
+        }
+    }
+
+    @Test
+    void explicitQualityWithoutResizeThresholdStillReencodes() throws Exception {
+        byte[] jpeg = noisyJpegPdf(800, 800, 0.95f);
+        try (PdfDocument doc = PdfDocument.open(jpeg)) {
+            PdfCompressor.CompressResultWithBytes out = PdfCompressor.compress(doc,
+                    CompressOptions.builder()
+                            .maxImageDpi(-1)
+                            .imageQuality(45)
+                            .preservationMode(PreservationMode.DESTRUCTIVE)
+                            .build());
+            assertEquals(1, out.result().imagesOptimized(),
+                    "a quality-only request opts in to re-encoding");
         }
     }
 
@@ -327,7 +434,8 @@ class PdfImageEdgeAndReencodeTest {
 
     @Test
     void reencodesBilevelImagesAsCcittG4WhenSmaller() throws Exception {
-        byte[] input = bitonalBarsPdf();
+        BufferedImage expected = glyphScanImage(2480, 3508);
+        byte[] input = bitonalGlyphsPdf(2480, 3508);
         try (PdfDocument doc = PdfDocument.open(input)) {
             PdfCompressor.CompressResultWithBytes out = PdfCompressor.compress(doc,
                     CompressOptions.builder()
@@ -344,15 +452,15 @@ class PdfImageEdgeAndReencodeTest {
                     "bilevel stream must use CCITT G4");
             try (PdfDocument reopened = PdfDocument.open(out.bytes());
                  var page = reopened.page(0)) {
-                BufferedImage rendered = page.renderImage(72);
-                assertBilevelPolarity(rendered, "CCITT G4");
+                assertExactBilevel(page.renderImage(72), expected, "CCITT G4");
             }
         }
     }
 
     @Test
     void reencodesBilevelImagesAsJbig2WhenSmaller() throws Exception {
-        byte[] input = bitonalBarsPdf();
+        BufferedImage expected = glyphScanImage(2480, 3508);
+        byte[] input = bitonalGlyphsPdf(2480, 3508);
         try (PdfDocument doc = PdfDocument.open(input)) {
             PdfCompressor.CompressResultWithBytes out = PdfCompressor.compress(doc,
                     CompressOptions.builder()
@@ -368,8 +476,7 @@ class PdfImageEdgeAndReencodeTest {
                     "bilevel stream must use JBIG2 when it wins");
             try (PdfDocument reopened = PdfDocument.open(out.bytes());
                  var page = reopened.page(0)) {
-                BufferedImage rendered = page.renderImage(72);
-                assertBilevelPolarity(rendered, "JBIG2");
+                assertExactBilevel(page.renderImage(72), expected, "JBIG2");
             }
         }
     }

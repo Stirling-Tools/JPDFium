@@ -177,8 +177,10 @@ public final class PdfImageOptimizer {
     }
 
     /**
-     * Downsamples images above {@code maxImageDpi}; JPEG originals are re-encoded as JPEG at
-     * {@code jpegQuality} ({@code <= 0} keeps the flate path). Returns the number rewritten.
+     * Downsamples images above {@code maxImageDpi}. JPEG originals are re-encoded as JPEG at
+     * {@code jpegQuality} only when they are downsampled ({@code <= 0} keeps the flate path);
+     * lossy re-encoding without downsampling never happens on this overload. Returns the number
+     * rewritten.
      */
     public static int optimize(PdfDocument doc, int maxImageDpi, int jpegQuality) {
         return optimize(doc, maxImageDpi, jpegQuality, 0, false, false, false);
@@ -193,26 +195,46 @@ public final class PdfImageOptimizer {
      * @param maxImageEdgePx images whose longest edge exceeds this many pixels are downsampled
      *     regardless of DPI; {@code <= 0} disables it. This is the only usable size signal for
      *     comic pages laid out as 1 image pixel = 1 PDF point, which report 72 DPI everywhere.
-     * @param convertPngToJpeg re-encode 8-bit gray/RGB images that are not already JPEG
+     * @param convertPngToJpeg re-encode 8-bit gray/RGB images that are not already JPEG; this
+     *     overload only applies it to images that are downsampled
      * @return number of image objects rewritten
      */
     public static int optimize(PdfDocument doc, int maxImageDpi, int jpegQuality,
             int maxImageEdgePx, boolean convertPngToJpeg) {
-        return optimize(doc, maxImageDpi, jpegQuality, maxImageEdgePx, convertPngToJpeg, false, true);
+        return optimize(doc, maxImageDpi, jpegQuality, maxImageEdgePx, convertPngToJpeg, false,
+                false);
     }
 
     /**
-     * Full image pass with an explicit JPEG scan mode.
+     * Full image pass with an explicit JPEG scan mode. Quality-only re-encoding stays off: only
+     * images that are actually downsampled are rewritten.
      *
      * @param jpegProgressive write progressive JPEG instead of baseline
      */
     public static int optimize(PdfDocument doc, int maxImageDpi, int jpegQuality,
             int maxImageEdgePx, boolean convertPngToJpeg, boolean jpegProgressive) {
         return optimize(doc, maxImageDpi, jpegQuality, maxImageEdgePx, convertPngToJpeg,
-                jpegProgressive, true);
+                jpegProgressive, false);
     }
 
-    private static int optimize(PdfDocument doc, int maxImageDpi, int jpegQuality,
+    /**
+     * Full image pass with explicit control over quality-only re-encoding.
+     *
+     * <p>When {@code allowQualityOnly} is {@code false} an image that is at or below every resize
+     * threshold is left byte-for-byte untouched, even when {@code jpegQuality} is positive. Set it
+     * to {@code true} to also re-encode large enough JPEGs (and, with
+     * {@code convertPngToJpeg}, non-JPEG images) in place.
+     *
+     * @param allowQualityOnly permit lossy re-encoding without downsampling
+     */
+    public static int optimize(PdfDocument doc, int maxImageDpi, int jpegQuality,
+            int maxImageEdgePx, boolean convertPngToJpeg, boolean jpegProgressive,
+            boolean allowQualityOnly) {
+        return optimizeInternal(doc, maxImageDpi, jpegQuality, maxImageEdgePx, convertPngToJpeg,
+                jpegProgressive, allowQualityOnly);
+    }
+
+    private static int optimizeInternal(PdfDocument doc, int maxImageDpi, int jpegQuality,
             int maxImageEdgePx, boolean convertPngToJpeg, boolean jpegProgressive,
             boolean allowQualityOnly) {
         if (!isSupported()) return 0;
@@ -337,18 +359,30 @@ public final class PdfImageOptimizer {
         boolean wantJpeg = jpegQuality > 0 && (jpegOriginal || convertPngToJpeg);
         // Below the resize threshold a JPEG is only re-encoded when it is large enough
         // for the saving to matter; resized images always go through the encoder.
-        boolean reencode = wantJpeg
-                && (resize || (allowQualityOnly && rawLength >= MIN_REENCODE_BYTES));
-        if (!resize && !reencode) return false;
+        boolean qualityOnly = allowQualityOnly && rawLength >= MIN_REENCODE_BYTES;
+        if (!resize && !(wantJpeg && qualityOnly)) return false;
 
         // Skip anything that cannot round-trip safely through a PDFium bitmap:
         // 1-bit scans go blurry, and CMYK/ICC/Indexed/Separation/Lab would lose
         // their colour space. Only 8-bit DeviceGray/DeviceRGB are re-embedded.
         if (!roundTrippable(meta)) return false;
-        if (hasTransparency(imgObj)) return false;
 
         ImageSource src = readSource(rawDoc, rawPage, imgObj, meta);
         if (src == null || src.width() <= 0 || src.height() <= 0) return false;
+
+        // A PDFium bitmap is BGRA, so an opaque image built from one (for example
+        // PdfDocument.fromImage) carries an /SMask whose bytes are all 0xFF. That
+        // mask must not block downsampling or JPEG conversion: only pixels that
+        // are actually non-opaque make JPEG re-encoding unsafe.
+        // PDFium reports an /SMask for every BGRA bitmap, including the fully
+        // opaque one it builds from PdfDocument.fromImage(). Such an all-0xFF
+        // mask must not block downsampling or JPEG conversion. Anything we
+        // cannot prove fully opaque is left byte-for-byte untouched: neither a
+        // JPEG (which cannot carry alpha) nor a re-embedded bitmap is worth the
+        // risk of losing the mask.
+        if (hasTransparency(imgObj) && maskIsNonOpaque(rawDoc, rawPage, imgObj)) return false;
+        boolean reencode = wantJpeg && (resize || qualityOnly);
+        if (!resize && !reencode) return false;
 
         BufferedImage result = resize ? scale(src.image(), targetW, targetH) : src.image();
 
@@ -436,8 +470,9 @@ public final class PdfImageOptimizer {
         };
     }
 
-    // FPDFImageObj_HasTransparency covers SMask/alpha. Re-encoding such an image
-    // as an opaque JPEG would make formerly transparent pixels visible.
+    // FPDFImageObj_HasTransparency covers SMask/alpha. A true result is only a
+    // candidate signal: PDFium's BGRA bitmaps always report one, so the decoded
+    // pixels decide whether the mask is actually non-opaque.
     private static boolean hasTransparency(MemorySegment imgObj) {
         if (ImageObjBindings.FPDFImageObj_HasTransparency == null) return true;
         try {
@@ -446,6 +481,76 @@ public final class PdfImageOptimizer {
             NativeRuntime.rethrowFatal(t);
             return true;
         }
+    }
+
+    // Composites the image's /SMask through PDFium and reports whether any pixel
+    // is non-opaque. PDFium attaches a mask to every BGRA bitmap it creates, so
+    // the mask bytes, not the flag alone, decide whether this is real alpha.
+    // Anything that cannot be inspected is treated as transparent and skipped.
+    private static boolean maskIsNonOpaque(MemorySegment rawDoc, MemorySegment rawPage,
+                                           MemorySegment imgObj) {
+        MemorySegment bitmap = MemorySegment.NULL;
+        try {
+            bitmap = (MemorySegment) ImageObjBindings.FPDFImageObj_GetRenderedBitmap
+                    .invokeExact(rawDoc, rawPage, imgObj);
+            if (bitmap.equals(MemorySegment.NULL)) return true;
+            ImageSource rendered = bitmapToSource(bitmap);
+            return rendered == null || hasNonOpaqueAlpha(rendered.image(), 2);
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            return true;
+        } finally {
+            if (!bitmap.equals(MemorySegment.NULL)) {
+                try {
+                    PageEditBindings.FPDFBitmap_Destroy.invokeExact(bitmap);
+                } catch (Throwable t) {
+                    NativeRuntime.rethrowFatal(t);
+                }
+            }
+        }
+    }
+
+    // True only when the decoded image has an alpha channel with at least one
+    // pixel that is not fully opaque. An all-0xFF /SMask (PDFium's BGRA bitmaps
+    // always produce one) is treated as opaque, so downsampling and JPEG
+    // conversion still apply to those images.
+    private static boolean hasNonOpaqueAlpha(BufferedImage img) {
+        return hasNonOpaqueAlpha(img, 0);
+    }
+
+    // `inset` skips a border of that many pixels. A rendered bitmap anti-aliases
+    // its outermost pixels, so only the interior tells us whether the mask is
+    // genuinely non-opaque.
+    private static boolean hasNonOpaqueAlpha(BufferedImage img, int inset) {
+        if (img == null || !img.getColorModel().hasAlpha()) return false;
+        int width = img.getWidth();
+        int height = img.getHeight();
+        if (inset > 0) {
+            if (width <= 2 * inset || height <= 2 * inset) return true;
+            int[] px = img.getRGB(inset, inset, width - 2 * inset, height - 2 * inset,
+                    null, 0, width - 2 * inset);
+            for (int argb : px) {
+                if ((argb >>> 24) != 0xFF) return true;
+            }
+            return false;
+        }
+        if (img.getRaster().getDataBuffer() instanceof DataBufferInt dbi
+                && img.getRaster().getSampleModel() instanceof SinglePixelPackedSampleModel sp) {
+            int[] px = dbi.getData();
+            int rowStride = sp.getScanlineStride();
+            for (int y = 0; y < height; y++) {
+                int i = y * rowStride;
+                for (int x = 0; x < width; x++, i++) {
+                    if ((px[i] >>> 24) != 0xFF) return true;
+                }
+            }
+            return false;
+        }
+        int[] px = img.getRGB(0, 0, width, height, null, 0, width);
+        for (int argb : px) {
+            if ((argb >>> 24) != 0xFF) return true;
+        }
+        return false;
     }
 
     // Native-resolution pixels, in preference order: PDFium's own bitmap, the
@@ -735,6 +840,10 @@ public final class PdfImageOptimizer {
      */
     private static BufferedImage scaleWithRust(BufferedImage src, int width, int height) {
         if (!RustBridgeBindings.isSupported()) return null;
+        // The Rust kernel takes 3-channel RGB; scaling a genuinely transparent
+        // ARGB image through it would drop the alpha. Fall back to the Java
+        // bilinear path, which preserves it.
+        if (src.getType() == BufferedImage.TYPE_INT_ARGB && hasNonOpaqueAlpha(src)) return null;
         boolean gray = src.getType() == BufferedImage.TYPE_BYTE_GRAY;
         byte[] pixels = gray ? grayBytes(src) : rgbBytes(src);
         if (pixels == null) return null;
@@ -839,7 +948,9 @@ public final class PdfImageOptimizer {
         int width = img.getWidth();
         int height = img.getHeight();
 
-        MemorySegment bitmap = createBitmap(width, height, FPDF_BITMAP_BGRx);
+        boolean keepAlpha = img.getType() == BufferedImage.TYPE_INT_ARGB && hasNonOpaqueAlpha(img);
+        MemorySegment bitmap = createBitmap(width, height,
+                keepAlpha ? FPDF_BITMAP_BGRA : FPDF_BITMAP_BGRx);
         if (bitmap.equals(MemorySegment.NULL)) return false;
 
         try {
@@ -867,8 +978,10 @@ public final class PdfImageOptimizer {
                     && dbi.getData().length >= pixels) {
                 int[] px = dbi.getData();
                 int n = pixels;
-                // Opaque pad byte, as before.
-                for (int i = 0; i < n; i++) px[i] |= 0xFF000000;
+                // BGRx has an opaque pad byte; BGRA carries the real alpha.
+                if (fmt != FPDF_BITMAP_BGRA) {
+                    for (int i = 0; i < n; i++) px[i] |= 0xFF000000;
+                }
                 MemorySegment src = MemorySegment.ofArray(px);
                 for (int y = 0; y < height; y++) {
                     MemorySegment.copy(src, (long) y * width * 4, buf, (long) y * stride, (long) width * 4);
@@ -897,7 +1010,9 @@ public final class PdfImageOptimizer {
                     raw[o] = (byte) (argb & 0xFF);
                     raw[o + 1] = (byte) ((argb >> 8) & 0xFF);
                     raw[o + 2] = (byte) ((argb >> 16) & 0xFF);
-                    if (bpp == 4) raw[o + 3] = (byte) 0xFF;
+                    if (bpp == 4) {
+                        raw[o + 3] = (byte) (fmt == FPDF_BITMAP_BGRA ? (argb >>> 24) : 0xFF);
+                    }
                     o += bpp;
                 }
             }

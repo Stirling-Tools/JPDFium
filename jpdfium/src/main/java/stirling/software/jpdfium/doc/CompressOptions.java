@@ -24,6 +24,7 @@ public final class CompressOptions {
     private final int maxImageDpi;        // max DPI for downsampling, -1 = skip
     private final int maxImageEdgePx;     // longest image edge in pixels, 0 = skip
     private final boolean convertPngToJpeg;
+    private final boolean reencodeWithoutResize;
     private final boolean jpegProgressive;
     private final boolean ccittG4;
     private final boolean jbig2;
@@ -41,6 +42,7 @@ public final class CompressOptions {
         this.maxImageDpi = b.maxImageDpi;
         this.maxImageEdgePx = b.maxImageEdgePx;
         this.convertPngToJpeg = b.convertPngToJpeg;
+        this.reencodeWithoutResize = b.reencodeWithoutResize;
         this.jpegProgressive = b.jpegProgressive;
         this.ccittG4 = b.ccittG4;
         this.jbig2 = b.jbig2;
@@ -72,6 +74,16 @@ public final class CompressOptions {
      * when the JPEG is smaller than its current encoded stream.
      */
     public boolean convertPngToJpeg() { return convertPngToJpeg; }
+    /**
+     * Whether an image that is not downsampled may still be lossily re-encoded
+     * (JPEG quality-only re-encoding, and non-JPEG to JPEG conversion).
+     * <p>Defaults to {@code false}: existing callers that only set a DPI or edge
+     * threshold keep the historic downsampling-only behaviour and never degrade
+     * a below-threshold image. Enable this, or ask for a quality with no resize
+     * threshold at all ({@code maxImageDpi <= 0 && maxImageEdgePx <= 0}), to
+     * opt in.
+     */
+    public boolean reencodeWithoutResize() { return reencodeWithoutResize; }
     /**
      * Encode rewritten images as progressive JPEG. Saves a further 4-5% on
      * photographic scans; baseline remains the default for maximum reader
@@ -145,6 +157,7 @@ public final class CompressOptions {
         private int maxImageDpi = -1;
         private int maxImageEdgePx;
         private boolean convertPngToJpeg;
+        private boolean reencodeWithoutResize;
         private boolean jpegProgressive;
         private boolean ccittG4;
         private boolean jbig2;
@@ -179,13 +192,23 @@ public final class CompressOptions {
          */
         public Builder convertPngToJpeg(boolean v) { this.convertPngToJpeg = v; return this; }
         /**
+         * Allow lossy re-encoding of images that are not downsampled. Disabled
+         * by default so a DPI/edge threshold alone never degrades an image that
+         * is already below it. A quality-only request (no resize threshold at
+         * all) also opts in.
+         */
+        public Builder reencodeWithoutResize(boolean v) {
+            this.reencodeWithoutResize = v;
+            return this;
+        }
+        /**
          * Encode rewritten images as progressive JPEG. Requires
          * {@code imageQuality > 0}; baseline remains the default.
          */
         public Builder jpegProgressive(boolean v) { this.jpegProgressive = v; return this; }
-        /** Disable CCITT G4 re-encoding for bilevel images. */
+        /** Enable or disable CCITT G4 re-encoding for bilevel images (disabled by default). */
         public Builder ccittG4(boolean v) { this.ccittG4 = v; return this; }
-        /** Disable JBIG2 re-encoding for bilevel images. */
+        /** Enable or disable JBIG2 re-encoding for bilevel images (disabled by default). */
         public Builder jbig2(boolean v) { this.jbig2 = v; return this; }
         /** Generate object streams and cross-reference streams (qpdf). */
         public Builder optimizeStreams(boolean v) { this.optimizeStreams = v; return this; }

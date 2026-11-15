@@ -34,6 +34,8 @@ use zopfli::{compress as zopfli_compress, Format, Options};
 const JPDFIUM_OK: i32 = 0;
 const JPDFIUM_ERR_INVALID: i32 = -1;
 const JPDFIUM_ERR_GENERIC: i32 = -1;
+/// Native output allocation failed (matches jpdfium.h JPDFIUM_ERR_ALLOC).
+const JPDFIUM_ERR_ALLOC: i32 = -12;
 const JPDFIUM_REPAIR_FIXED: i32 = 1;
 const JPDFIUM_REPAIR_FAILED: i32 = -1;
 
@@ -125,7 +127,7 @@ pub unsafe extern "C" fn jpdfium_rust_compress_pdf(
         Ok(bytes) => {
             let ptr = malloc_copy(&bytes);
             if ptr.is_null() {
-                return JPDFIUM_ERR_GENERIC;
+                return JPDFIUM_ERR_ALLOC;
             }
             *out_ptr = ptr;
             *out_len = bytes.len() as i64;
@@ -292,7 +294,7 @@ pub unsafe extern "C" fn jpdfium_rust_resize_pixels(
         Ok(bytes) => {
             let ptr = malloc_copy(&bytes);
             if ptr.is_null() {
-                return JPDFIUM_ERR_GENERIC;
+                return JPDFIUM_ERR_ALLOC;
             }
             *out_ptr = ptr;
             *out_len = bytes.len() as i64;
@@ -476,7 +478,7 @@ pub unsafe extern "C" fn jpdfium_rust_compress_png(
         Ok(optimized) if optimized.len() < input_slice.len() => {
             let ptr = malloc_copy(&optimized);
             if ptr.is_null() {
-                return JPDFIUM_ERR_GENERIC;
+                return JPDFIUM_ERR_ALLOC;
             }
             *out_ptr = ptr;
             *out_len = optimized.len() as i64;
@@ -632,7 +634,14 @@ pub unsafe extern "C" fn jpdfium_rust_encode_jpeg_ex(
     // Contain a panic so it cannot unwind across the C ABI boundary.
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         encode_jpeg(
-            pixels, pixels_len, width, height, components, quality, progressive != 0, out_ptr,
+            pixels,
+            pixels_len,
+            width,
+            height,
+            components,
+            quality,
+            progressive != 0,
+            out_ptr,
             out_len,
         )
     }))
@@ -698,7 +707,7 @@ unsafe fn encode_jpeg(
 
     let ptr = malloc_copy(&buffer);
     if ptr.is_null() {
-        return JPDFIUM_ERR_GENERIC;
+        return JPDFIUM_ERR_ALLOC;
     }
     *out_ptr = ptr;
     *out_len = buffer.len() as i64;
@@ -735,14 +744,16 @@ pub unsafe extern "C" fn jpdfium_rust_svg_to_rgba(
     // Untrusted SVG: allow only inline data: images. The default string
     // resolver reads image files from the local filesystem, which would let a
     // crafted document embed host files into the raster.
-    let mut options = usvg::Options::default();
     // usvg's default font database is empty, so <text> in an SVG would parse
     // but rasterize with no fonts at all. Load the system fonts once (shared,
     // read-only) instead of per conversion.
-    options.fontdb = system_fontdb();
-    options.image_href_resolver = usvg::ImageHrefResolver {
-        resolve_data: usvg::ImageHrefResolver::default_data_resolver(),
-        resolve_string: Box::new(|_, _| None),
+    let options = usvg::Options {
+        fontdb: system_fontdb(),
+        image_href_resolver: usvg::ImageHrefResolver {
+            resolve_data: usvg::ImageHrefResolver::default_data_resolver(),
+            resolve_string: Box::new(|_, _| None),
+        },
+        ..usvg::Options::default()
     };
     let tree = match usvg::Tree::from_data(data, &options) {
         Ok(tree) => tree,
@@ -787,7 +798,7 @@ pub unsafe extern "C" fn jpdfium_rust_svg_to_rgba(
     let byte_len = (target_w as usize) * (target_h as usize) * 4;
     let ptr = libc::malloc(byte_len) as *mut u8;
     if ptr.is_null() {
-        return JPDFIUM_ERR_GENERIC;
+        return JPDFIUM_ERR_ALLOC;
     }
     std::ptr::write_bytes(ptr, 0, byte_len);
     let buf = slice::from_raw_parts_mut(ptr, byte_len);
@@ -804,7 +815,7 @@ pub unsafe extern "C" fn jpdfium_rust_svg_to_rgba(
         &mut pixmap,
     );
     // End the mutable borrow of `buf` before touching it again.
-    drop(pixmap);
+    let _ = pixmap;
 
     // tiny-skia stores premultiplied RGBA; the JVM and libvips want straight.
     for px in buf.chunks_exact_mut(4) {
@@ -868,7 +879,15 @@ pub unsafe extern "C" fn jpdfium_rust_encode_ccitt_g4(
     *out_ptr = std::ptr::null_mut();
     *out_len = 0;
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        encode_ccitt_g4(pixels, pixels_len, width, height, invert != 0, out_ptr, out_len)
+        encode_ccitt_g4(
+            pixels,
+            pixels_len,
+            width,
+            height,
+            invert != 0,
+            out_ptr,
+            out_len,
+        )
     }))
     .unwrap_or(JPDFIUM_ERR_GENERIC)
 }
@@ -908,7 +927,11 @@ unsafe fn encode_ccitt_g4(
         let line = (0..width as usize).map(|x| {
             let bit = (row[x / 8] >> (7 - (x % 8))) & 1;
             let white = if invert { bit == 0 } else { bit == 1 };
-            if white { fax::Color::White } else { fax::Color::Black }
+            if white {
+                fax::Color::White
+            } else {
+                fax::Color::Black
+            }
         });
         if encoder.encode_line(line, width as u32).is_err() {
             return JPDFIUM_ERR_GENERIC;
@@ -921,7 +944,7 @@ unsafe fn encode_ccitt_g4(
     let buffer = writer.finish();
     let ptr = malloc_copy(&buffer);
     if ptr.is_null() {
-        return JPDFIUM_ERR_GENERIC;
+        return JPDFIUM_ERR_ALLOC;
     }
     *out_ptr = ptr;
     *out_len = buffer.len() as i64;
@@ -957,8 +980,17 @@ pub unsafe extern "C" fn jpdfium_rust_encode_jbig2(
     *globals_out = std::ptr::null_mut();
     *globals_len = 0;
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        encode_jbig2(pixels, pixels_len, width, height, invert != 0, page_out, page_len,
-                     globals_out, globals_len)
+        encode_jbig2(
+            pixels,
+            pixels_len,
+            width,
+            height,
+            invert != 0,
+            page_out,
+            page_len,
+            globals_out,
+            globals_len,
+        )
     }))
     .unwrap_or(JPDFIUM_ERR_GENERIC)
 }
@@ -1003,16 +1035,20 @@ unsafe fn encode_jbig2(
             raster.push(if white { 0 } else { 1 });
         }
     }
-    let context = jbig2enc_rust::Jbig2Context::with_config(
-        jbig2enc_rust::Jbig2Config::text_lossless(), true);
+    let context =
+        jbig2enc_rust::Jbig2Context::with_config(jbig2enc_rust::Jbig2Config::text_lossless(), true);
     let encoded = match jbig2enc_rust::encode_single_image_with_config(
-        &raster, width as u32, height as u32, context) {
+        &raster,
+        width as u32,
+        height as u32,
+        context,
+    ) {
         Ok(encoded) => encoded,
         Err(_) => return JPDFIUM_ERR_GENERIC,
     };
     let page_ptr = malloc_copy(&encoded.page_data);
     if page_ptr.is_null() {
-        return JPDFIUM_ERR_GENERIC;
+        return JPDFIUM_ERR_ALLOC;
     }
     *page_out = page_ptr;
     *page_len = encoded.page_data.len() as i64;
@@ -1022,10 +1058,127 @@ unsafe fn encode_jbig2(
             libc::free(page_ptr as *mut libc::c_void);
             *page_out = std::ptr::null_mut();
             *page_len = 0;
-            return JPDFIUM_ERR_GENERIC;
+            return JPDFIUM_ERR_ALLOC;
         }
         *globals_out = globals_ptr;
         *globals_len = globals.len() as i64;
     }
     JPDFIUM_OK
+}
+
+#[cfg(test)]
+mod jbig2_roundtrip_tests {
+    use super::*;
+
+    /// Glyph-like 1-bit tile: 8x10 with one 1-pixel notch/gap difference from
+    /// its neighbours, so near-identical symbols ('c'/'e', '0'/'O', '1'/'l')
+    /// exercise the symbol dictionary's exact-match path.
+    fn glyph(kind: usize) -> [[bool; 8]; 10] {
+        let mut g = [[false; 8]; 10];
+        // Hollow box body shared by every glyph.
+        for row in g.iter_mut().take(9).skip(1) {
+            row[1] = true;
+            row[6] = true;
+        }
+        g[1][1..7].fill(true);
+        g[8][1..7].fill(true);
+        match kind {
+            0 => g[5][2] = true, // 'e' crossbar
+            1 => {
+                g[5][2] = true;
+                g[4][3] = true;
+            } // differs by one pixel
+            2 => g[2][4] = true, // '0' dot
+            3 => {
+                g[2][4] = true;
+                g[6][4] = true; // 'O' second dot
+            }
+            4 => g[3][2] = true, // 'l' stem
+            _ => {}
+        }
+        g
+    }
+
+    #[test]
+    fn near_identical_glyphs_round_trip_bit_exact() {
+        const W: usize = 60;
+        const H: usize = 40;
+        let row_bytes = W.div_ceil(8);
+        let mut packed = vec![0u8; row_bytes * H];
+
+        // Two rows of five glyphs each, all near-identical but distinct.
+        for i in 0..10 {
+            let g = glyph(i % 6);
+            let ox = 2 + (i % 5) * 11;
+            let oy = 3 + (i / 5) * 16;
+            for (y, row) in g.iter().enumerate() {
+                for (x, &black) in row.iter().enumerate() {
+                    if black {
+                        let px = ox + x;
+                        let py = oy + y;
+                        // A set bit means white in the PDF stream, so black is 0.
+                        packed[py * row_bytes + px / 8] &= !(0x80 >> (px % 8));
+                    } else {
+                        let px = ox + x;
+                        let py = oy + y;
+                        packed[py * row_bytes + px / 8] |= 0x80 >> (px % 8);
+                    }
+                }
+            }
+        }
+
+        let mut page_ptr: *mut u8 = std::ptr::null_mut();
+        let mut page_len: i64 = 0;
+        let mut globals_ptr: *mut u8 = std::ptr::null_mut();
+        let mut globals_len: i64 = 0;
+        let rc = unsafe {
+            encode_jbig2(
+                packed.as_ptr(),
+                packed.len() as i64,
+                W as i32,
+                H as i32,
+                false,
+                &mut page_ptr,
+                &mut page_len,
+                &mut globals_ptr,
+                &mut globals_len,
+            )
+        };
+        assert_eq!(rc, JPDFIUM_OK, "encode_jbig2 must succeed");
+        assert!(!page_ptr.is_null() && page_len > 0);
+
+        let page = unsafe { slice::from_raw_parts(page_ptr, page_len as usize) }.to_vec();
+        let globals = if globals_ptr.is_null() {
+            None
+        } else {
+            Some(unsafe { slice::from_raw_parts(globals_ptr, globals_len as usize) }.to_vec())
+        };
+        unsafe {
+            libc::free(page_ptr as *mut libc::c_void);
+            if !globals_ptr.is_null() {
+                libc::free(globals_ptr as *mut libc::c_void);
+            }
+        }
+
+        let decoded = jbig2enc_rust::decode::decode_embedded(
+            globals.as_deref(),
+            &page,
+            &jbig2enc_rust::decode::DecodeOptions::default(),
+        )
+        .expect("encoded JBIG2 must decode");
+        assert_eq!(decoded.width() as usize, W);
+        assert_eq!(decoded.height() as usize, H);
+
+        let decoded_bytes = decoded.as_msb_bytes().to_vec();
+        assert_eq!(decoded_bytes.len(), packed.len());
+        for y in 0..H {
+            for x in 0..W {
+                // The PDF stream stores 1 = white; the decoder's bitmap stores
+                // 1 = black, so the two are exact complements of each other.
+                let a = (packed[y * row_bytes + x / 8] >> (7 - (x % 8))) & 1;
+                let b = (decoded_bytes[y * row_bytes + x / 8] >> (7 - (x % 8))) & 1;
+                assert_eq!(1 - a, b, "pixel mismatch at ({x},{y})");
+            }
+        }
+    }
 }

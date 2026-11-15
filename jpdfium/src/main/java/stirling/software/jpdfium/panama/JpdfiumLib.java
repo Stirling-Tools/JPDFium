@@ -64,7 +64,7 @@ public final class JpdfiumLib {
     public static final int ERR_REDACT_UNVERIFIABLE =  -8;
     /** The native call modified content and then failed; the document no longer matches disk. */
     public static final int ERR_CONTENT_MUTATED    = -10;
-    public static final int ERR_ALLOC              = -11;
+    public static final int ERR_ALLOC              = -12;
 
     // Image placement positions (match JPDFIUM_POSITION_* constants and Position enum ordinals)
     public static final int POSITION_TOP_LEFT      = 0;
