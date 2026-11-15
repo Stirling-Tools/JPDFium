@@ -210,6 +210,7 @@ if(JPDFIUM_USE_PDFIUM)
         bridge/src/jpdfium_sanitize.cpp
         bridge/src/jpdfium_brotli.cpp
         bridge/src/jpdfium_pdfio.cpp
+        bridge/src/jpdfium_podofo.cpp
         bridge/src/jpdfium_lcms.cpp
         bridge/src/jpdfium_openjpeg.cpp
         bridge/src/jpdfium_signature.cpp)
@@ -297,6 +298,89 @@ if(JPDFIUM_USE_PDFIUM)
         target_include_directories(jpdfium PRIVATE "${TURBOJPEG_INCLUDE}")
         target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_TURBOJPEG=1)
         target_link_libraries(jpdfium PRIVATE "${TURBOJPEG_LIB}")
+    endif()
+
+    # Optional PDFio: independent XRef repair. The bridge already contains a
+    # stub; linking the real library turns the third-opinion fallback on.
+    set(PDFIO_ROOT "" CACHE PATH "Prefix containing the PDFio headers and libraries")
+    find_path(PDFIO_INCLUDE_DIR pdfio.h HINTS "${PDFIO_ROOT}/include"
+              /opt/homebrew/include /usr/local/include)
+    find_library(PDFIO_LIB NAMES pdfio HINTS "${PDFIO_ROOT}/lib"
+                 /opt/homebrew/lib /usr/local/lib)
+    find_library(PDFIO_TTF_LIB NAMES ttf HINTS "${PDFIO_ROOT}/lib" "${PDFIO_ROOT}/ttf"
+                 /opt/homebrew/lib /usr/local/lib)
+    find_library(PDFIO_PNG_LIB NAMES png16 png HINTS /opt/homebrew/lib /usr/local/lib)
+    find_library(PDFIO_WEBP_LIB NAMES webp HINTS /opt/homebrew/lib /usr/local/lib)
+    find_library(PDFIO_Z_LIB NAMES z HINTS /opt/homebrew/lib /usr/local/lib)
+    if(NOT WIN32 AND PDFIO_INCLUDE_DIR AND PDFIO_LIB AND PDFIO_TTF_LIB AND PDFIO_PNG_LIB
+       AND PDFIO_WEBP_LIB AND PDFIO_Z_LIB)
+        target_include_directories(jpdfium PRIVATE "${PDFIO_INCLUDE_DIR}")
+        target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_PDFIO=1)
+        target_link_libraries(jpdfium PRIVATE "${PDFIO_LIB}" "${PDFIO_TTF_LIB}"
+                              "${PDFIO_PNG_LIB}" "${PDFIO_WEBP_LIB}" "${PDFIO_Z_LIB}")
+        message(STATUS "PDFio enabled: ${PDFIO_LIB}")
+    else()
+        message(STATUS "PDFio not found; repair bridge reports unavailable")
+    endif()
+
+    # PoDoFo is a normal dependency: font-program replacement, conservative
+    # repair and duplicate-image removal are part of the native surface.
+    option(JPDFIUM_USE_SYSTEM_PODOFO
+        "Use an installed PoDoFo instead of the bundled static build" OFF)
+    if(JPDFIUM_USE_SYSTEM_PODOFO)
+        find_package(podofo CONFIG QUIET)
+    endif()
+    if(NOT podofo_FOUND)
+        include(FetchContent)
+        FetchContent_Declare(podofo
+            URL https://github.com/podofo/podofo/archive/refs/tags/1.1.2.tar.gz
+            DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+        set(PODOFO_BUILD_STATIC ON CACHE BOOL "" FORCE)
+        set(PODOFO_BUILD_TEST OFF CACHE BOOL "" FORCE)
+        set(PODOFO_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+        set(PODOFO_BUILD_UNSUPPORTED_TOOLS OFF CACHE BOOL "" FORCE)
+        set(PODOFO_WITH_FONTMANAGER OFF CACHE BOOL "" FORCE)
+        set(PODOFO_WITH_AFDKO OFF CACHE BOOL "" FORCE)
+        # JPDFium only needs the object model, stream replacement and image
+        # resource traversal. Do not pull optional image codecs into the
+        # static archive; they are not used by those paths.
+        set(CMAKE_DISABLE_FIND_PACKAGE_JPEG ON CACHE BOOL "" FORCE)
+        set(CMAKE_DISABLE_FIND_PACKAGE_TIFF ON CACHE BOOL "" FORCE)
+        set(CMAKE_DISABLE_FIND_PACKAGE_PNG ON CACHE BOOL "" FORCE)
+        FetchContent_MakeAvailable(podofo)
+        set(CMAKE_DISABLE_FIND_PACKAGE_JPEG OFF CACHE BOOL "" FORCE)
+        set(CMAKE_DISABLE_FIND_PACKAGE_TIFF OFF CACHE BOOL "" FORCE)
+        set(CMAKE_DISABLE_FIND_PACKAGE_PNG OFF CACHE BOOL "" FORCE)
+    endif()
+    # PoDoFo 1.1.2 does not build with the project's global -Werror flags.
+    # Its own warnings are not JPDFium's warnings; compile the third-party
+    # targets without promoting them to errors.
+    foreach(podofo_target podofo_static podofo_shared podofo_private podofo_3rdparty)
+        if(TARGET ${podofo_target})
+            if(MSVC)
+                target_compile_options(${podofo_target} PRIVATE /w)
+            else()
+                target_compile_options(${podofo_target} PRIVATE -w)
+            endif()
+        endif()
+    endforeach()
+    target_link_libraries(jpdfium PRIVATE podofo::podofo)
+    if(NOT podofo_FOUND)
+        # PoDoFo 1.1.2 exposes its generated configuration header through
+        # directory-scoped include_directories; imported FetchContent targets
+        # do not propagate those to jpdfium.
+        target_include_directories(jpdfium SYSTEM PRIVATE
+            "${podofo_SOURCE_DIR}/src"
+            "${podofo_BINARY_DIR}/src/podofo/podofo/auxiliary"
+            "${podofo_BINARY_DIR}/src/podofo/podofo/private"
+            "${podofo_SOURCE_DIR}/3rdparty/adobe"
+            "${podofo_SOURCE_DIR}/3rdparty/chromium")
+    endif()
+    target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_PODOFO=1)
+    if(podofo_FOUND)
+        message(STATUS "PoDoFo enabled: ${podofo_VERSION}")
+    else()
+        message(STATUS "PoDoFo enabled: FetchContent 1.1.2")
     endif()
 
     find_program(CARGO_CMD cargo)

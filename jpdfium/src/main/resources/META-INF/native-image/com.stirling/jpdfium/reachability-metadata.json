@@ -246,6 +246,18 @@
     "downcalls": [
       {
         "returnType": "jint",
+        "parameterTypes": ["void*", "jlong", "jint", "void*", "jint", "jint", "jint", "void*", "void*", "void*", "jint"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["void*", "void*", "jint", "void*", "jint", "jint", "jint", "void*", "jint"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["void*", "jlong", "jint", "void*", "void*", "void*", "jint", "void*", "void*"]
+      },
+      {
+        "returnType": "jint",
         "parameterTypes": [
           "void*",
           "void*",
@@ -2024,11 +2036,9 @@
         "parameterTypes": [
           "void*",
           "jlong",
-          "jint",
           "void*",
           "void*",
-          "void*",
-          "jint",
+          "jlong",
           "void*",
           "void*"
         ]
@@ -2038,29 +2048,12 @@
         "parameterTypes": [
           "void*",
           "jlong",
+          "jlong",
           "jint",
           "void*",
-          "jint",
-          "jint",
-          "jint",
+          "jlong",
           "void*",
-          "void*",
-          "void*",
-          "jint"
-        ]
-      },
-      {
-        "returnType": "jint",
-        "parameterTypes": [
-          "void*",
-          "void*",
-          "jint",
-          "void*",
-          "jint",
-          "jint",
-          "jint",
-          "void*",
-          "jint"
+          "void*"
         ]
       }
     ],

@@ -2,6 +2,7 @@ package stirling.software.jpdfium.doc;
 
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.panama.NativeRuntime;
+import stirling.software.jpdfium.panama.PodofoLib;
 import stirling.software.jpdfium.panama.RustBridgeBindings;
 
 import java.awt.image.BufferedImage;
@@ -418,6 +419,18 @@ public final class PdfCompressor {
 
         // 7. Monotonic guarantee: never return more than the live document. Fall back
         //    to the in-memory snapshot, never the open-time bytes, so an edit survives.
+        if (opts.usePodofoImageDedup()) {
+            if (PodofoLib.isAvailable()) {
+                byte[] deduped = PodofoLib.dedupImages(resultBytes);
+                if (deduped != null && deduped.length < resultBytes.length) {
+                    resultBytes = deduped;
+                    actions.add("PoDoFo duplicate-image removal");
+                }
+            } else {
+                warnings.add("PoDoFo duplicate-image removal requested but unavailable");
+            }
+        }
+
         if (resultBytes.length > originalSize) {
             if (resultBytes.length > openStateBytes.length) {
                 resultBytes = openStateBytes;
