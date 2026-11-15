@@ -329,21 +329,38 @@ public final class PdfFontAuditor {
      * AcroForm {@code /DR}. Falls back to the page audit when resource inventory is unavailable.
      */
     static List<String> unembeddedNames(byte[] pdf) {
+        Set<String> names = new LinkedHashSet<>();
+        for (FontResource resource : unembeddedResources(pdf)) names.add(resource.baseName());
+        return List.copyOf(names);
+    }
+
+    /**
+     * Non-embedded font resources, one entry per resource, or one synthetic entry per page font
+     * when the native inventory is unavailable.
+     */
+    static List<FontResource> unembeddedResources(byte[] pdf) {
         if (QpdfLib.isFontInventorySupported()) {
             String json = QpdfLib.inspectFonts(pdf);
             if (json != null) {
-                Set<String> names = new LinkedHashSet<>();
-                for (FontResource resource : parseInventory(json)) {
-                    if (resource.baseName().isEmpty() || resource.embedded()
-                            || "Type3".equals(resource.subtype())) continue;
-                    names.add(resource.baseName());
+                List<FontResource> all = parseInventory(json);
+                if (!all.isEmpty()) {
+                    List<FontResource> resources = new ArrayList<>();
+                    for (FontResource resource : all) {
+                        if (resource.baseName().isEmpty() || resource.embedded()
+                                || "Type3".equals(resource.subtype())) continue;
+                        resources.add(resource);
+                    }
+                    return resources;
                 }
-                return List.copyOf(names);
             }
         }
         try (PdfDocument doc = PdfDocument.open(pdf)) {
-            return audit(doc).nonEmbeddedFonts().stream()
-                    .map(FontInfo::baseName).distinct().toList();
+            List<FontResource> resources = new ArrayList<>();
+            for (FontInfo font : audit(doc).nonEmbeddedFonts()) {
+                resources.add(new FontResource(
+                        font.baseName(), "", "", false, false, false, false, "", Set.of(), ""));
+            }
+            return resources;
         } catch (Exception e) {
             throw e instanceof JPDFiumException jpe ? jpe : new JPDFiumException(e);
         }
