@@ -1,6 +1,7 @@
 // jpdfium_color.cpp - DeviceCMYK pipeline: CMYK JPEG images and OutputIntent ICC.
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -146,14 +147,14 @@ void RgbToCmykLut(const uint8_t* lut, int32_t grid, uint8_t r, uint8_t g, uint8_
         const float v0 = v00 + (v10 - v00) * dg;
         const float v1 = v01 + (v11 - v01) * dg;
         const float value = v0 + (v1 - v0) * db;
-        out[c] = static_cast<uint8_t>(std::clamp(static_cast<int32_t>(value + 0.5f), 0, 255));
+        out[c] = static_cast<uint8_t>(std::clamp(std::lround(value), 0L, 255L));
     }
 }
 
 // Reusable buffers for one image-conversion pass. The image pass can see many
 // XObjects; resizing vectors would zero-fill and reallocating would churn the
 // allocator. Grow only when an image is larger than the previous one.
-constexpr size_t kMaxRetainedScratchBytes = 4u * 1024u * 1024u;
+constexpr size_t kMaxRetainedScratchBytes = size_t{4} * 1024 * 1024;
 
 struct ImageScratch {
     std::unique_ptr<uint8_t[]> samples;
@@ -336,10 +337,10 @@ bool ImageUsesDct(FPDF_PAGEOBJECT obj) {
 }
 
 struct PendingImage {
-    FPDF_PAGE page;
-    FPDF_PAGEOBJECT object;
-    uint8_t* jpeg;
-    int64_t length;
+    FPDF_PAGE page = nullptr;
+    FPDF_PAGEOBJECT object = nullptr;
+    uint8_t* jpeg = nullptr;
+    int64_t length = 0;
 };
 
 // Returns 1 when the image was converted, 0 when it was skipped, -1 on failure.
@@ -484,7 +485,7 @@ int32_t IccComponentCount(const uint8_t* icc, size_t len) {
     const uint32_t tag_count = ReadUint32Be(icc + 128);
     if (tag_count == 0 || tag_count > (declared - 132) / 12) return 0;
     for (uint32_t i = 0; i < tag_count; ++i) {
-        const uint8_t* entry = icc + 132 + i * 12;
+        const uint8_t* entry = icc + 132 + static_cast<size_t>(i) * 12;
         const uint32_t offset = ReadUint32Be(entry + 4);
         const uint32_t size = ReadUint32Be(entry + 8);
         if (size == 0 || offset < 132 || offset > declared || size > declared - offset) {
@@ -523,17 +524,21 @@ void ConfigureWriter(QPDFWriter& writer) {
     writer.setDecodeLevel(qpdf_dl_none);
 }
 
-// PDF/X fixes the base PDF version: X-4 is PDF 1.6 and X-3 is PDF 1.3.
-// Force the header instead of only raising it, so a PDF 1.7 source does not
-// claim a version the selected standard does not allow.
+// PDF/X fixes the base PDF version: X-1a and X-3 are PDF 1.3 (no object/xref streams),
+// X-4 is PDF 1.6, and X-6 is PDF 2.0. Force the header instead of only raising it, so
+// a PDF 1.7 source does not claim a version the selected standard does not allow.
 void ConfigurePdfxWriter(QPDFWriter& writer, const char* version) {
     ConfigureWriter(writer);
     if (!version) return;
     const std::string value(version);
     if (value.find("PDF/X-4") != std::string::npos) {
         writer.forcePDFVersion("1.6");
-    } else if (value.find("PDF/X-3") != std::string::npos) {
+    } else if (value.find("PDF/X-6") != std::string::npos) {
+        writer.forcePDFVersion("2.0");
+    } else if (value.find("PDF/X-3") != std::string::npos ||
+               value.find("PDF/X-1") != std::string::npos) {
         writer.forcePDFVersion("1.3");
+        writer.setObjectStreamMode(qpdf_o_disable);
     }
 }
 
@@ -575,7 +580,7 @@ QPDFObjectHandle MergeOutputIntents(QPDF* qpdf, const uint8_t* icc, size_t icc_l
     QPDFObjectHandle merged = QPDFObjectHandle::newArray();
     QPDFObjectHandle existing = qpdf->getRoot().getKey("/OutputIntents");
     if (existing.isArray()) {
-        for (QPDFObjectHandle item : existing.getArrayAsVector()) {
+        for (const QPDFObjectHandle& item : existing.getArrayAsVector()) {
             bool replace = false;
             if (item.isDictionary()) {
                 QPDFObjectHandle s = item.getKey("/S");
@@ -720,7 +725,7 @@ std::string BuildPdfxXmp(const std::string& version, const std::string& conforma
 // XMP packets are edited as XML, never with libstdc++'s backtracking regex
 // engine: a multi-megabyte hostile packet could otherwise overflow the stack.
 // Packets above the cap are replaced with a minimal valid PDF/X packet.
-constexpr size_t kMaxXmpBytes = 8u * 1024u * 1024u;
+constexpr size_t kMaxXmpBytes = size_t{8} * 1024 * 1024;
 constexpr int kMaxXmpDepth = 64;
 constexpr const char* kRdfNs = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 constexpr const char* kPdfxNs = "http://ns.adobe.com/pdfx/1.3/";
@@ -963,6 +968,9 @@ bool EditPdfxXml(pugi::xml_document* document, const std::string& version,
         }
     }
     if (!title.empty()) {
+        for (size_t i = 1; i < descriptions.size(); ++i) {
+            XmlRemoveProperty(descriptions[i], "title", kDcNs, {});
+        }
         const std::string dc_prefix = XmlEnsurePrefix(first, kDcNs, "dc");
         pugi::xml_node title_node = first.child((dc_prefix + ":title").c_str());
         if (!title_node) title_node = first.append_child((dc_prefix + ":title").c_str());
@@ -980,29 +988,52 @@ bool EditPdfxXml(pugi::xml_document* document, const std::string& version,
 }
 #endif
 
-// Convert a PDF date (D:YYYYMMDDHHmmSS[Z|+HH'mm'|-HH'mm']) to the ISO 8601
-// form XMP requires. Returns an empty string when the value cannot be parsed.
+// Convert a PDF date (D:YYYY[MM[DD[HH[mm[SS]]]]][Z|+HH'mm'|-HH'mm']) per
+// ISO 32000-1 §7.9.4 to the ISO 8601 form XMP requires. Returns empty if invalid.
 std::string PdfDateToXmp(const std::string& pdf) {
+    // Optional "D:" prefix per ISO 32000-1 §7.9.4; require at least a 4-digit year.
     size_t pos = 0;
     if (pdf.size() >= 2 && pdf[0] == 'D' && pdf[1] == ':') pos = 2;
-    if (pdf.size() - pos < 14) return {};
-
     auto digit = [&](size_t at) { return at < pdf.size() && pdf[at] >= '0' && pdf[at] <= '9'; };
-    for (size_t i = pos; i < pos + 14; ++i) {
+    if (pdf.size() - pos < 4) return {};
+    for (size_t i = pos; i < pos + 4; ++i) {
         if (!digit(i)) return {};
     }
-    auto number = [&](size_t off, size_t len) {
-        int value = 0;
-        for (size_t i = 0; i < len; ++i) value = value * 10 + (pdf[pos + off + i] - '0');
-        return value;
-    };
+    auto parse2 = [&](size_t at) { return (pdf[at] - '0') * 10 + (pdf[at + 1] - '0'); };
+    const int year = (pdf[pos] - '0') * 1000 + (pdf[pos + 1] - '0') * 100 +
+                     (pdf[pos + 2] - '0') * 10 + (pdf[pos + 3] - '0');
+    size_t cur = pos + 4;
 
-    const int year = number(0, 4);
-    const int month = number(4, 2);
-    const int day = number(6, 2);
-    const int hour = number(8, 2);
-    const int minute = number(10, 2);
-    const int second = number(12, 2);
+    // Missing trailing fields default per ISO 32000-1 §7.9.4 / XMP date conventions.
+    int month = 1;
+    int day = 1;
+    int hour = 0;
+    int minute = 0;
+    int second = 0;
+    if (digit(cur) && digit(cur + 1)) {
+        month = parse2(cur);
+        cur += 2;
+        if (digit(cur) && digit(cur + 1)) {
+            day = parse2(cur);
+            cur += 2;
+            if (digit(cur) && digit(cur + 1)) {
+                hour = parse2(cur);
+                cur += 2;
+                if (digit(cur) && digit(cur + 1)) {
+                    minute = parse2(cur);
+                    cur += 2;
+                    if (digit(cur) && digit(cur + 1)) {
+                        second = parse2(cur);
+                        cur += 2;
+                    }
+                }
+            }
+        }
+    }
+    // Reject dangling odd digit before end or timezone indicator.
+    if (cur < pdf.size() && digit(cur)) return {};
+
+    // Validate Gregorian month-day bounds before formatting XMP ISO 8601 output.
     const bool leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
     int monthDays = 31;
     if (month == 2) {
@@ -1020,33 +1051,42 @@ std::string PdfDateToXmp(const std::string& pdf) {
                   second);
     std::string out(buf);
 
-    size_t tz = pos + 14;
+    size_t tz = cur;
     if (tz == pdf.size()) return out;
-    if (pdf[tz] == 'Z' && tz + 1 == pdf.size()) {
-        out.push_back('Z');
-        return out;
+    if (pdf[tz] == 'Z') {
+        if (tz + 1 == pdf.size()) {
+            out.push_back('Z');
+            return out;
+        }
+        if (tz + 7 == pdf.size() && pdf.compare(tz, 7, "Z00'00'") == 0) {
+            out.push_back('Z');
+            return out;
+        }
+        return {};
     }
     if ((pdf[tz] != '+' && pdf[tz] != '-') || tz + 1 >= pdf.size()) return {};
 
     const char sign = pdf[tz];
-    size_t cur = tz + 1;
-    if (!digit(cur) || !digit(cur + 1)) return {};
-    const int tz_hour = (pdf[cur] - '0') * 10 + (pdf[cur + 1] - '0');
-    cur += 2;
+    size_t tzCur = tz + 1;
+    if (!digit(tzCur) || !digit(tzCur + 1)) return {};
+    const int tz_hour = parse2(tzCur);
+    tzCur += 2;
 
     int tz_minute = 0;
-    if (cur < pdf.size()) {
-        if (pdf[cur] == '\'' || pdf[cur] == ':') {
-            ++cur;
-        } else if (!digit(cur)) {
+    if (tzCur < pdf.size()) {
+        if (pdf[tzCur] == '\'' || pdf[tzCur] == ':') {
+            ++tzCur;
+        } else if (!digit(tzCur)) {
             return {};
         }
-        if (!digit(cur) || !digit(cur + 1)) return {};
-        tz_minute = (pdf[cur] - '0') * 10 + (pdf[cur + 1] - '0');
-        cur += 2;
-        if (cur < pdf.size() && pdf[cur] == '\'') ++cur;
+        if (tzCur < pdf.size()) {
+            if (!digit(tzCur) || !digit(tzCur + 1)) return {};
+            tz_minute = parse2(tzCur);
+            tzCur += 2;
+            if (tzCur < pdf.size() && pdf[tzCur] == '\'') ++tzCur;
+        }
     }
-    if (cur != pdf.size() || tz_hour > 23 || tz_minute > 59) return {};
+    if (tzCur != pdf.size() || tz_hour > 23 || tz_minute > 59) return {};
 
     std::snprintf(buf, sizeof(buf), "%c%02d:%02d", sign, tz_hour, tz_minute);
     out += buf;
@@ -1064,21 +1104,25 @@ void UpdateOrCreatePdfxMetadata(QPDF* qpdf, const char* version, const char* con
     std::string create_date;
     QPDFObjectHandle info_dict = qpdf->getTrailer().getKey("/Info");
     if (info_dict.isDictionary()) {
-        if (info_dict.hasKey("/Title")) {
-            title = info_dict.getKey("/Title").getUTF8Value();
+        QPDFObjectHandle title_obj = info_dict.getKey("/Title");
+        if (title_obj.isString()) {
+            title = title_obj.getUTF8Value();
         }
-        if (info_dict.hasKey("/Trapped")) {
-            std::string tr = info_dict.getKey("/Trapped").getName();
+        QPDFObjectHandle trapped_obj = info_dict.getKey("/Trapped");
+        if (trapped_obj.isName()) {
+            std::string tr = trapped_obj.getName();
             if (tr == "/True")
                 trapped = "True";
             else if (tr == "/False")
                 trapped = "False";
         }
-        if (info_dict.hasKey("/ModDate")) {
-            mod_date = PdfDateToXmp(info_dict.getKey("/ModDate").getUTF8Value());
+        QPDFObjectHandle mod_obj = info_dict.getKey("/ModDate");
+        if (mod_obj.isString()) {
+            mod_date = PdfDateToXmp(mod_obj.getUTF8Value());
         }
-        if (info_dict.hasKey("/CreationDate")) {
-            create_date = PdfDateToXmp(info_dict.getKey("/CreationDate").getUTF8Value());
+        QPDFObjectHandle create_obj = info_dict.getKey("/CreationDate");
+        if (create_obj.isString()) {
+            create_date = PdfDateToXmp(create_obj.getUTF8Value());
         }
     }
     char now[32];
@@ -1177,6 +1221,7 @@ std::shared_ptr<Buffer> InjectPdfx(const uint8_t* input, size_t input_len, const
         "/OutputIntents",
         MergeOutputIntents(qpdf.get(), icc, icc_len, "GTS_PDFX", condition_identifier, info));
     UpdateOrCreatePdfxMetadata(qpdf.get(), version, conformance);
+    if (version && *version) qpdf->getRoot().removeKey("/Version");
 
     QPDFWriter writer{*qpdf};
     ConfigurePdfxWriter(writer, version);
@@ -1344,7 +1389,8 @@ JPDFIUM_EXPORT int32_t jpdfium_color_document_images_to_cmyk_ex(int64_t doc_hand
             return failure;
         }
 
-        std::unordered_set<FPDF_PAGE> changed_pages;
+        std::unordered_set<FPDF_PAGE> seen_pages;
+        std::vector<FPDF_PAGE> changed_pages;
         for (PendingImage& image : pending) {
             FPDF_PAGE page = image.page;
             if (!EPDFImageObj_SetJpeg(&page, 1, image.object, image.jpeg,
@@ -1354,7 +1400,9 @@ JPDFIUM_EXPORT int32_t jpdfium_color_document_images_to_cmyk_ex(int64_t doc_hand
             }
             std::free(image.jpeg);
             image.jpeg = nullptr;
-            changed_pages.insert(image.page);
+            if (seen_pages.insert(image.page).second) {
+                changed_pages.push_back(image.page);
+            }
         }
         for (FPDF_PAGE page : changed_pages) {
             if (!FPDFPage_GenerateContent(page)) return JPDFIUM_ERR_NATIVE;
@@ -1537,6 +1585,7 @@ JPDFIUM_EXPORT int32_t jpdfium_color_pdfx_file(const char* in_path, const char* 
                                    MergeOutputIntents(qpdf.get(), icc, static_cast<size_t>(icc_len),
                                                       "GTS_PDFX", condition_identifier, info));
         UpdateOrCreatePdfxMetadata(qpdf.get(), version, conformance);
+        if (version && *version) qpdf->getRoot().removeKey("/Version");
         std::string error;
         const bool published = WriteAndPublish(
             out_path,

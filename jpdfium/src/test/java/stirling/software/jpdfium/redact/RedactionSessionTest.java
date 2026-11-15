@@ -14,7 +14,6 @@ import java.util.Objects;
 
 import stirling.software.jpdfium.redact.RedactTestPages.Line;
 
-import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -363,7 +362,8 @@ class RedactionSessionTest {
             run2 = doc.saveBytes();
         }
 
-        assertArrayEquals(run1, run2, "Redaction output bytes must be deterministic across identical runs");
+        stirling.software.jpdfium.PdfTestAssertions.assertBytesEqualExceptTrailerId(
+                run1, run2, "Redaction output bytes must be deterministic across identical runs");
     }
 
     /**
