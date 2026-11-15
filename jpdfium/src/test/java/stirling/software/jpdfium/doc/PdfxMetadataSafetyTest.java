@@ -16,6 +16,7 @@ import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
@@ -255,6 +256,83 @@ class PdfxMetadataSafetyTest {
             String xmp = new String(metadata.exportXMPMetadata().readAllBytes(), StandardCharsets.UTF_8);
             assertTrue(xmp.contains("GTS_PDFXVersion"), "version metadata missing");
             assertTrue(xmp.contains(PdfXStandard.PDF_X_4.gtsVersion()), "version was not updated");
+        }
+    }
+
+    @Test
+    void handlesMalformedInfoTypesPdfx1aVersionAndDuplicateDcTitle() throws Exception {
+        assumeTrue(PdfOutputIntent.isSupported(), "QPDF output-intent support unavailable");
+
+        String xmp = "<?xpacket begin=\"\uFEFF\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>"
+                + "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF "
+                + "xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">"
+                + "<rdf:Description rdf:about=\"\" "
+                + "xmlns:pdfx=\"http://ns.adobe.com/pdfx/1.3/\" "
+                + "xmlns:dc=\"http://purl.org/dc/elements/1.1/\" "
+                + "pdfx:GTS_PDFXVersion=\"PDF/X-3\">"
+                + "<dc:title><rdf:Alt><rdf:li xml:lang=\"x-default\">First"
+                + "</rdf:li></rdf:Alt></dc:title>"
+                + "</rdf:Description>"
+                + "<rdf:Description rdf:about=\"second\" "
+                + "xmlns:dc=\"http://purl.org/dc/elements/1.1/\">"
+                + "<dc:title><rdf:Alt><rdf:li xml:lang=\"x-default\">Stale Title"
+                + "</rdf:li></rdf:Alt></dc:title>"
+                + "</rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end=\"w\"?>";
+
+        byte[] malformedInput;
+        try (PDDocument document = new PDDocument()) {
+            document.addPage(new PDPage());
+            document.setVersion(1.7f);
+            document.getDocumentCatalog().getCOSObject().setName(COSName.VERSION, "1.7");
+            var info = document.getDocumentInformation().getCOSObject();
+            info.setInt(COSName.TITLE, 12345);
+            info.setString(COSName.TRAPPED, "False");
+            info.setInt(COSName.MOD_DATE, 999);
+            info.setName(COSName.CREATION_DATE, "NotAString");
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            document.save(out);
+            malformedInput = out.toByteArray();
+        }
+
+        byte[] x1a = PdfOutputIntent.applyPdfxMetadata(malformedInput, CMYK,
+                PdfOutputIntent.Spec.pdfx("FOGRA39", "FOGRA39"),
+                PdfXStandard.PDF_X_1A.gtsVersion(), PdfXStandard.PDF_X_1A.gtsConformance());
+        assertNotNull(x1a);
+        assertTrue(new String(x1a, StandardCharsets.ISO_8859_1).startsWith("%PDF-1.3"),
+                "PDF/X-1a must force PDF 1.3 header");
+        try (PDDocument loaded = Loader.loadPDF(x1a)) {
+            assertNull(loaded.getDocumentCatalog().getVersion(),
+                    "PDF/X-1a must strip conflicting Catalog /Version");
+        }
+
+        byte[] x6 = PdfOutputIntent.applyPdfxMetadata(malformedInput, CMYK,
+                PdfOutputIntent.Spec.pdfx("FOGRA39", "FOGRA39"),
+                PdfXStandard.PDF_X_6.gtsVersion(), PdfXStandard.PDF_X_6.gtsConformance());
+        assertNotNull(x6);
+        assertTrue(new String(x6, StandardCharsets.ISO_8859_1).startsWith("%PDF-2.0"),
+                "PDF/X-6 must force PDF 2.0 header");
+
+        byte[] titleInput;
+        try (PDDocument document = new PDDocument()) {
+            document.addPage(new PDPage());
+            document.getDocumentInformation().setTitle("Authoritative Title");
+            PDMetadata metadata = new PDMetadata(document);
+            metadata.importXMPMetadata(xmp.getBytes(StandardCharsets.UTF_8));
+            document.getDocumentCatalog().setMetadata(metadata);
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            document.save(out);
+            titleInput = out.toByteArray();
+        }
+        byte[] cleaned = PdfOutputIntent.applyPdfxMetadata(titleInput, CMYK,
+                PdfOutputIntent.Spec.pdfx("FOGRA39", "FOGRA39"),
+                PdfXStandard.PDF_X_4.gtsVersion(), PdfXStandard.PDF_X_4.gtsConformance());
+        try (PDDocument loaded = Loader.loadPDF(cleaned)) {
+            String outXmp = new String(
+                    loaded.getDocumentCatalog().getMetadata().exportXMPMetadata().readAllBytes(),
+                    StandardCharsets.UTF_8);
+            assertTrue(outXmp.contains("Authoritative Title"));
+            assertTrue(!outXmp.contains("Stale Title"),
+                    "secondary rdf:Description must not keep stale dc:title");
         }
     }
 }

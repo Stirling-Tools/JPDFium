@@ -19,6 +19,7 @@ import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.pdmodel.common.PDStream;
 import org.apache.pdfbox.pdmodel.font.PDFont;
 import org.apache.pdfbox.pdmodel.font.PDTrueTypeFont;
+import org.apache.pdfbox.pdmodel.font.PDType0Font;
 import org.apache.pdfbox.pdmodel.font.encoding.WinAnsiEncoding;
 import org.apache.pdfbox.pdmodel.graphics.form.PDFormXObject;
 import org.apache.pdfbox.text.PDFTextStripper;
@@ -40,6 +41,7 @@ import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.zip.GZIPInputStream;
 
@@ -1593,5 +1595,544 @@ class FontNormalizerTest {
 
     private static ByteBuffer tableBuffer(byte[] font) {
         return ByteBuffer.wrap(font).order(ByteOrder.BIG_ENDIAN);
+    }
+
+    @Test
+    void subsetPreservesFormat12NonBmpCmapAlongsideFormat4() throws IOException {
+        assumeTrue(NativeRuntime.isFull(), "needs real native library");
+        byte[] baseTtf = liberationSansBytes();
+        byte[] patched = injectFormat12Subtable(baseTtf, 0x1F600, 43);
+
+        byte[] subset = FontNormalizer.subset(patched, new int[] {'H', 0x1F600}, false);
+        assertTrue(subset != null && subset.length > 0, "non-BMP subset returned empty");
+
+        int[] cmapLoc = findSfntTable(subset, "cmap");
+        assertNotNull(cmapLoc, "subset missing cmap table");
+        ByteBuffer buf = tableBuffer(subset);
+        int cmapBase = cmapLoc[0];
+        int numSubtables = buf.getShort(cmapBase + 2) & 0xFFFF;
+        boolean foundFmt4 = false;
+        boolean foundFmt12WithNonBmp = false;
+        for (int i = 0; i < numSubtables; i++) {
+            int rec = cmapBase + 4 + i * 8;
+            int pid = buf.getShort(rec) & 0xFFFF;
+            int eid = buf.getShort(rec + 2) & 0xFFFF;
+            int subOff = cmapBase + buf.getInt(rec + 4);
+            int fmt = buf.getShort(subOff) & 0xFFFF;
+            if (pid == 3 && eid == 1 && fmt == 4) {
+                foundFmt4 = true;
+            } else if (pid == 3 && eid == 10 && fmt == 12) {
+                int numGroups = buf.getInt(subOff + 12);
+                for (int g = 0; g < numGroups; g++) {
+                    int grp = subOff + 16 + g * 12;
+                    int start = buf.getInt(grp);
+                    int end = buf.getInt(grp + 4);
+                    if (0x1F600 >= start && 0x1F600 <= end) {
+                        foundFmt12WithNonBmp = true;
+                    }
+                }
+            }
+        }
+        assertTrue(foundFmt4, "subset must preserve (3,1) Format 4 BMP cmap");
+        assertTrue(foundFmt12WithNonBmp,
+                "subset must preserve (3,10) Format 12 cmap mapping U+1F600");
+    }
+
+    @Test
+    void subsetRepairsScanSoftPostVersionAndOutOfRangeIndexToLocFormat() throws IOException {
+        assumeTrue(NativeRuntime.isFull(), "needs real native library");
+        byte[] corrupted = liberationSansBytes().clone();
+        int[] postLoc = findSfntTable(corrupted, "post");
+        int[] headLoc = findSfntTable(corrupted, "head");
+        assertNotNull(postLoc);
+        assertNotNull(headLoc);
+
+        ByteBuffer w = ByteBuffer.wrap(corrupted).order(ByteOrder.BIG_ENDIAN);
+        w.putInt(postLoc[0], 0x00000003);
+        w.putShort(headLoc[0] + 50, (short) 5);
+
+        byte[] subset = FontNormalizer.subset(corrupted, new int[] {'H', 'e', 'l', 'o'}, false);
+        assertTrue(subset != null && subset.length > 0, "subset failed on ScanSoft post/head");
+        assertTrue(FontNormalizer.classify(subset).hasCmap());
+
+        int[] subPost = findSfntTable(subset, "post");
+        int[] subHead = findSfntTable(subset, "head");
+        assertNotNull(subHead);
+        ByteBuffer r = tableBuffer(subset);
+        if (subPost != null) {
+            int postVer = r.getInt(subPost[0]);
+            assertFalse(postVer == 0x00000003,
+                    "ScanSoft post version 0x00000003 must be normalized");
+        }
+        short locaFmt = r.getShort(subHead[0] + 50);
+        assertTrue(locaFmt == 0 || locaFmt == 1,
+                "out-of-range indexToLocFormat must be repaired, got " + locaFmt);
+    }
+
+    @Test
+    void repairWidthsSynthesizesIdentityVDw2AndW2() throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real native library");
+        byte[] pdf = cidVerticalTrueTypePdf(null, null);
+
+        try (PdfDocument doc = PdfDocument.open(pdf)) {
+            assertEquals(1, FontNormalizer.repairWidths(doc, 0),
+                    "vertical CID font without /DW2 must be repaired");
+            byte[] repaired = doc.saveBytes();
+            try (PDDocument loaded = Loader.loadPDF(repaired)) {
+                COSDictionary descendant = cidDescendant(loaded);
+                assertNotNull(descendant);
+                COSBase dw2Obj = descendant.getDictionaryObject(COSName.getPDFName("DW2"));
+                assertTrue(dw2Obj instanceof COSArray dw2 && dw2.size() == 2,
+                        "expected synthesized /DW2 [v, w1y], got " + dw2Obj);
+            }
+        }
+
+        // With explicit non-default /DW2 [880 -500] and no /W2, /W2 entries must be emitted.
+        byte[] pdfCustomDw2 = cidVerticalTrueTypePdf(new int[] {880, -500}, null);
+        try (PdfDocument doc = PdfDocument.open(pdfCustomDw2)) {
+            assertEquals(1, FontNormalizer.repairWidths(doc, 0));
+            byte[] repaired = doc.saveBytes();
+            try (PDDocument loaded = Loader.loadPDF(repaired)) {
+                COSDictionary descendant = cidDescendant(loaded);
+                assertNotNull(descendant);
+                assertNotNull(descendant.getDictionaryObject(COSName.getPDFName("W2")),
+                        "expected /W2 entries when vertical metric differs from custom /DW2");
+            }
+        }
+    }
+
+    @Test
+    void fixToUnicodeEmitsBeginBfRangeAndReplacesInvalidBegincidrange() throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real native library");
+        byte[] ttf = liberationSansBytes();
+        byte[] pdf;
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(PDRectangle.LETTER);
+            doc.addPage(page);
+            PDType0Font cidFont = PDType0Font.load(doc, new ByteArrayInputStream(ttf), false);
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.beginText();
+                cs.setFont(cidFont, 12);
+                cs.newLineAtOffset(72, 700);
+                cs.showText("ABCD");
+                cs.endText();
+            }
+            ByteArrayOutputStream first = new ByteArrayOutputStream();
+            doc.save(first);
+            pdf = first.toByteArray();
+        }
+        try (PDDocument doc = Loader.loadPDF(pdf)) {
+            COSDictionary font = firstFontDictionary(doc);
+            assertNotNull(font);
+            String badCmap = "/CIDInit /ProcSet findresource begin\n"
+                    + "12 dict begin begincmap\n"
+                    + "/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n"
+                    + "/CMapName /Adobe-Identity-UCS def\n"
+                    + "/CMapType 2 def\n"
+                    + "1 begincodespacerange <0000> <FFFF> endcodespacerange\n"
+                    + "1 begincidrange\n<0024> <0027> 65\nendcidrange\n"
+                    + "endcmap CMapName currentdict /CMap defineresource pop end end\n";
+            font.setItem(COSName.TO_UNICODE, new PDStream(doc,
+                    new ByteArrayInputStream(badCmap.getBytes(StandardCharsets.US_ASCII)))
+                    .getCOSObject());
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            doc.save(out);
+            pdf = out.toByteArray();
+        }
+
+        try (PdfDocument doc = PdfDocument.open(pdf)) {
+            assertEquals(1, FontNormalizer.fixToUnicode(doc, 0));
+            byte[] repaired = doc.saveBytes();
+            try (PDDocument loaded = Loader.loadPDF(repaired)) {
+                COSDictionary font = firstFontDictionary(loaded);
+                assertNotNull(font);
+                byte[] cmapBytes = streamBytes(font, COSName.TO_UNICODE);
+                String cmapText = new String(cmapBytes, StandardCharsets.US_ASCII);
+                assertTrue(cmapText.contains("beginbfrange"),
+                        "contiguous mapping must emit beginbfrange:\n" + cmapText);
+                assertFalse(cmapText.contains("begincidrange"),
+                        "synthesized ToUnicode must not emit begincidrange:\n" + cmapText);
+                assertEquals("ABCD", new PDFTextStripper().getText(loaded).trim());
+            }
+        }
+    }
+
+    private static int[] findSfntTable(byte[] sfnt, String tag) {
+        if (sfnt.length < 12) {
+            return null;
+        }
+        ByteBuffer buf = tableBuffer(sfnt);
+        int numTables = buf.getShort(4) & 0xFFFF;
+        for (int i = 0; i < numTables; i++) {
+            int off = 12 + i * 16;
+            if (off + 16 > sfnt.length) {
+                break;
+            }
+            String entryTag = new String(sfnt, off, 4, StandardCharsets.US_ASCII);
+            if (tag.equals(entryTag)) {
+                int tblOff = buf.getInt(off + 8);
+                int tblLen = buf.getInt(off + 12);
+                return new int[] {tblOff, tblLen, off};
+            }
+        }
+        return null;
+    }
+
+    private static byte[] injectFormat12Subtable(byte[] sfnt, int cp, int gid) {
+        int[] cmapLoc = findSfntTable(sfnt, "cmap");
+        assertNotNull(cmapLoc);
+        ByteBuffer src = tableBuffer(sfnt);
+        int cmapOff = cmapLoc[0];
+        int numSub = src.getShort(cmapOff + 2) & 0xFFFF;
+        byte[] fmt4Bytes = null;
+        for (int i = 0; i < numSub; i++) {
+            int rec = cmapOff + 4 + i * 8;
+            int pid = src.getShort(rec) & 0xFFFF;
+            int eid = src.getShort(rec + 2) & 0xFFFF;
+            int subOff = cmapOff + src.getInt(rec + 4);
+            if (pid == 3 && eid == 1 && (src.getShort(subOff) & 0xFFFF) == 4) {
+                int len = src.getShort(subOff + 2) & 0xFFFF;
+                fmt4Bytes = Arrays.copyOfRange(sfnt, subOff, subOff + len);
+                break;
+            }
+        }
+        assertNotNull(fmt4Bytes, "expected (3,1) Format 4 subtable in base font");
+
+        int headerSize = 4 + 2 * 8;
+        int fmt4Off = headerSize;
+        int fmt12Off = (fmt4Off + fmt4Bytes.length + 3) & ~3;
+        int fmt12Len = 16 + 2 * 12;
+        int newCmapLen = fmt12Off + fmt12Len;
+        byte[] newCmap = new byte[newCmapLen];
+        ByteBuffer cb = ByteBuffer.wrap(newCmap).order(ByteOrder.BIG_ENDIAN);
+        cb.putShort((short) 0);
+        cb.putShort((short) 2);
+        // Record 0: (3, 1) Format 4
+        cb.putShort((short) 3);
+        cb.putShort((short) 1);
+        cb.putInt(fmt4Off);
+        // Record 1: (3, 10) Format 12
+        cb.putShort((short) 3);
+        cb.putShort((short) 10);
+        cb.putInt(fmt12Off);
+        System.arraycopy(fmt4Bytes, 0, newCmap, fmt4Off, fmt4Bytes.length);
+        // Format 12 header + 2 groups sorted ascending: BMP 'H' and non-BMP cp
+        cb.position(fmt12Off);
+        cb.putShort((short) 12);
+        cb.putShort((short) 0);
+        cb.putInt(fmt12Len);
+        cb.putInt(0);
+        cb.putInt(2);
+        cb.putInt('H');
+        cb.putInt('H');
+        cb.putInt(gid);
+        cb.putInt(cp);
+        cb.putInt(cp);
+        cb.putInt(gid);
+
+        int alignedEnd = (sfnt.length + 3) & ~3;
+        byte[] out = new byte[alignedEnd + newCmapLen];
+        System.arraycopy(sfnt, 0, out, 0, sfnt.length);
+        System.arraycopy(newCmap, 0, out, alignedEnd, newCmapLen);
+        ByteBuffer ob = ByteBuffer.wrap(out).order(ByteOrder.BIG_ENDIAN);
+        ob.putInt(cmapLoc[2] + 8, alignedEnd);
+        ob.putInt(cmapLoc[2] + 12, newCmapLen);
+        return out;
+    }
+
+    private static byte[] injectVerticalTables(byte[] sfnt, int advanceHeight, int topSideBearing) {
+        ByteBuffer in = tableBuffer(sfnt);
+        int numTables = in.getShort(4) & 0xFFFF;
+        int[] maxpLoc = findSfntTable(sfnt, "maxp");
+        assertNotNull(maxpLoc, "expected maxp table");
+        int numGlyphs = in.getShort(maxpLoc[0] + 4) & 0xFFFF;
+
+        byte[] vhea = new byte[36];
+        ByteBuffer vb = ByteBuffer.wrap(vhea).order(ByteOrder.BIG_ENDIAN);
+        vb.putInt(0x00010000);
+        vb.putShort((short) 1024);
+        vb.putShort((short) -1024);
+        vb.putShort((short) 0);
+        vb.putShort((short) advanceHeight);
+        vb.putShort((short) topSideBearing);
+        vb.putShort((short) 0);
+        vb.putShort((short) 1500);
+        vb.putShort((short) 0);
+        vb.putShort((short) 1);
+        vb.position(34);
+        vb.putShort((short) numGlyphs);
+
+        byte[] vmtx = new byte[numGlyphs * 4];
+        ByteBuffer mb = ByteBuffer.wrap(vmtx).order(ByteOrder.BIG_ENDIAN);
+        for (int g = 0; g < numGlyphs; g++) {
+            mb.putShort((short) advanceHeight);
+            mb.putShort((short) topSideBearing);
+        }
+
+        java.util.TreeMap<String, byte[]> tables = new java.util.TreeMap<>();
+        for (int i = 0; i < numTables; i++) {
+            int recOff = 12 + i * 16;
+            String tag = new String(sfnt, recOff, 4, StandardCharsets.US_ASCII);
+            int off = in.getInt(recOff + 8);
+            int len = in.getInt(recOff + 12);
+            tables.put(tag, Arrays.copyOfRange(sfnt, off, off + len));
+        }
+        tables.put("vhea", vhea);
+        tables.put("vmtx", vmtx);
+
+        int count = tables.size();
+        int dataOffset = 12 + count * 16;
+        int totalSize = dataOffset;
+        for (byte[] t : tables.values()) {
+            totalSize += (t.length + 3) & ~3;
+        }
+        byte[] out = new byte[totalSize];
+        ByteBuffer ob = ByteBuffer.wrap(out).order(ByteOrder.BIG_ENDIAN);
+        ob.putInt(in.getInt(0));
+        ob.putShort((short) count);
+        int sr = Integer.highestOneBit(count);
+        int es = Integer.numberOfTrailingZeros(sr);
+        ob.putShort((short) (sr * 16));
+        ob.putShort((short) es);
+        ob.putShort((short) ((count - sr) * 16));
+
+        int idx = 0;
+        int cursor = dataOffset;
+        for (var entry : tables.entrySet()) {
+            byte[] data = entry.getValue();
+            int recOff = 12 + idx * 16;
+            byte[] tagBytes = entry.getKey().getBytes(StandardCharsets.US_ASCII);
+            System.arraycopy(tagBytes, 0, out, recOff, 4);
+            ob.putInt(recOff + 4, 0);
+            ob.putInt(recOff + 8, cursor);
+            ob.putInt(recOff + 12, data.length);
+            System.arraycopy(data, 0, out, cursor, data.length);
+            cursor += (data.length + 3) & ~3;
+            idx++;
+        }
+        return out;
+    }
+
+    private static byte[] cidVerticalTrueTypePdf(int[] dw2Values, COSArray w2Array)
+            throws IOException {
+        byte[] program = injectVerticalTables(liberationSansBytes(), 1800, 100);
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(PDRectangle.LETTER);
+            doc.addPage(page);
+
+            COSDictionary descriptor = new COSDictionary();
+            descriptor.setItem(COSName.TYPE, COSName.FONT_DESC);
+            descriptor.setName(COSName.FONT_NAME, "LiberationSans");
+            descriptor.setInt(COSName.FLAGS, 32);
+            descriptor.setItem(COSName.FONT_BBOX, new COSArray());
+            descriptor.setInt(COSName.ITALIC_ANGLE, 0);
+            descriptor.setInt(COSName.ASCENT, 900);
+            descriptor.setInt(COSName.DESCENT, -200);
+            descriptor.setInt(COSName.CAP_HEIGHT, 700);
+            descriptor.setInt(COSName.STEM_V, 80);
+            COSStream fontFile = new PDStream(doc, new ByteArrayInputStream(program))
+                    .getCOSObject();
+            fontFile.setInt(COSName.LENGTH1, program.length);
+            descriptor.setItem(COSName.FONT_FILE2, fontFile);
+
+            COSDictionary cidSystemInfo = new COSDictionary();
+            cidSystemInfo.setString(COSName.REGISTRY, "Adobe");
+            cidSystemInfo.setString(COSName.ORDERING, "Identity");
+            cidSystemInfo.setInt(COSName.SUPPLEMENT, 0);
+            COSDictionary descendant = new COSDictionary();
+            descendant.setItem(COSName.TYPE, COSName.FONT);
+            descendant.setItem(COSName.SUBTYPE, COSName.CID_FONT_TYPE2);
+            descendant.setName(COSName.BASE_FONT, "LiberationSans");
+            descendant.setItem(COSName.CIDSYSTEMINFO, cidSystemInfo);
+            descendant.setInt(COSName.DW, 1000);
+            if (dw2Values != null) {
+                COSArray dw2 = new COSArray();
+                dw2.add(COSInteger.get(dw2Values[0]));
+                dw2.add(COSInteger.get(dw2Values[1]));
+                descendant.setItem(COSName.getPDFName("DW2"), dw2);
+            }
+            if (w2Array != null) {
+                descendant.setItem(COSName.getPDFName("W2"), w2Array);
+            }
+            descendant.setItem(COSName.FONT_DESC, descriptor);
+
+            COSArray descendants = new COSArray();
+            descendants.add(descendant);
+            COSDictionary font = new COSDictionary();
+            font.setItem(COSName.TYPE, COSName.FONT);
+            font.setItem(COSName.SUBTYPE, COSName.TYPE0);
+            font.setName(COSName.BASE_FONT, "LiberationSans");
+            font.setItem(COSName.ENCODING, COSName.IDENTITY_V);
+            font.setItem(COSName.DESCENDANT_FONTS, descendants);
+
+            COSDictionary fonts = new COSDictionary();
+            fonts.setItem(COSName.getPDFName("F1"), font);
+            COSDictionary resources = new COSDictionary();
+            resources.setItem(COSName.FONT, fonts);
+            page.setResources(new PDResources(resources));
+            page.setContents(new PDStream(doc, new ByteArrayInputStream(
+                    "BT /F1 12 Tf 72 700 Td <0024> Tj ET"
+                            .getBytes(StandardCharsets.US_ASCII))));
+
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            doc.save(out);
+            return out.toByteArray();
+        }
+    }
+
+    @Test
+    void normalizingNonSymbolicTrueTypeNameStandardEncodingConvertsToWinAnsi() throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real native library");
+        byte[] pdf;
+        try (PDDocument doc = Loader.loadPDF(embeddedTrueTypePdf(true, false))) {
+            COSDictionary font = firstFontDictionary(doc);
+            assertNotNull(font);
+            font.setItem(COSName.ENCODING, COSName.STANDARD_ENCODING);
+
+            PDPage page = doc.getPage(0);
+            COSName fontKey = page.getResources().getFontNames().iterator().next();
+            String stream = "BT /" + fontKey.getName() + " 12 Tf 72 700 Td (a'b) Tj ET";
+            page.setContents(new PDStream(doc, new ByteArrayInputStream(
+                    stream.getBytes(StandardCharsets.US_ASCII))));
+
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            doc.save(out);
+            pdf = out.toByteArray();
+        }
+
+        try (PdfDocument doc = PdfDocument.open(pdf)) {
+            FontNormalizer.Result res = FontNormalizer.normalizePage(doc, 0);
+            assertTrue(res.fontsProcessed() >= 1);
+            byte[] normalized = doc.saveBytes();
+            try (PDDocument loaded = Loader.loadPDF(normalized)) {
+                COSDictionary font = firstFontDictionary(loaded);
+                COSDictionary enc = font.getCOSDictionary(COSName.ENCODING);
+                assertNotNull(enc, "direct /StandardEncoding must become WinAnsi + /Differences");
+                assertEquals(COSName.WIN_ANSI_ENCODING,
+                        enc.getDictionaryObject(COSName.BASE_ENCODING));
+                COSArray diffs = enc.getCOSArray(COSName.DIFFERENCES);
+                assertNotNull(diffs);
+                String extracted = new PDFTextStripper().getText(loaded).trim();
+                assertEquals("a\u2019b", extracted);
+            }
+            // Second pass on clean encoding dictionary must be idempotent.
+            FontNormalizer.Result second = FontNormalizer.normalizePage(doc, 0);
+            assertEquals(0, second.toUnicodeFixed());
+            assertEquals(0, second.widthsRepaired());
+        }
+    }
+
+    @Test
+    void normalizingSymbolicTrueTypeWithoutMsOrMacRomanKeepsSymbolicFlag() throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real native library");
+        byte[] appleUnicodeOnlySfnt = keepOnlyAppleUnicodeCmap(liberationSansBytes());
+        byte[] pdf;
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage();
+            doc.addPage(page);
+
+            COSDictionary descriptor = new COSDictionary();
+            descriptor.setItem(COSName.TYPE, COSName.FONT_DESC);
+            descriptor.setName(COSName.FONT_NAME, "LiberationSans");
+            descriptor.setInt(COSName.FLAGS, 4);
+            descriptor.setItem(COSName.FONT_BBOX, new COSArray());
+            COSStream fontFile = new PDStream(doc, new ByteArrayInputStream(appleUnicodeOnlySfnt))
+                    .getCOSObject();
+            fontFile.setInt(COSName.LENGTH1, appleUnicodeOnlySfnt.length);
+            descriptor.setItem(COSName.FONT_FILE2, fontFile);
+
+            COSDictionary font = new COSDictionary();
+            font.setItem(COSName.TYPE, COSName.FONT);
+            font.setItem(COSName.SUBTYPE, COSName.TRUE_TYPE);
+            font.setName(COSName.BASE_FONT, "LiberationSans");
+            font.setInt(COSName.FIRST_CHAR, 65);
+            font.setInt(COSName.LAST_CHAR, 65);
+            COSArray widths = new COSArray();
+            widths.add(COSInteger.get(667));
+            font.setItem(COSName.WIDTHS, widths);
+            font.setItem(COSName.ENCODING, COSName.WIN_ANSI_ENCODING);
+            font.setItem(COSName.FONT_DESC, descriptor);
+
+            COSDictionary fonts = new COSDictionary();
+            fonts.setItem(COSName.getPDFName("F1"), font);
+            COSDictionary res = new COSDictionary();
+            res.setItem(COSName.FONT, fonts);
+            page.setResources(new PDResources(res));
+            page.setContents(new PDStream(doc, new ByteArrayInputStream(
+                    "BT /F1 12 Tf 72 700 Td (A) Tj ET".getBytes(StandardCharsets.US_ASCII))));
+
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            doc.save(out);
+            pdf = out.toByteArray();
+        }
+
+        try (PdfDocument doc = PdfDocument.open(pdf)) {
+            FontNormalizer.normalizePage(doc, 0);
+            try (PDDocument loaded = Loader.loadPDF(doc.saveBytes())) {
+                COSDictionary font = firstFontDictionary(loaded);
+                COSDictionary desc = font.getCOSDictionary(COSName.FONT_DESC);
+                assertNotNull(desc);
+                int flags = desc.getInt(COSName.FLAGS);
+                assertTrue((flags & 4) != 0,
+                        "font lacking (3,1)/(1,0) cmap must remain Symbolic, flags=" + flags);
+                assertNull(font.getDictionaryObject(COSName.ENCODING),
+                        "symbolic TrueType font must not keep /Encoding");
+            }
+        }
+    }
+
+    @Test
+    void normalizingNegativeCidWidthRangeDoesNotWrapAround() throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real native library");
+        byte[] pdf;
+        try (PDDocument doc = Loader.loadPDF(cidTrueTypePdf("LiberationSans", null))) {
+            COSDictionary font = firstFontDictionary(doc);
+            assertNotNull(font);
+            COSDictionary descendant = (COSDictionary) font.getCOSArray(COSName.DESCENDANT_FONTS)
+                    .getObject(0);
+            COSArray badW = new COSArray();
+            badW.add(COSInteger.get(-1));
+            COSArray run = new COSArray();
+            run.add(COSInteger.get(500));
+            run.add(COSInteger.get(600));
+            badW.add(run);
+            descendant.setItem(COSName.W, badW);
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            doc.save(out);
+            pdf = out.toByteArray();
+        }
+
+        try (PdfDocument doc = PdfDocument.open(pdf)) {
+            FontNormalizer.normalizePage(doc, 0);
+            byte[] normalized = doc.saveBytes();
+            assertNotNull(normalized);
+            assertTrue(normalized.length > 0);
+        }
+    }
+
+    private static byte[] keepOnlyAppleUnicodeCmap(byte[] sfnt) {
+        int[] cmapLoc = findSfntTable(sfnt, "cmap");
+        assertNotNull(cmapLoc, "font missing cmap table");
+        int cmapOff = cmapLoc[0];
+        int cmapLen = cmapLoc[1];
+        byte[] out = sfnt.clone();
+        ByteBuffer cb = ByteBuffer.wrap(out, cmapOff, cmapLen).slice().order(ByteOrder.BIG_ENDIAN);
+        int numSub = cb.getShort(2) & 0xFFFF;
+        int pickedRelOff = -1;
+        for (int i = 0; i < numSub; i++) {
+            int rec = 4 + i * 8;
+            int plat = cb.getShort(rec) & 0xFFFF;
+            int enc = cb.getShort(rec + 2) & 0xFFFF;
+            if ((plat == 3 && enc == 1) || (plat == 0 && enc == 3)) {
+                pickedRelOff = cb.getInt(rec + 4);
+                break;
+            }
+        }
+        assertTrue(pickedRelOff > 0, "expected Unicode cmap subtable");
+        cb.putShort(2, (short) 1);
+        cb.putShort(4, (short) 0);
+        cb.putShort(6, (short) 3);
+        cb.putInt(8, pickedRelOff);
+        return out;
     }
 }

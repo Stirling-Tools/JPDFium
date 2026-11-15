@@ -1,5 +1,6 @@
 // native_smoke - CTest smoke test for the bridge ABI.
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -496,6 +497,416 @@ void runRepairEdgeChecks() {
     }
 }
 
+void appendU16BE(std::vector<uint8_t>& out, uint16_t v) {
+    out.push_back(static_cast<uint8_t>((v >> 8) & 0xFF));
+    out.push_back(static_cast<uint8_t>(v & 0xFF));
+}
+
+void appendU32BE(std::vector<uint8_t>& out, uint32_t v) {
+    out.push_back(static_cast<uint8_t>((v >> 24) & 0xFF));
+    out.push_back(static_cast<uint8_t>((v >> 16) & 0xFF));
+    out.push_back(static_cast<uint8_t>((v >> 8) & 0xFF));
+    out.push_back(static_cast<uint8_t>(v & 0xFF));
+}
+
+// Build a minimal valid TrueType binary with 1 + glyphCount glyphs (GID 0 = .notdef,
+// GID 1..glyphCount mapped non-contiguously at Unicode U+0402, U+0404, ... so ToUnicode
+// repair cannot fold them into beginbfrange and must split >100 beginbfchar entries).
+std::vector<uint8_t> buildMinimalSparseTtf(uint16_t glyphCount) {
+    const uint16_t numGlyphs = static_cast<uint16_t>(glyphCount + 1);
+
+    // Build format 4 cmap subtable (one singleton segment per glyph + 0xFFFF sentinel).
+    const uint16_t segCount = static_cast<uint16_t>(glyphCount + 1);
+    const uint16_t segCountX2 = static_cast<uint16_t>(segCount * 2);
+    uint16_t searchRange = 2;
+    uint16_t entrySelector = 0;
+    while (searchRange * 2 <= segCountX2) {
+        searchRange *= 2;
+        ++entrySelector;
+    }
+    const uint16_t rangeShift = static_cast<uint16_t>(segCountX2 - searchRange);
+    const uint16_t subLen = static_cast<uint16_t>(16 + segCount * 8);
+
+    std::vector<uint8_t> cmap;
+    appendU16BE(cmap, 0);
+    appendU16BE(cmap, 1);
+    appendU16BE(cmap, 3);
+    appendU16BE(cmap, 1);
+    appendU32BE(cmap, 12);
+    appendU16BE(cmap, 4);
+    appendU16BE(cmap, subLen);
+    appendU16BE(cmap, 0);
+    appendU16BE(cmap, segCountX2);
+    appendU16BE(cmap, searchRange);
+    appendU16BE(cmap, entrySelector);
+    appendU16BE(cmap, rangeShift);
+    for (uint16_t g = 1; g <= glyphCount; ++g)
+        appendU16BE(cmap, static_cast<uint16_t>(0x0400 + g * 2));
+    appendU16BE(cmap, 0xFFFF);
+    appendU16BE(cmap, 0);
+    for (uint16_t g = 1; g <= glyphCount; ++g)
+        appendU16BE(cmap, static_cast<uint16_t>(0x0400 + g * 2));
+    appendU16BE(cmap, 0xFFFF);
+    for (uint16_t g = 1; g <= glyphCount; ++g) {
+        const uint16_t code = static_cast<uint16_t>(0x0400 + g * 2);
+        appendU16BE(cmap, static_cast<uint16_t>((static_cast<int32_t>(g) - code) & 0xFFFF));
+    }
+    appendU16BE(cmap, 1);
+    for (uint16_t i = 0; i < segCount; ++i) appendU16BE(cmap, 0);
+
+    std::vector<uint8_t> head(54, 0);
+    head[2] = 1;
+    head[12] = 0x5F;
+    head[13] = 0x0F;
+    head[14] = 0x3C;
+    head[15] = 0xF5;
+    head[18] = 0x03;
+    head[19] = 0xE8;  // unitsPerEm = 1000
+
+    std::vector<uint8_t> hhea(36, 0);
+    hhea[2] = 1;
+    hhea[4] = 0x03;
+    hhea[5] = 0x20;
+    hhea[34] = static_cast<uint8_t>(numGlyphs >> 8);
+    hhea[35] = static_cast<uint8_t>(numGlyphs & 0xFF);
+
+    std::vector<uint8_t> hmtx;
+    for (uint16_t i = 0; i < numGlyphs; ++i) {
+        appendU16BE(hmtx, 500);
+        appendU16BE(hmtx, 0);
+    }
+
+    std::vector<uint8_t> maxp(32, 0);
+    maxp[1] = 1;
+    maxp[4] = static_cast<uint8_t>(numGlyphs >> 8);
+    maxp[5] = static_cast<uint8_t>(numGlyphs & 0xFF);
+
+    std::vector<uint8_t> loca((static_cast<size_t>(numGlyphs) + 1) * 2, 0);
+    std::vector<uint8_t> glyf(4, 0);
+    std::vector<uint8_t> post(32, 0);
+    post[1] = 3;  // format 3.0 (no PostScript names)
+
+    struct TableEntry {
+        const char* tag = nullptr;
+        std::vector<uint8_t> data;
+    };
+    std::vector<TableEntry> tables = {
+        {"cmap", std::move(cmap)}, {"glyf", std::move(glyf)}, {"head", std::move(head)},
+        {"hhea", std::move(hhea)}, {"hmtx", std::move(hmtx)}, {"loca", std::move(loca)},
+        {"maxp", std::move(maxp)}, {"post", std::move(post)},
+    };
+    std::sort(tables.begin(), tables.end(),
+              [](auto const& a, auto const& b) { return std::strcmp(a.tag, b.tag) < 0; });
+
+    const uint16_t numTables = static_cast<uint16_t>(tables.size());
+    std::vector<uint8_t> sfnt;
+    appendU32BE(sfnt, 0x00010000);
+    appendU16BE(sfnt, numTables);
+    appendU16BE(sfnt, 128);
+    appendU16BE(sfnt, 3);
+    appendU16BE(sfnt, static_cast<uint16_t>(numTables * 16 - 128));
+
+    size_t offset = 12 + numTables * 16;
+    for (auto const& t : tables) {
+        for (int i = 0; i < 4; ++i) sfnt.push_back(static_cast<uint8_t>(t.tag[i]));
+        appendU32BE(sfnt, 0);
+        appendU32BE(sfnt, static_cast<uint32_t>(offset));
+        appendU32BE(sfnt, static_cast<uint32_t>(t.data.size()));
+        offset += (t.data.size() + 3) & ~size_t(3);
+    }
+    for (auto const& t : tables) {
+        sfnt.insert(sfnt.end(), t.data.begin(), t.data.end());
+        while (sfnt.size() & 3) sfnt.push_back(0);
+    }
+    return sfnt;
+}
+
+std::vector<uint8_t> assemblePdf(const char* header, std::vector<std::string> const& objs,
+                                 int rootObj, int infoObj = 0) {
+    std::string out = header;
+    out += '\n';
+    std::vector<size_t> offsets(objs.size() + 1, 0);
+    for (size_t i = 0; i < objs.size(); ++i) {
+        offsets[i + 1] = out.size();
+        out += std::to_string(i + 1) + " 0 obj\n" + objs[i] + "\nendobj\n";
+    }
+    size_t xrefOff = out.size();
+    char buf[128];
+    std::snprintf(buf, sizeof(buf), "xref\n0 %zu\n0000000000 65535 f \n", objs.size() + 1);
+    out += buf;
+    for (size_t i = 1; i <= objs.size(); ++i) {
+        std::snprintf(buf, sizeof(buf), "%010zu 00000 n \n", offsets[i]);
+        out += buf;
+    }
+    out += "trailer\n<< /Size " + std::to_string(objs.size() + 1) + " /Root " +
+           std::to_string(rootObj) + " 0 R";
+    if (infoObj > 0) out += " /Info " + std::to_string(infoObj) + " 0 R";
+    std::snprintf(buf, sizeof(buf), " >>\nstartxref\n%zu\n%%%%EOF\n", xrefOff);
+    out += buf;
+    return std::vector<uint8_t>(out.begin(), out.end());
+}
+
+void checkSignatureNullSafety() {
+    int32_t cnt = 77;
+    CHECK(jpdfium_signature_count(0, &cnt) != JPDFIUM_OK && cnt == 0,
+          "signature_count(0) zeros out-param");
+    char* sjson = const_cast<char*>("sentinel");
+    CHECK(jpdfium_signature_info(0, 0, &sjson) != JPDFIUM_OK && sjson == nullptr,
+          "signature_info(0) nulls out-param");
+    uint8_t sentinelByte = 1;
+    uint8_t* dig = &sentinelByte;
+    int64_t dlen = 42;
+    CHECK(
+        jpdfium_signature_digest(0, 0, 1, &dig, &dlen) != JPDFIUM_OK && dig == nullptr && dlen == 0,
+        "signature_digest(0) clears out-params");
+
+    int64_t doc = 0;
+    CHECK(
+        jpdfium_doc_open_bytes(reinterpret_cast<const uint8_t*>(kMinimalPdf),
+                               static_cast<int64_t>(std::strlen(kMinimalPdf)), &doc) == JPDFIUM_OK,
+        "open minimal doc for signature checks");
+    if (doc != 0) {
+        CHECK(jpdfium_signature_count(doc, nullptr) == JPDFIUM_ERR_INVALID,
+              "signature_count rejects null out-param");
+        CHECK(jpdfium_signature_info(doc, 0, nullptr) == JPDFIUM_ERR_INVALID,
+              "signature_info rejects null out-param");
+        jpdfium_doc_close(doc);
+    }
+}
+
+void checkPatternJsonEscaping() {
+    int64_t pat = 0;
+    int32_t prc = jpdfium_pcre2_compile("(?s)longprefix_.*_end", 0, &pat);
+    if (prc != JPDFIUM_ERR_NOT_FOUND) {
+        CHECK(prc == JPDFIUM_OK && pat != 0, "pcre2 compile long pattern");
+        if (prc == JPDFIUM_OK && pat != 0) {
+            std::string text = "head longprefix_\t\n\"\x01\\";
+            text.append(300, 'x');
+            text += "_end tail";
+            char* json = nullptr;
+            CHECK(jpdfium_pcre2_match_all(pat, text.c_str(), &json) == JPDFIUM_OK && json,
+                  "pcre2 match long control payload");
+            if (json) {
+                std::string s(json);
+                CHECK(s.find("\\t\\n\\\"\\u0001\\\\") != std::string::npos,
+                      "pcre2 JSON escapes control chars and quotes");
+                bool rawCtrl = false;
+                for (unsigned char c : s) {
+                    if (c < 0x20) rawCtrl = true;
+                }
+                CHECK(!rawCtrl, "pcre2 JSON emits no raw control bytes");
+                jpdfium_free_string(json);
+            }
+            jpdfium_pcre2_free(pat);
+        }
+    }
+
+    int64_t ft = 0;
+    int32_t frc = jpdfium_flashtext_create(&ft);
+    if (frc != JPDFIUM_ERR_NOT_FOUND) {
+        CHECK(frc == JPDFIUM_OK && ft != 0, "flashtext create");
+        if (frc == JPDFIUM_OK && ft != 0) {
+            const char* kwJson =
+                "[{\"keyword\":\"nolabel\"},{\"keyword\":\"second\",\"label\":\"L1\\\"\\\\\"}]";
+            CHECK(jpdfium_flashtext_add_keywords_json(ft, kwJson) == JPDFIUM_OK,
+                  "flashtext add_keywords_json with optional label");
+            CHECK(jpdfium_flashtext_add_keyword(ft, "k1\t\"a", "L\n2") == JPDFIUM_OK,
+                  "flashtext add_keyword with control chars");
+            char* fjson = nullptr;
+            CHECK(
+                jpdfium_flashtext_find(ft, "nolabel second k1\t\"a", &fjson) == JPDFIUM_OK && fjson,
+                "flashtext find object-scoped matches");
+            if (fjson) {
+                std::string fs(fjson);
+                CHECK(fs.find("\"keyword\":\"nolabel\",\"label\":\"\"") != std::string::npos,
+                      "flashtext scopes omitted label per JSON object");
+                CHECK(fs.find("L1\\\"\\\\") != std::string::npos &&
+                          fs.find("k1\\t\\\"a") != std::string::npos &&
+                          fs.find("L\\n2") != std::string::npos,
+                      "flashtext escapes keyword and label controls in JSON");
+                jpdfium_free_string(fjson);
+            }
+            jpdfium_flashtext_free(ft);
+        }
+    }
+}
+
+void checkPdfxPartialDates() {
+    // Minimal 152-byte CMYK ICC profile with 1 valid tag entry ('desc') so IccComponentCount
+    // validates it even in builds without lcms2.
+    std::vector<uint8_t> icc(152, 0);
+    icc[3] = 152;
+    icc[16] = 'C';
+    icc[17] = 'M';
+    icc[18] = 'Y';
+    icc[19] = 'K';
+    icc[36] = 'a';
+    icc[37] = 'c';
+    icc[38] = 's';
+    icc[39] = 'p';
+    icc[131] = 1;    // tag_count = 1
+    icc[132] = 'd';  // tag signature 'desc'
+    icc[133] = 'e';
+    icc[134] = 's';
+    icc[135] = 'c';
+    icc[139] = 144;  // tag offset = 144
+    icc[143] = 8;    // tag size = 8
+    auto datePdf = assemblePdf("%PDF-1.4",
+                               {
+                                   "<< /Type /Catalog /Pages 2 0 R >>",
+                                   "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                                   "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>",
+                                   "<< /CreationDate (D:2024) /ModDate (D:202405) >>",
+                               },
+                               1, 4);
+    uint8_t* out = nullptr;
+    int64_t outLen = 0;
+    CHECK(jpdfium_color_pdfx_bytes(datePdf.data(), static_cast<int64_t>(datePdf.size()), icc.data(),
+                                   static_cast<int64_t>(icc.size()), "PDF/X-4", "PDF/X-4",
+                                   "FOGRA39", "Test", &out, &outLen) == JPDFIUM_OK &&
+              out && outLen > 0,
+          "pdfx_bytes converts partial Info dates");
+    if (out && outLen > 0) {
+        uint8_t* v14 = nullptr;
+        int64_t v14Len = 0;
+        if (jpdfium_qpdf_force_version(out, outLen, "1.4", &v14, &v14Len) == JPDFIUM_OK && v14 &&
+            v14Len > 0) {
+            std::string raw(reinterpret_cast<const char*>(v14), static_cast<size_t>(v14Len));
+            CHECK(raw.find("2024-01-01T00:00:00") != std::string::npos,
+                  "partial PDF year date D:2024 expands to 2024-01-01T00:00:00");
+            CHECK(raw.find("2024-05-01T00:00:00") != std::string::npos,
+                  "partial PDF month date D:202405 expands to 2024-05-01T00:00:00");
+            jpdfium_free_buffer(v14);
+        }
+        jpdfium_free_buffer(out);
+    }
+}
+
+void checkSparseToUnicodeAndStructSanitize() {
+    std::vector<uint8_t> ttf = buildMinimalSparseTtf(108);
+    std::string fontStream = "<< /Length " + std::to_string(ttf.size()) + " /Length1 " +
+                             std::to_string(ttf.size()) + " >>\nstream\n" +
+                             std::string(ttf.begin(), ttf.end()) + "\nendstream";
+    std::string content = "BT /F1 12 Tf 72 700 Td <0001006C> Tj ET";
+    std::string pageStream =
+        "<< /Length " + std::to_string(content.size()) + " >>\nstream\n" + content + "\nendstream";
+    const std::string pageObj =
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] "
+        "/Resources << /Font << /F1 4 0 R >> >> /Contents 8 0 R >>";
+    const std::string type0Obj =
+        "<< /Type /Font /Subtype /Type0 /BaseFont /SparseSmoke "
+        "/Encoding /Identity-H /DescendantFonts [5 0 R] >>";
+    const std::string cidFontObj =
+        "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /SparseSmoke "
+        "/CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> "
+        "/CIDToGIDMap /Identity /DW 500 /FontDescriptor 6 0 R >>";
+    const std::string fdObj =
+        "<< /Type /FontDescriptor /FontName /SparseSmoke /Flags 4 "
+        "/FontBBox [0 0 500 500] /ItalicAngle 0 /Ascent 800 /Descent -200 "
+        "/CapHeight 700 /StemV 80 /FontFile2 9 0 R >>";
+    auto fontPdf = assemblePdf("%PDF-1.4",
+                               {
+                                   "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 7 0 R >>",
+                                   "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                                   pageObj,
+                                   type0Obj,
+                                   cidFontObj,
+                                   fdObj,
+                                   "<< /Type /StructTreeRoot >>",
+                                   pageStream,
+                                   fontStream,
+                               },
+                               1);
+
+    int64_t doc = 0;
+    CHECK(jpdfium_doc_open_bytes(fontPdf.data(), static_cast<int64_t>(fontPdf.size()), &doc) ==
+              JPDFIUM_OK,
+          "open sparse >100-glyph PDF");
+    if (doc == 0) return;
+
+    int32_t fixed = 0;
+    CHECK(jpdfium_font_fix_tounicode(doc, 0, &fixed) == JPDFIUM_OK && fixed == 1,
+          "font_fix_tounicode repairs >100-glyph ToUnicode");
+    uint8_t* saved = nullptr;
+    int64_t savedLen = 0;
+    CHECK(jpdfium_doc_save_bytes(doc, &saved, &savedLen) == JPDFIUM_OK && saved && savedLen > 0,
+          "save repaired >100-glyph PDF");
+    jpdfium_doc_close(doc);
+    if (!saved || savedLen <= 0) return;
+
+    int64_t reopened = 0;
+    if (jpdfium_doc_open_bytes(saved, savedLen, &reopened) == JPDFIUM_OK && reopened) {
+        int64_t page = 0;
+        if (jpdfium_page_open(reopened, 0, &page) == JPDFIUM_OK && page) {
+            char* charsJson = nullptr;
+            CHECK(jpdfium_text_get_chars(page, &charsJson) == JPDFIUM_OK && charsJson,
+                  "extract text across >100 beginbfchar chunks");
+            if (charsJson) {
+                std::string cj(charsJson);
+                CHECK(cj.find("1026") != std::string::npos && cj.find("1240") != std::string::npos,
+                      "decoded chars span GID 1 (0x0402) and GID 108 (0x04D8)");
+                jpdfium_free_string(charsJson);
+            }
+            jpdfium_page_close(page);
+        }
+        jpdfium_doc_close(reopened);
+    }
+
+    uint8_t* san = nullptr;
+    int64_t sanLen = 0;
+    CHECK(jpdfium_qpdf_sanitize(saved, savedLen, &san, &sanLen, JPDFIUM_SANITIZE_STRUCTURE) ==
+                  JPDFIUM_OK &&
+              san && sanLen > 0,
+          "qpdf_sanitize removes /StructTreeRoot");
+    if (san && sanLen > 0) {
+        std::string raw(reinterpret_cast<const char*>(san), static_cast<size_t>(sanLen));
+        CHECK(raw.find("/StructTreeRoot") == std::string::npos,
+              "sanitized output omits /StructTreeRoot");
+        jpdfium_free_buffer(san);
+    }
+    jpdfium_free_buffer(saved);
+}
+
+void checkForceVersion14Metadata() {
+    const std::string xmp =
+        "<?xpacket begin=\"\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>"
+        "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"/>"
+        "<?xpacket end=\"w\"?>";
+    std::string metaStream = "<< /Type /Metadata /Subtype /XML /Length " +
+                             std::to_string(xmp.size()) + " >>\nstream\n" + xmp + "\nendstream";
+    auto v17Pdf = assemblePdf("%PDF-1.7",
+                              {
+                                  "<< /Type /Catalog /Pages 2 0 R /Metadata 4 0 R >>",
+                                  "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                                  "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>",
+                                  metaStream,
+                              },
+                              1);
+    uint8_t* out = nullptr;
+    int64_t outLen = 0;
+    CHECK(jpdfium_qpdf_force_version(v17Pdf.data(), static_cast<int64_t>(v17Pdf.size()), "1.4",
+                                     &out, &outLen) == JPDFIUM_OK &&
+              out && outLen > 8,
+          "qpdf_force_version 1.4 succeeds");
+    if (out && outLen > 8) {
+        std::string raw(reinterpret_cast<const char*>(out), static_cast<size_t>(outLen));
+        CHECK(raw.rfind("%PDF-1.4", 0) == 0, "force_version writes %PDF-1.4 header");
+        CHECK(raw.find("/ObjStm") == std::string::npos, "force_version 1.4 avoids /ObjStm");
+        CHECK(raw.find("<x:xmpmeta") != std::string::npos,
+              "force_version 1.4 leaves /Metadata uncompressed");
+        jpdfium_free_buffer(out);
+    }
+}
+
+void runConformanceSafetyChecks() {
+    checkSignatureNullSafety();
+    checkPatternJsonEscaping();
+    if (jpdfium_abi_query(JPDFIUM_ABI_QUERY_HAS_QPDF) != 1) return;
+    checkPdfxPartialDates();
+    checkSparseToUnicodeAndStructSanitize();
+    checkForceVersion14Metadata();
+}
+
 }  // namespace
 
 int main() {
@@ -509,6 +920,7 @@ int main() {
         std::puts("native_smoke: real bridge detected, running boundary checks too");
         runBoundaryChecks();
         runRepairEdgeChecks();
+        runConformanceSafetyChecks();
     } else {
         std::puts("native_smoke: stub bridge detected");
     }

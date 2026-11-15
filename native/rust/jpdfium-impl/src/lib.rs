@@ -956,4 +956,167 @@ mod tests {
         );
         assert_eq!(reloaded_meta.content, xmp);
     }
+
+    #[test]
+    fn ffi_entry_points_handle_null_out_pointers_safely() {
+        let mut out_ptr: *mut u8 = std::ptr::dangling_mut();
+        let mut out_len: i64 = 123;
+        let sample = b"dummy";
+        unsafe {
+            assert_eq!(
+                jpdfium_rust_compress_pdf(
+                    sample.as_ptr(),
+                    5,
+                    std::ptr::null_mut(),
+                    &mut out_len,
+                    1
+                ),
+                JPDFIUM_ERR_GENERIC
+            );
+            assert_eq!(
+                jpdfium_rust_compress_pdf(
+                    sample.as_ptr(),
+                    5,
+                    &mut out_ptr,
+                    std::ptr::null_mut(),
+                    1
+                ),
+                JPDFIUM_ERR_GENERIC
+            );
+            assert_eq!(
+                jpdfium_rust_repair_lopdf(sample.as_ptr(), 5, std::ptr::null_mut(), &mut out_len),
+                JPDFIUM_REPAIR_FAILED
+            );
+            assert_eq!(
+                jpdfium_rust_repair_lopdf(sample.as_ptr(), 5, &mut out_ptr, std::ptr::null_mut()),
+                JPDFIUM_REPAIR_FAILED
+            );
+            assert_eq!(
+                jpdfium_rust_compress_png(
+                    sample.as_ptr(),
+                    5,
+                    std::ptr::null_mut(),
+                    &mut out_len,
+                    2
+                ),
+                JPDFIUM_ERR_GENERIC
+            );
+            assert_eq!(
+                jpdfium_rust_encode_cmyk_jpeg(
+                    sample.as_ptr(),
+                    5,
+                    1,
+                    1,
+                    90,
+                    std::ptr::null_mut(),
+                    &mut out_len,
+                ),
+                JPDFIUM_ERR_INVALID
+            );
+            assert_eq!(
+                jpdfium_rust_svg_to_rgba(
+                    sample.as_ptr(),
+                    5,
+                    0,
+                    0,
+                    std::ptr::null_mut(),
+                    &mut out_len,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                ),
+                JPDFIUM_ERR_GENERIC
+            );
+            assert_eq!(
+                jpdfium_rust_compress_pdf(std::ptr::null(), 5, &mut out_ptr, &mut out_len, 1),
+                JPDFIUM_ERR_GENERIC
+            );
+            assert!(out_ptr.is_null());
+            assert_eq!(out_len, 0);
+        }
+    }
+
+    #[test]
+    fn resize_pixels_validates_overflow_src_len_and_resizes_valid_input() {
+        let mut out_ptr: *mut u8 = std::ptr::dangling_mut();
+        let mut out_len: i64 = 999;
+        let rgba = [255u8; 16];
+        unsafe {
+            assert_eq!(
+                jpdfium_rust_resize_pixels(
+                    rgba.as_ptr(),
+                    16,
+                    2,
+                    2,
+                    4,
+                    4,
+                    4,
+                    std::ptr::null_mut(),
+                    &mut out_len,
+                ),
+                JPDFIUM_ERR_GENERIC
+            );
+            assert_eq!(
+                jpdfium_rust_resize_pixels(
+                    rgba.as_ptr(),
+                    64,
+                    i32::MAX,
+                    2,
+                    4,
+                    2,
+                    2,
+                    &mut out_ptr,
+                    &mut out_len,
+                ),
+                JPDFIUM_ERR_GENERIC
+            );
+            assert!(out_ptr.is_null());
+            assert_eq!(out_len, 0);
+
+            assert_eq!(
+                jpdfium_rust_resize_pixels(
+                    rgba.as_ptr(),
+                    3,
+                    2,
+                    2,
+                    4,
+                    4,
+                    4,
+                    &mut out_ptr,
+                    &mut out_len,
+                ),
+                JPDFIUM_ERR_GENERIC
+            );
+            assert_eq!(
+                jpdfium_rust_resize_pixels(
+                    rgba.as_ptr(),
+                    16,
+                    2,
+                    2,
+                    2,
+                    4,
+                    4,
+                    &mut out_ptr,
+                    &mut out_len,
+                ),
+                JPDFIUM_ERR_GENERIC
+            );
+            assert_eq!(
+                jpdfium_rust_resize_pixels(
+                    rgba.as_ptr(),
+                    16,
+                    2,
+                    2,
+                    4,
+                    4,
+                    4,
+                    &mut out_ptr,
+                    &mut out_len,
+                ),
+                JPDFIUM_OK
+            );
+            assert!(!out_ptr.is_null());
+            assert_eq!(out_len, 4 * 4 * 4);
+            jpdfium_rust_free(out_ptr);
+        }
+    }
 }
