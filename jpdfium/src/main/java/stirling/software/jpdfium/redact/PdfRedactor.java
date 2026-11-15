@@ -340,16 +340,8 @@ public final class PdfRedactor {
             return FontNormalizer.normalizeAll(doc);
         }
 
-        int totalTuc = 0;
-        int totalWidths = 0;
-        for (int i = 0; i < doc.pageCount(); i++) {
-            if (options.fixToUnicode()) {
-                totalTuc += FontNormalizer.fixToUnicode(doc, i);
-            }
-            if (options.repairWidths()) {
-                totalWidths += FontNormalizer.repairWidths(doc, i);
-            }
-        }
+        int totalTuc = options.fixToUnicode() ? FontNormalizer.fixToUnicodeAll(doc) : 0;
+        int totalWidths = options.repairWidths() ? FontNormalizer.repairWidthsAll(doc) : 0;
         return new FontNormalizer.Result(0, totalTuc, totalWidths, 0, 0);
     }
 
