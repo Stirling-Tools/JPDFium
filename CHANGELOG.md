@@ -42,6 +42,20 @@ publishing workflows, not library releases, so they are not listed here.
   non-embedded font from the system (or given) font directories, with
   metric-compatible substitutes for the standard 14. `PdfXOptions.fontData(...)`
   applies `embed(...)` before PDF/X validation.
+- Document-wide font inventory. `PdfFontAuditor.auditAll(doc)` and
+  `PdfFontAuditor.inventory(doc)` report every font dictionary, including fonts
+  that only exist in unused resource dictionaries or AcroForm `/DR`.
+  `PdfFontEmbedder.embedMissing(...)` now embeds those resource-only fonts and
+  resolves unresolved names from the same inventory, so a font that no page
+  draws with can no longer fail a PDF/A font check.
+- Deterministic fallback fonts. The jpdfium jar now ships Liberation, Carlito,
+  Caladea, DejaVu, Noto Sans Arabic and Noto Sans SC under `fonts/` and uses
+  them before host fonts for metric-compatible substitution. Family/style
+  aliases cover Calibri, Cambria, Verdana, Tahoma, traditional CJK names and
+  legacy GBK byte spellings. `PdfFontEmbedder.diagnose(name)` reports the
+  selected source and OS/2 `fsType`, and `Result` carries one `FontStatus` per
+  requested font, including the reason a restricted or unmatched face was not
+  embedded.
 - PDF/X-1a, PDF/X-3, PDF/X-4, and PDF/X-6 metadata bootstrap. `PdfXConverter`
   now sets the standard base version, writes a missing `/TrimBox`, and
   optionally fails on non-embedded fonts. `PdfXOptions` gains
@@ -68,6 +82,10 @@ publishing workflows, not library releases, so they are not listed here.
   converted, so `convertForms` and `convertLosslessImages` no longer affect
   PDF/X output.
 
+- `PdfFontAuditor.hasNonEmbeddedFonts` now includes fonts that only exist in unused
+  resource dictionaries or AcroForm `/DR`, matching `auditAll`. Documents that
+  previously passed the check can now fail it; the stricter result is the one a
+  PDF/A font check needs.
 - `PdfMerge.mergeFilesToFile` and `PdfSplit.extractPageRangeToFile` write their
   staging file without fsync and flush once when they publish the output, which
   now gets the destination's permissions as other saves do. They previously
