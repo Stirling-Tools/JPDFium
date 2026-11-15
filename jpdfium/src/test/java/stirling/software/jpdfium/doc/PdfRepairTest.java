@@ -320,7 +320,9 @@ class PdfRepairTest {
             "/pdfs/repair/multiple_eof.pdf",
             "/pdfs/repair/unclosed_stream_obj.pdf",
             "/pdfs/repair/stale_linearized.pdf",
-            "/pdfs/repair/noncontiguous_xref_index.pdf"
+            "/pdfs/repair/noncontiguous_xref_index.pdf",
+            "/pdfs/repair/xref_stream_mismatch.pdf",
+            "/pdfs/repair/flate_crlf_corrupt.pdf"
         };
         for (String fixture : fixtures) {
             byte[] input;
