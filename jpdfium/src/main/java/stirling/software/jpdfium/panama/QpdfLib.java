@@ -145,7 +145,7 @@ public final class QpdfLib {
 
     /** True when this native build can subset already-embedded fonts. */
     public static boolean isSubsetFontsSupported() {
-        return SUBSET_FONTS_HANDLE != null;
+        return SUBSET_FONTS_HANDLE != null && isFontReplacementSupported();
     }
 
     /**
