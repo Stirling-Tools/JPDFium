@@ -12,7 +12,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -102,6 +104,30 @@ class PdfMergerAndSecurityTest {
             byte[] merged = PdfDocument.mergeBytes(List.of(pdf1, pdf2));
             assertNotNull(merged);
             assertTrue(merged.length > 0);
+            if (NativeRuntime.isFull()) {
+                try (PdfDocument doc = PdfDocument.open(merged)) {
+                    assertEquals(2, doc.pageCount());
+                }
+            }
         }
+    }
+
+    @Test
+    void testMergeBytesRejectsPartialImportFailure() {
+        if (!PdfMerger.isSupported() || !NativeRuntime.isFull()) {
+            return;
+        }
+        byte[] valid = SyntheticPdfFactory.singlePageWithText("Valid Page");
+        byte[] corrupt = "not a valid pdf payload at all".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+
+        assertNull(PdfMerger.mergeBytes(List.of(valid, corrupt)),
+                "mergeBytes must fail rather than returning a partial document when an input cannot be merged");
+    }
+
+    @Test
+    void testNativeRuntimeRethrowFatalPropagatesErrorsOnly() {
+        assertThrows(OutOfMemoryError.class,
+                () -> NativeRuntime.rethrowFatal(new OutOfMemoryError("synthetic oom")));
+        NativeRuntime.rethrowFatal(new RuntimeException("non-fatal runtime exception"));
     }
 }

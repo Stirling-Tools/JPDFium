@@ -4,10 +4,12 @@ import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import stirling.software.jpdfium.panama.NativeLoader;
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.RepairLib;
 
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.text.PDFTextStripper;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -312,6 +314,7 @@ class PdfRepairTest {
 
     @Test
     void repairsSynthesizedDefectedFixtures() throws IOException {
+        Assumptions.assumeTrue(NativeRuntime.isFull(), "Requires full native repair bridge");
         String[] fixtures = {
             "/pdfs/repair/truncated_no_eof.pdf",
             "/pdfs/repair/corrupt_xref_offsets.pdf",
@@ -333,7 +336,14 @@ class PdfRepairTest {
             RepairResult result = PdfRepair.builder().input(input).all().build().execute();
             assertTrue(result.isUsable(), "Expected repairable fixture: " + fixture);
             try (var doc = stirling.software.jpdfium.PdfDocument.open(result.repairedPdf())) {
-                assertTrue(doc.pageCount() > 0, "Expected >0 pages after repair for: " + fixture);
+                assertEquals(1, doc.pageCount(), "Expected 1 page after repair for: " + fixture);
+            }
+            try (PDDocument reopened = Loader.loadPDF(result.repairedPdf())) {
+                assertEquals(1, reopened.getNumberOfPages(),
+                        "Expected PDFBox to reopen 1 page for: " + fixture);
+                String text = new PDFTextStripper().getText(reopened).trim();
+                assertTrue(text.contains("Repair Test"),
+                        "Expected repaired text 'Repair Test' in " + fixture + ", got: " + text);
             }
         }
     }
