@@ -331,7 +331,11 @@ public final class PdfFontEmbedder {
         // default index look like a caller-supplied directory list and let a
         // system face shadow the deterministic bundled fallback.
         List<Path> dirs = fontDirs.length == 0 ? List.of() : List.of(fontDirs);
-        return INDEXES.computeIfAbsent(dirs, PdfFontEmbedder::index);
+        Map<String, Face> index = INDEXES.computeIfAbsent(dirs, PdfFontEmbedder::index);
+        if (fontDirs.length == 0) return index;
+        Map<String, Face> isolated = new HashMap<>(index);
+        isolated.entrySet().removeIf(entry -> entry.getValue().resource() != null);
+        return isolated;
     }
 
     private static String source(Face face) {
@@ -365,8 +369,7 @@ public final class PdfFontEmbedder {
 
     private static Map<String, byte[]> programsFor(List<String> missing, Path... fontDirs)
             throws IOException {
-        Map<String, Face> index = INDEXES.computeIfAbsent(
-                fontDirs.length == 0 ? SYSTEM_FONT_DIRS : List.of(fontDirs), PdfFontEmbedder::index);
+        Map<String, Face> index = indexFor(fontDirs);
         Map<String, byte[]> found = new LinkedHashMap<>();
         Map<Face, byte[]> programs = new HashMap<>();
         for (String name : missing) {

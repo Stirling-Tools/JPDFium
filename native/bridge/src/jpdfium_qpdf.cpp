@@ -1780,12 +1780,18 @@ FT_UInt glyphForName(FT_Face face, std::string const& name) {
     if (!u && name.size() >= 5 && name[0] == 'u') {
         bool hex = name.size() <= 7;
         for (size_t i = 1; hex && i < name.size(); ++i) hex = std::isxdigit(uint8_t(name[i]));
-        if (hex) u = uint32_t(std::strtoul(name.c_str() + 1, nullptr, 16));
+        if (hex) {
+            uint32_t value = uint32_t(std::strtoul(name.c_str() + 1, nullptr, 16));
+            if (value <= 0x10FFFF) u = value;
+        }
     }
     if (!u && name.size() == 7 && name.starts_with("uni")) {
         bool hex = true;
-        for (size_t i = 3; i < 7; ++i) hex = std::isxdigit(uint8_t(name[i]));
-        if (hex) u = uint32_t(std::strtoul(name.c_str() + 3, nullptr, 16));
+        for (size_t i = 3; hex && i < 7; ++i) hex = std::isxdigit(uint8_t(name[i]));
+        if (hex) {
+            uint32_t value = uint32_t(std::strtoul(name.c_str() + 3, nullptr, 16));
+            if (value <= 0x10FFFF) u = value;
+        }
     }
     if (!u) {
         auto const* first = std::begin(kAdobeGlyphNames);
@@ -1924,6 +1930,22 @@ void setToUnicode(QPDF& qpdf, QPDFObjectHandle font, std::map<uint32_t, FT_ULong
     font.replaceKey("/ToUnicode", QPDFObjectHandle::newStream(&qpdf, cmap));
 }
 
+struct UnicodeScalar {
+    // A ToUnicode destination can pack a surrogate pair into one 32-bit value;
+    // FreeType indexes by the decoded scalar instead.
+    static uint32_t decode(uint32_t value) {
+        if (value <= 0xFFFF) return value;
+        uint32_t high = value >> 16, low = value & 0xFFFF;
+        if (high < 0xD800 || high > 0xDBFF || low < 0xDC00 || low > 0xDFFF) return 0;
+        return 0x10000 + ((high - 0xD800) << 10) + (low - 0xDC00);
+    }
+};
+
+// CIDs are two-byte codes for the Identity encodings this rewrite supports, so a
+// ToUnicode mapping outside that range cannot describe the document and is rejected
+// instead of being allowed to size the generated CIDToGIDMap.
+constexpr uint32_t kMaxCid = 0xFFFF;
+
 std::map<uint32_t, uint32_t> parseToUnicode(QPDFObjectHandle const& font) {
     std::map<uint32_t, uint32_t> map;
     auto stream = font.getKey("/ToUnicode");
@@ -1932,68 +1954,110 @@ std::map<uint32_t, uint32_t> parseToUnicode(QPDFObjectHandle const& font) {
     if (!data || !data->getSize()) return map;
     std::string text(reinterpret_cast<char const*>(data->getBuffer()), data->getSize());
 
-    auto hexAt = [&](size_t& pos, uint32_t& value) {
+    // PDF hex strings may interleave whitespace and pad an odd final digit with
+    // zero. The byte count decides whether the value can name a CID or a scalar.
+    auto hexAt = [&](size_t& pos, uint32_t& value, size_t& bytes) {
         if (pos >= text.size() || text[pos] != '<') return false;
         ++pos;
-        size_t start = pos;
-        while (pos < text.size() && text[pos] != '>') ++pos;
-        if (pos >= text.size() || pos == start || pos - start > 8) return false;
-        value = uint32_t(std::strtoul(text.substr(start, pos - start).c_str(), nullptr, 16));
+        std::string digits;
+        while (pos < text.size() && text[pos] != '>') {
+            unsigned char c = uint8_t(text[pos++]);
+            if (std::isspace(c)) continue;
+            if (!std::isxdigit(c) || digits.size() >= 8) return false;
+            digits += char(c);
+        }
+        if (pos >= text.size() || digits.empty()) return false;
         ++pos;
+        if (digits.size() % 2) digits += '0';
+        value = uint32_t(std::strtoul(digits.c_str(), nullptr, 16));
+        bytes = digits.size() / 2;
         return true;
+    };
+    auto validDestination = [](uint32_t value, size_t bytes) {
+        if (bytes <= 2) return true;
+        // Four bytes is a surrogate pair only when it decodes to a valid scalar.
+        return bytes == 4 && UnicodeScalar::decode(value) != 0;
     };
     auto skipSpace = [&](size_t& pos) {
         while (pos < text.size() && std::isspace(uint8_t(text[pos]))) ++pos;
     };
-    auto find = [&](std::string const& token, size_t from) { return text.find(token, from); };
 
-    size_t pos = find("beginbfchar", 0);
-    if (pos != std::string::npos) {
-        pos += std::strlen("beginbfchar");
-        size_t end = find("endbfchar", pos);
+    auto parseChars = [&](size_t pos, size_t end) {
         while (pos < end) {
             skipSpace(pos);
+            if (pos >= end) break;
             uint32_t code = 0;
-            if (!hexAt(pos, code)) {
-                ++pos;
-                continue;
-            }
+            size_t codeBytes = 0;
+            if (!hexAt(pos, code, codeBytes) || codeBytes > 2 || code > kMaxCid) return false;
             skipSpace(pos);
             uint32_t unicode = 0;
-            if (hexAt(pos, unicode)) map[code] = unicode;
+            size_t destinationBytes = 0;
+            if (!hexAt(pos, unicode, destinationBytes) ||
+                !validDestination(unicode, destinationBytes))
+                return false;
+            map[code] = unicode;
         }
-    }
-    pos = find("beginbfrange", 0);
-    if (pos != std::string::npos) {
-        pos += std::strlen("beginbfrange");
-        size_t end = find("endbfrange", pos);
+        return true;
+    };
+    auto parseRanges = [&](size_t pos, size_t end) {
         while (pos < end) {
             skipSpace(pos);
+            if (pos >= end) break;
             uint32_t low = 0;
-            if (!hexAt(pos, low)) {
-                ++pos;
-                continue;
-            }
+            size_t lowBytes = 0;
+            if (!hexAt(pos, low, lowBytes) || lowBytes > 2) return false;
             skipSpace(pos);
             uint32_t high = 0;
-            if (!hexAt(pos, high) || high < low) continue;
+            size_t highBytes = 0;
+            if (!hexAt(pos, high, highBytes) || highBytes > 2 || high < low || high > kMaxCid)
+                return false;
             skipSpace(pos);
             if (pos < end && text[pos] == '[') {
                 ++pos;
-                for (uint32_t code = low; code <= high; ++code) {
+                uint64_t expected = uint64_t(high) - low + 1;
+                for (uint64_t i = 0; i < expected; ++i) {
                     skipSpace(pos);
                     uint32_t unicode = 0;
-                    if (!hexAt(pos, unicode)) break;
-                    map[code] = unicode;
+                    size_t destinationBytes = 0;
+                    if (!hexAt(pos, unicode, destinationBytes) ||
+                        !validDestination(unicode, destinationBytes))
+                        return false;
+                    map[low + uint32_t(i)] = unicode;
                 }
-                while (pos < end && text[pos] != ']') ++pos;
-                if (pos < end) ++pos;
+                skipSpace(pos);
+                if (pos >= end || text[pos] != ']') return false;
+                ++pos;
             } else {
                 uint32_t unicode = 0;
-                if (!hexAt(pos, unicode)) continue;
-                for (uint32_t code = low; code <= high; ++code) map[code] = unicode + code - low;
+                size_t destinationBytes = 0;
+                if (!hexAt(pos, unicode, destinationBytes)) return false;
+                // Incrementing a packed surrogate pair has no defined meaning.
+                if (!validDestination(unicode, destinationBytes) || destinationBytes > 2)
+                    return false;
+                uint64_t base = unicode;
+                for (uint32_t code = low; code <= high; ++code) {
+                    uint64_t value = base + (code - low);
+                    if (value > 0x10FFFF) return false;
+                    map[code] = uint32_t(value);
+                }
             }
         }
+        return true;
+    };
+
+    size_t pos = 0;
+    while ((pos = text.find("beginbfchar", pos)) != std::string::npos) {
+        pos += std::strlen("beginbfchar");
+        size_t end = text.find("endbfchar", pos);
+        if (end == std::string::npos || !parseChars(pos, end)) return {};
+        pos = end + std::strlen("endbfchar");
+    }
+    pos = 0;
+    while ((pos = text.find("beginbfrange", pos)) != std::string::npos) {
+        pos += std::strlen("beginbfrange");
+        size_t end = text.find("endbfrange", pos);
+        if (end == std::string::npos || !parseRanges(pos, end)) return {};
+        pos = end + std::strlen("endbfrange");
     }
     return map;
 }
