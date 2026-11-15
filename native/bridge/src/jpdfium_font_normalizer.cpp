@@ -749,8 +749,7 @@ static void convertCffInSfnt(QPDF& pdf, QPDFObjectHandle& descriptor, FT_Library
 }
 
 static std::set<uint32_t> cidsPresentInProgram(FT_Face face, QPDFObjectHandle& cidToGid,
-                                               bool cidIdentity,
-                                               std::map<uint32_t, uint32_t> const& gidToCid) {
+                                               bool cidIdentity) {
     std::set<uint32_t> cids;
     if (cidToGid.isStream()) {
         try {
@@ -770,50 +769,16 @@ static std::set<uint32_t> cidsPresentInProgram(FT_Face face, QPDFObjectHandle& c
         return cids;
     }
     if (face && FT_IS_CID_KEYED(face)) {
-        for (auto const& [_, cidVal] : gidToCid) {
-            if (cidVal <= kMaxCid) cids.insert(cidVal);
+        for (FT_UInt gid = 0; gid < static_cast<FT_UInt>(face->num_glyphs); ++gid) {
+            FT_UInt cidVal = 0;
+            if (FT_Get_CID_From_Glyph_Index(face, gid, &cidVal) == 0 && cidVal <= kMaxCid)
+                cids.insert(static_cast<uint32_t>(cidVal));
         }
         return cids;
     }
     if (face && cidIdentity && face->num_glyphs > 0) {
         const long maxGid = std::min<long>(face->num_glyphs - 1, kMaxCid);
         for (long gid = 0; gid <= maxGid; ++gid) cids.insert(static_cast<uint32_t>(gid));
-    }
-    return cids;
-}
-
-static std::set<uint32_t> cidsForRetainedGlyphs(QPDFObjectHandle& cidToGid, bool cidIdentity,
-                                                std::map<uint32_t, uint32_t> const& gidToCid,
-                                                std::set<FT_UInt> const& glyphs) {
-    std::set<uint32_t> cids{0};
-    if (cidToGid.isStream()) {
-        try {
-            std::shared_ptr<Buffer> data = cidToGid.getStreamData(qpdf_dl_generalized);
-            if (data) {
-                const auto* bytes = static_cast<const uint8_t*>(data->getBuffer());
-                const size_t entries = data->getSize() / 2;
-                for (size_t c = 0; c < entries && c <= kMaxCid; ++c) {
-                    const uint32_t gid =
-                        (static_cast<uint32_t>(bytes[2 * c]) << 8) | bytes[2 * c + 1];
-                    if (glyphs.contains(static_cast<FT_UInt>(gid)))
-                        cids.insert(static_cast<uint32_t>(c));
-                }
-            }
-        } catch (...) {
-            return {0};
-        }
-        return cids;
-    }
-    if (cidIdentity && !gidToCid.empty()) {
-        for (FT_UInt gid : glyphs) {
-            auto found = gidToCid.find(static_cast<uint32_t>(gid));
-            if (found != gidToCid.end() && found->second <= kMaxCid) cids.insert(found->second);
-        }
-        return cids;
-    }
-    if (cidIdentity) {
-        for (FT_UInt gid : glyphs)
-            if (gid <= kMaxCid) cids.insert(static_cast<uint32_t>(gid));
     }
     return cids;
 }
@@ -1179,15 +1144,29 @@ static void processFont(QPDF& pdf, FT_Library ftLib, QPDFObjectHandle font, bool
     }
 
     if (cid && full && descriptor.hasKey("/CIDSet")) {
-        if (didResubset) {
-            writeCidSetIfDifferent(
-                pdf, descriptor,
-                cidsForRetainedGlyphs(cidToGid, cidIdentity, gidToCid, retainedGlyphs), state);
-        } else {
-            writeCidSetIfDifferent(pdf, descriptor,
-                                   cidsPresentInProgram(rawFace, cidToGid, cidIdentity, gidToCid),
-                                   state);
+        FT_Face cidSetFace = rawFace;
+        FtFaceGuard cidSetGuard;
+        std::string cidSetOwned;
+        QPDFObjectHandle finalStream = embeddedFontProgram(descriptor);
+        if (finalStream.isStream()) {
+            try {
+                std::shared_ptr<Buffer> finalData = finalStream.getStreamData(qpdf_dl_generalized);
+                if (finalData && finalData->getSize() > 0 &&
+                    (finalData->getSize() != data->getSize() ||
+                     std::memcmp(finalData->getBuffer(), data->getBuffer(), finalData->getSize()) !=
+                         0)) {
+                    cidSetOwned.assign(reinterpret_cast<const char*>(finalData->getBuffer()),
+                                       finalData->getSize());
+                    if (FT_Face reloaded = loadFontFace(ftLib, cidSetOwned, 0)) {
+                        cidSetGuard.reset(reloaded);
+                        cidSetFace = reloaded;
+                    }
+                }
+            } catch (...) {
+            }
         }
+        writeCidSetIfDifferent(pdf, descriptor,
+                               cidsPresentInProgram(cidSetFace, cidToGid, cidIdentity), state);
     }
 
     // Rebuild /CharSet for Type 1/CFF subsets when every retained glyph has a PostScript name.

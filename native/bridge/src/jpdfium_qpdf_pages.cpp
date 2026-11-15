@@ -879,6 +879,32 @@ int setDocInfoFile(const char* in_path, const char* out_path, const char* const*
     }
 }
 
+void configureForcedVersionWriter(QPDF& pdf, QPDFWriter& writer, const char* version) {
+    int major = 0;
+    int minor = 0;
+    if (std::sscanf(version, "%d.%d", &major, &minor) == 2 &&
+        (major < 1 || (major == 1 && minor < 5))) {
+        // Object streams require PDF 1.5+ (ISO 32000-1 §7.5.7); keep <=1.4 valid.
+        writer.setObjectStreamMode(qpdf_o_disable);
+        try {
+            QPDFObjectHandle root = pdf.getRoot();
+            if (root.hasKey("/Metadata")) {
+                QPDFObjectHandle meta = root.getKey("/Metadata");
+                if (meta.isStream()) {
+                    auto raw = meta.getStreamData(qpdf_dl_all);
+                    if (raw) {
+                        meta.replaceStreamData(raw, QPDFObjectHandle::newNull(),
+                                               QPDFObjectHandle::newNull());
+                        meta.setFilterOnWrite(false);
+                    }
+                }
+            }
+        } catch (...) {
+        }
+    }
+    writer.forcePDFVersion(version);
+}
+
 int forceVersionFile(const char* in_path, const char* out_path, const char* version) {
     if (!in_path || !out_path || !version || !*version) return -1;
     try {
@@ -893,7 +919,7 @@ int forceVersionFile(const char* in_path, const char* out_path, const char* vers
             QPDFWriter writer{*pdf};
             writer.setOutputFile("jpdfium-out", out, true);
             writerOwnsFile = true;
-            writer.forcePDFVersion(version);
+            configureForcedVersionWriter(*pdf, writer, version);
             WriterLock lock{-1};
             writer.write();
             return 0;
@@ -964,7 +990,7 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_force_version(const uint8_t* input, int64_t 
         pdf->getRoot().removeKey("/Version");
         QPDFWriter writer{*pdf};
         writer.setOutputMemory();
-        writer.forcePDFVersion(version);
+        configureForcedVersionWriter(*pdf, writer, version);
         WriterLock lock{-1};
         writer.write();
         return writeBufferToC(writer.getBufferSharedPointer(), output, outputLen);
