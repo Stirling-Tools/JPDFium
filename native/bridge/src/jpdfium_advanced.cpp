@@ -371,8 +371,10 @@ std::vector<uint8_t> qpdfWriteBytes(QPDF& pdf) {
     jpdfium_qpdf_internal::WriterLock lock{9};
     writer.write();
     std::shared_ptr<Buffer> buf = writer.getBufferSharedPointer();
-    std::vector<uint8_t> result(buf->getSize());
-    memcpy(result.data(), buf->getBuffer(), buf->getSize());
+    if (!buf) return {};
+    size_t sz = buf->getSize();
+    std::vector<uint8_t> result(sz);
+    if (sz > 0) memcpy(result.data(), buf->getBuffer(), sz);
     return result;
 }
 

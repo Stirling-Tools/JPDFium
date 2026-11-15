@@ -26,7 +26,7 @@ thread_local! {
 
 use fast_image_resize as fir;
 use fir::images::Image as FirImage;
-use flate2::read::ZlibDecoder;
+use flate2::read::{DeflateDecoder, ZlibDecoder};
 use lopdf::Document;
 use zopfli::{compress as zopfli_compress, Format, Options};
 
@@ -51,13 +51,41 @@ unsafe fn malloc_copy(data: &[u8]) -> *mut u8 {
     ptr
 }
 
-/// Decompress ZLib (FlateDecode) bytes using flate2.
-/// Returns the raw content, or None on failure.
+/// Decompress ZLib (FlateDecode) bytes using flate2, falling back to raw
+/// DEFLATE when the zlib wrapper or Adler-32 trailer is corrupt or absent.
 fn flate2_decompress_zlib(data: &[u8]) -> Option<Vec<u8>> {
-    let mut decoder = ZlibDecoder::new(data);
     let mut output = Vec::new();
-    decoder.read_to_end(&mut output).ok()?;
-    Some(output)
+    if ZlibDecoder::new(data).read_to_end(&mut output).is_ok() {
+        return Some(output);
+    }
+    output.clear();
+    if DeflateDecoder::new(data).read_to_end(&mut output).is_ok() && !output.is_empty() {
+        return Some(output);
+    }
+    if data.len() >= 6 && (data[0] & 0x0F) == 8 {
+        let header = ((data[0] as u16) << 8) | (data[1] as u16);
+        if header % 31 == 0 {
+            output.clear();
+            if DeflateDecoder::new(&data[2..])
+                .read_to_end(&mut output)
+                .is_ok()
+                && !output.is_empty()
+            {
+                return Some(output);
+            }
+        }
+    }
+    None
+}
+
+fn is_plain_flate_filter(dict: &lopdf::Dictionary) -> bool {
+    match dict.get(b"Filter") {
+        Ok(lopdf::Object::Name(name)) => name == b"FlateDecode",
+        Ok(lopdf::Object::Array(arr)) if arr.len() == 1 => {
+            matches!(arr.first(), Some(lopdf::Object::Name(name)) if name == b"FlateDecode")
+        }
+        _ => false,
+    }
 }
 
 /// Compress `input` with zopfli using ZLib format (matches PDF FlateDecode).
@@ -111,6 +139,9 @@ pub unsafe extern "C" fn jpdfium_rust_compress_pdf(
     out_len: *mut i64,
     zopfli_iters: i32,
 ) -> i32 {
+    if out_ptr.is_null() || out_len.is_null() {
+        return JPDFIUM_ERR_GENERIC;
+    }
     *out_ptr = std::ptr::null_mut();
     *out_len = 0;
 
@@ -146,6 +177,12 @@ fn compress_pdf_impl(input: &[u8], iterations: u32) -> Result<Vec<u8>, Box<dyn s
             if stream.content.is_empty() || !stream.allows_compression {
                 continue;
             }
+            if matches!(
+                stream.dict.get(b"Type"),
+                Ok(lopdf::Object::Name(ref name)) if name == b"Metadata"
+            ) {
+                continue;
+            }
 
             // After doc.decompress(), streams that were successfully decoded
             // no longer have a Filter entry. Streams that lopdf could NOT
@@ -155,7 +192,10 @@ fn compress_pdf_impl(input: &[u8], iterations: u32) -> Result<Vec<u8>, Box<dyn s
             // Obtain raw (uncompressed) content as an owned Vec to avoid borrow
             // conflicts when we later mutate stream.content.
             let raw: Vec<u8> = if still_filtered {
-                // lopdf left this stream compressed - try flate2 as a fallback.
+                if !is_plain_flate_filter(&stream.dict) {
+                    continue;
+                }
+                // lopdf left this Flate stream compressed - try tolerant flate2/raw-deflate fallback.
                 match flate2_decompress_zlib(&stream.content) {
                     Some(decoded) => decoded,
                     None => continue, // Cannot decode; leave stream untouched.
@@ -174,11 +214,9 @@ fn compress_pdf_impl(input: &[u8], iterations: u32) -> Result<Vec<u8>, Box<dyn s
                     .dict
                     .set("Filter", lopdf::Object::Name(b"FlateDecode".to_vec()));
             } else if still_filtered {
-                // flate2 decoded the stream but zopfli didn't help: store the
-                // decoded bytes re-compressed with the default FlateDecode so
-                // the Filter entry remains consistent.
-                stream.content = raw;
-                // Filter entry already present - leave it.
+                // Keep the original compressed bytes intact rather than writing
+                // uncompressed bytes under an active /FlateDecode filter.
+                continue;
             }
         }
     }
@@ -204,6 +242,9 @@ pub unsafe extern "C" fn jpdfium_rust_repair_lopdf(
     out_ptr: *mut *mut u8,
     out_len: *mut i64,
 ) -> i32 {
+    if out_ptr.is_null() || out_len.is_null() {
+        return JPDFIUM_REPAIR_FAILED;
+    }
     *out_ptr = std::ptr::null_mut();
     *out_len = 0;
 
@@ -258,6 +299,9 @@ pub unsafe extern "C" fn jpdfium_rust_resize_pixels(
     out_ptr: *mut *mut u8,
     out_len: *mut i64,
 ) -> i32 {
+    if out_ptr.is_null() || out_len.is_null() {
+        return JPDFIUM_ERR_GENERIC;
+    }
     *out_ptr = std::ptr::null_mut();
     *out_len = 0;
 
@@ -269,6 +313,16 @@ pub unsafe extern "C" fn jpdfium_rust_resize_pixels(
         || dst_height <= 0
         || !(1..=4).contains(&components)
     {
+        return JPDFIUM_ERR_GENERIC;
+    }
+
+    let Some(expected_len) = (src_width as u64)
+        .checked_mul(src_height as u64)
+        .and_then(|px| px.checked_mul(components as u64))
+    else {
+        return JPDFIUM_ERR_GENERIC;
+    };
+    if (src_len as u64) < expected_len || expected_len > (isize::MAX as u64) {
         return JPDFIUM_ERR_GENERIC;
     }
 
@@ -461,6 +515,9 @@ pub unsafe extern "C" fn jpdfium_rust_compress_png(
     out_len: *mut i64,
     level: i32,
 ) -> i32 {
+    if out_ptr.is_null() || out_len.is_null() {
+        return JPDFIUM_ERR_GENERIC;
+    }
     *out_ptr = std::ptr::null_mut();
     *out_len = 0;
 
@@ -608,7 +665,18 @@ pub unsafe extern "C" fn jpdfium_rust_svg_to_rgba(
     out_w: *mut i32,
     out_h: *mut i32,
 ) -> i32 {
-    if svg.is_null() || svg_len == 0 || out_ptr.is_null() || out_len.is_null() {
+    if out_ptr.is_null() || out_len.is_null() {
+        return JPDFIUM_ERR_GENERIC;
+    }
+    *out_ptr = std::ptr::null_mut();
+    *out_len = 0;
+    if !out_w.is_null() {
+        *out_w = 0;
+    }
+    if !out_h.is_null() {
+        *out_h = 0;
+    }
+    if svg.is_null() || svg_len == 0 {
         return JPDFIUM_ERR_GENERIC;
     }
     let data = slice::from_raw_parts(svg, svg_len);
@@ -719,5 +787,173 @@ pub unsafe extern "C" fn jpdfium_rust_svg_to_rgba(
 pub unsafe extern "C" fn jpdfium_rust_free(ptr: *mut u8) {
     if !ptr.is_null() {
         libc::free(ptr as *mut libc::c_void);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flate2::write::{DeflateEncoder, ZlibEncoder};
+    use flate2::Compression;
+    use lopdf::{dictionary, Document, Object, Stream};
+    use std::io::Write;
+
+    #[test]
+    fn flate2_decompress_zlib_handles_standard_raw_and_bad_adler32() {
+        let payload = b"BT /F1 12 Tf 72 700 Td (Repairable Flate Stream) Tj ET";
+
+        let mut zenc = ZlibEncoder::new(Vec::new(), Compression::default());
+        zenc.write_all(payload).unwrap();
+        let valid_zlib = zenc.finish().unwrap();
+        assert_eq!(
+            flate2_decompress_zlib(&valid_zlib).as_deref(),
+            Some(payload.as_slice())
+        );
+
+        // Raw Deflate without the 2-byte zlib header or 4-byte Adler-32 trailer.
+        let mut denc = DeflateEncoder::new(Vec::new(), Compression::default());
+        denc.write_all(payload).unwrap();
+        let raw_deflate = denc.finish().unwrap();
+        assert_eq!(
+            flate2_decompress_zlib(&raw_deflate).as_deref(),
+            Some(payload.as_slice())
+        );
+
+        // Valid CMF/FLG zlib header with corrupted Adler-32 trailer.
+        let mut bad_adler = valid_zlib.clone();
+        let last = bad_adler.len() - 1;
+        bad_adler[last] ^= 0x5A;
+        assert_eq!(
+            flate2_decompress_zlib(&bad_adler).as_deref(),
+            Some(payload.as_slice())
+        );
+
+        assert_eq!(flate2_decompress_zlib(b"\xFF\x00\xAB"), None);
+    }
+
+    #[test]
+    fn compress_pdf_impl_preserves_dct_and_flate_filter_integrity() {
+        let mut doc = Document::with_version("1.5");
+        let pages_id = doc.new_object_id();
+
+        let tiny_raw = b"q Q";
+        let mut zenc = ZlibEncoder::new(Vec::new(), Compression::best());
+        zenc.write_all(tiny_raw).unwrap();
+        let bad_flate = {
+            let mut z = zenc.finish().unwrap();
+            let last = z.len() - 1;
+            z[last] ^= 0xFF;
+            z
+        };
+        let flate_id = doc.add_object(Stream::new(
+            dictionary! { "Filter" => "FlateDecode" },
+            bad_flate,
+        ));
+
+        let fake_jpeg = vec![
+            0xFFu8, 0xD8, 0xFF, 0xE0, 0x00, 0x10, b'J', b'F', b'I', b'F', 0xFF, 0xD9,
+        ];
+        let dct_id = doc.add_object(Stream::new(
+            dictionary! {
+                "Type" => "XObject",
+                "Subtype" => "Image",
+                "Width" => 1,
+                "Height" => 1,
+                "Filter" => "DCTDecode",
+            },
+            fake_jpeg.clone(),
+        ));
+
+        let resources_id = doc.add_object(dictionary! {
+            "XObject" => dictionary! { "Im0" => dct_id },
+        });
+        let page_id = doc.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+            "Resources" => resources_id,
+            "Contents" => flate_id,
+        });
+        doc.objects.insert(
+            pages_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Pages",
+                "Kids" => vec![page_id.into()],
+                "Count" => 1,
+            }),
+        );
+        let catalog_id = doc.add_object(dictionary! {
+            "Type" => "Catalog",
+            "Pages" => pages_id,
+        });
+        doc.trailer.set("Root", catalog_id);
+
+        let mut input = Vec::new();
+        doc.save_to(&mut Cursor::new(&mut input)).unwrap();
+
+        let out_bytes = compress_pdf_impl(&input, 1).unwrap();
+        let reloaded = Document::load_mem(&out_bytes).unwrap();
+
+        let reloaded_dct = reloaded.get_object(dct_id).unwrap().as_stream().unwrap();
+        assert_eq!(reloaded_dct.content, fake_jpeg);
+
+        let reloaded_flate = reloaded.get_object(flate_id).unwrap().as_stream().unwrap();
+        if is_plain_flate_filter(&reloaded_flate.dict) {
+            assert_eq!(
+                flate2_decompress_zlib(&reloaded_flate.content).as_deref(),
+                Some(tiny_raw.as_slice()),
+                "FlateDecode stream must never store uncompressed bytes without stripping /Filter"
+            );
+        } else {
+            assert_eq!(reloaded_flate.content, tiny_raw);
+        }
+    }
+
+    #[test]
+    fn compress_pdf_impl_keeps_metadata_stream_uncompressed() {
+        let mut doc = Document::with_version("1.4");
+        let pages_id = doc.new_object_id();
+        let xmp = b"<?xpacket begin=\"\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\
+            <x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\
+            <rdf:Description rdf:about=\"\" xmlns:pdfaid=\"http://www.aiim.org/pdfa/ns/id/\" pdfaid:part=\"1\" pdfaid:conformance=\"B\"/>\
+            </rdf:RDF></x:xmpmeta><?xpacket end=\"w\"?>".to_vec();
+        let meta_id = doc.add_object(Stream::new(
+            dictionary! {
+                "Type" => "Metadata",
+                "Subtype" => "XML",
+            },
+            xmp.clone(),
+        ));
+        let page_id = doc.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+        });
+        doc.objects.insert(
+            pages_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Pages",
+                "Kids" => vec![page_id.into()],
+                "Count" => 1,
+            }),
+        );
+        let catalog_id = doc.add_object(dictionary! {
+            "Type" => "Catalog",
+            "Pages" => pages_id,
+            "Metadata" => meta_id,
+        });
+        doc.trailer.set("Root", catalog_id);
+
+        let mut input = Vec::new();
+        doc.save_to(&mut Cursor::new(&mut input)).unwrap();
+
+        let out_bytes = compress_pdf_impl(&input, 1).unwrap();
+        let reloaded = Document::load_mem(&out_bytes).unwrap();
+        let reloaded_meta = reloaded.get_object(meta_id).unwrap().as_stream().unwrap();
+        assert!(
+            reloaded_meta.dict.get(b"Filter").is_err(),
+            "Metadata stream must remain uncompressed for PDF/A-1 compliance"
+        );
+        assert_eq!(reloaded_meta.content, xmp);
     }
 }

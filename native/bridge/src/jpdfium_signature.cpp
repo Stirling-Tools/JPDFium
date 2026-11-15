@@ -111,8 +111,9 @@ std::string sigString(EPDF_SIGNATURE_MODEL model, int index, int key) {
 
 int32_t jpdfium_signature_count(int64_t doc, int32_t* count) {
     if (!count) return JPDFIUM_ERR_INVALID;
+    *count = 0;
     DocWrapper* w = decodeDoc(doc);
-    if (!w || !w->core->doc) return JPDFIUM_ERR_INVALID;
+    if (!w || !w->core || !w->core->doc) return JPDFIUM_ERR_INVALID;
     return jpdfium_guarded([&] {
         EPDF_SIGNATURE_MODEL model = EPDFSig_LoadModel(w->core->doc);
         if (!model) {
@@ -130,8 +131,9 @@ int32_t jpdfium_signature_count(int64_t doc, int32_t* count) {
 // Number of byte revisions (signed prefixes) in the loaded document.
 int32_t jpdfium_signature_revision_count(int64_t doc, int32_t* count) {
     if (!count) return JPDFIUM_ERR_INVALID;
+    *count = 0;
     DocWrapper* w = decodeDoc(doc);
-    if (!w || !w->core->doc) return JPDFIUM_ERR_INVALID;
+    if (!w || !w->core || !w->core->doc) return JPDFIUM_ERR_INVALID;
     return jpdfium_guarded([&] {
         *count = EPDFDoc_GetRevisionCount(w->core->doc);
         return JPDFIUM_OK;
@@ -146,8 +148,9 @@ int32_t jpdfium_signature_revision_count(int64_t doc, int32_t* count) {
 //    "contactInfo":...,"signingTime":...,"contentsLength":N}
 int32_t jpdfium_signature_info(int64_t doc, int32_t index, char** json) {
     if (!json) return JPDFIUM_ERR_INVALID;
+    *json = nullptr;
     DocWrapper* w = decodeDoc(doc);
-    if (!w || !w->core->doc) return JPDFIUM_ERR_INVALID;
+    if (!w || !w->core || !w->core->doc) return JPDFIUM_ERR_INVALID;
     return jpdfium_guarded([&] {
         EPDF_SIGNATURE_MODEL model = EPDFSig_LoadModel(w->core->doc);
         if (!model) return JPDFIUM_ERR_NATIVE;
@@ -203,11 +206,13 @@ int32_t jpdfium_signature_info(int64_t doc, int32_t index, char** json) {
 int32_t jpdfium_signature_digest(int64_t doc, int32_t index, int32_t algorithm, uint8_t** digest,
                                  int64_t* len) {
     if (!digest || !len) return JPDFIUM_ERR_INVALID;
+    *digest = nullptr;
+    *len = 0;
     if (algorithm < EPDF_DIGEST_SHA1 || algorithm > EPDF_DIGEST_SHA512) {
         return JPDFIUM_ERR_INVALID;
     }
     DocWrapper* w = decodeDoc(doc);
-    if (!w || !w->core->doc) return JPDFIUM_ERR_INVALID;
+    if (!w || !w->core || !w->core->doc) return JPDFIUM_ERR_INVALID;
     return jpdfium_guarded([&] {
         EPDF_SIGNATURE_MODEL model = EPDFSig_LoadModel(w->core->doc);
         if (!model) return JPDFIUM_ERR_NATIVE;
@@ -223,7 +228,8 @@ int32_t jpdfium_signature_digest(int64_t doc, int32_t index, int32_t algorithm, 
 
         unsigned char buf[64];
         unsigned long bufLen = sizeof(buf);
-        if (!EPDFSig_DigestByteRange(w->core->doc, range, algorithm, buf, &bufLen)) {
+        if (!EPDFSig_DigestByteRange(w->core->doc, range, algorithm, buf, &bufLen) || bufLen == 0 ||
+            bufLen > sizeof(buf)) {
             return JPDFIUM_ERR_NATIVE;
         }
         auto* out = static_cast<uint8_t*>(malloc(bufLen));

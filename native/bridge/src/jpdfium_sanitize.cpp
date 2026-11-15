@@ -218,15 +218,20 @@ bool parseToUnicode(const std::shared_ptr<Buffer>& buf, std::vector<CmapEntry>& 
                 for (unsigned char c : loBytes) lo = (lo << 8) | c;
                 for (unsigned char c : hiBytes) hi = (hi << 8) | c;
                 if (pendingHex.size() == 3) {
-                    // consecutive form: lo..hi -> u..u+n
-                    int unicode = 0;
-                    for (unsigned char c : uniBytes) unicode = (unicode << 8) | c;
+                    // consecutive form: lo..hi -> u..u+n; advance the full
+                    // big-endian UTF-16 byte string in place so multi-unit
+                    // values (including surrogate pairs) never truncate.
+                    std::string ub = uniBytes;
                     for (int code = lo; code <= hi; code++) {
-                        std::string ub(2, '\0');
-                        ub[0] = static_cast<char>((unicode >> 8) & 0xFF);
-                        ub[1] = static_cast<char>(unicode & 0xFF);
                         out.push_back(CmapEntry{code, static_cast<int>(loBytes.size()), ub});
-                        unicode++;
+                        for (size_t idx = ub.size(); idx-- > 0;) {
+                            auto v = static_cast<unsigned char>(ub[idx]);
+                            if (v < 0xFF) {
+                                ub[idx] = static_cast<char>(v + 1);
+                                break;
+                            }
+                            ub[idx] = '\0';
+                        }
                     }
                 } else {
                     // list form: pendingHex[2..] are the unicodes
@@ -301,25 +306,40 @@ std::string rebuildCmap(const std::vector<CmapEntry>& entries, const std::set<in
         if (a->codeBytes != b->codeBytes) return a->codeBytes < b->codeBytes;
         return a->code < b->code;
     });
+    bool twoByte = false;
+    for (const auto* e : kept) {
+        if (e->codeBytes != 1) {
+            twoByte = true;
+            break;
+        }
+    }
     std::ostringstream os;
     os << "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n"
           "/CIDSystemInfo << /Registry (JPDFium) /Ordering (Redact) /Supplement 0 >> def\n"
-          "/CMapName /JPDFium-Redact def\n/CMapType 2 def\n";
+          "/CMapName /JPDFium-Redact def\n/CMapType 2 def\n"
+          "1 begincodespacerange\n"
+       << (twoByte ? "<0000> <FFFF>\n" : "<00> <FF>\n") << "endcodespacerange\n";
     static const char* hexd = "0123456789ABCDEF";
-    os << kept.size() << " beginbfchar\n";
-    for (const auto* e : kept) {
-        os << '<';
-        if (e->codeBytes == 1) {
-            os << hexd[(e->code >> 4) & 0xF] << hexd[e->code & 0xF];
-        } else {
-            os << hexd[(e->code >> 12) & 0xF] << hexd[(e->code >> 8) & 0xF]
-               << hexd[(e->code >> 4) & 0xF] << hexd[e->code & 0xF];
+    // ISO 32000-1 §9.10.3 caps each beginbfchar section at 100 entries.
+    for (size_t start = 0; start < kept.size(); start += 100) {
+        size_t end = std::min(start + 100, kept.size());
+        os << (end - start) << " beginbfchar\n";
+        for (size_t idx = start; idx < end; idx++) {
+            const auto* e = kept[idx];
+            os << '<';
+            if (e->codeBytes == 1) {
+                os << hexd[(e->code >> 4) & 0xF] << hexd[e->code & 0xF];
+            } else {
+                os << hexd[(e->code >> 12) & 0xF] << hexd[(e->code >> 8) & 0xF]
+                   << hexd[(e->code >> 4) & 0xF] << hexd[e->code & 0xF];
+            }
+            os << "> <";
+            for (unsigned char c : e->utf16be) os << hexd[(c >> 4) & 0xF] << hexd[c & 0xF];
+            os << ">\n";
         }
-        os << "> <";
-        for (unsigned char c : e->utf16be) os << hexd[(c >> 4) & 0xF] << hexd[c & 0xF];
-        os << ">\n";
+        os << "endbfchar\n";
     }
-    os << "endbfchar\nendcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n";
+    os << "endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n";
     return os.str();
 }
 
@@ -517,11 +537,21 @@ int sanitizeRedactedPdf(const uint8_t* input, size_t inputLen, const DocCore& co
         }
 
         // 7. Structure tree strip (ActualText is a verbatim text copy).
+        // StructTreeRoot and MarkInfo live in the Catalog (/Root), though
+        // defensive cleanup on trailer handles non-standard inputs as well.
         if (trailer.hasKey("/StructTreeRoot")) {
             trailer.removeKey("/StructTreeRoot");
             st.structTreeRemoved = true;
         }
         if (trailer.hasKey("/MarkInfo")) trailer.removeKey("/MarkInfo");
+        if (trailer.hasKey("/Root") && trailer.getKey("/Root").isDictionary()) {
+            QPDFObjectHandle catalog = trailer.getKey("/Root");
+            if (catalog.hasKey("/StructTreeRoot")) {
+                catalog.removeKey("/StructTreeRoot");
+                st.structTreeRemoved = true;
+            }
+            if (catalog.hasKey("/MarkInfo")) catalog.removeKey("/MarkInfo");
+        }
 
         // XMP surgery via pugixml; wholesale removal when unavailable.
         // The /Metadata entry can sit on the trailer OR the catalog.
@@ -543,6 +573,7 @@ int sanitizeRedactedPdf(const uint8_t* input, size_t inputLen, const DocCore& co
                 memcpy(newBuf->getBuffer(), xml.data(), xml.size());
                 meta.replaceStreamData(newBuf, QPDFObjectHandle::newNull(),
                                        QPDFObjectHandle::newNull());
+                meta.setFilterOnWrite(false);
                 st.xmpScrubbed = true;
             }
 #else
@@ -591,12 +622,14 @@ int sanitizeRedactedPdf(const uint8_t* input, size_t inputLen, const DocCore& co
                     QPDFObjectHandle a = annots.getArrayItem(ai);
                     if (!a.isDictionary()) continue;
                     bool drop = false;
-                    if (a.hasKey("/Rect") && a.getKey("/Rect").isArray() &&
-                        a.getKey("/Rect").getArrayNItems() == 4) {
-                        double llx = a.getKey("/Rect").getArrayItem(0).getNumericValue();
-                        double lly = a.getKey("/Rect").getArrayItem(1).getNumericValue();
-                        double urx = a.getKey("/Rect").getArrayItem(2).getNumericValue();
-                        double ury = a.getKey("/Rect").getArrayItem(3).getNumericValue();
+                    QPDFObjectHandle rect = a.getKey("/Rect");
+                    if (rect.isArray() && rect.getArrayNItems() == 4 &&
+                        rect.getArrayItem(0).isNumber() && rect.getArrayItem(1).isNumber() &&
+                        rect.getArrayItem(2).isNumber() && rect.getArrayItem(3).isNumber()) {
+                        double llx = rect.getArrayItem(0).getNumericValue();
+                        double lly = rect.getArrayItem(1).getNumericValue();
+                        double urx = rect.getArrayItem(2).getNumericValue();
+                        double ury = rect.getArrayItem(3).getNumericValue();
                         for (const auto& z : zones) {
                             if (z.pageIndex != static_cast<int32_t>(pi)) continue;
                             if (llx <= z.right && urx >= z.left && lly <= z.top &&
@@ -684,8 +717,9 @@ int sanitizeRedactedPdf(const uint8_t* input, size_t inputLen, const DocCore& co
         }
 
         for (auto& [id, font] : fontDicts) {
-            std::string baseFont =
-                font.hasKey("/BaseFont") ? font.getKey("/BaseFont").getName() : std::string();
+            std::string baseFont = font.hasKey("/BaseFont") && font.getKey("/BaseFont").isName()
+                                       ? font.getKey("/BaseFont").getName()
+                                       : std::string();
             // Code width: from the ToUnicode CMap when parseable; otherwise
             // /Subtype /Type0 fonts are 2-byte, everything else 1-byte.
             int codeBytes = 1;
@@ -747,6 +781,10 @@ int sanitizeRedactedPdf(const uint8_t* input, size_t inputLen, const DocCore& co
         jpdfium_qpdf_internal::WriterLock lock{-1};
         w.write();
         std::shared_ptr<Buffer> buf = w.getBufferSharedPointer();
+        if (!buf) {
+            reportJson = "{\"error\":\"qpdf produced null output buffer\"}";
+            return -1;
+        }
         out.assign(buf->getBuffer(), buf->getBuffer() + buf->getSize());
         reportJson = statsToJson(st);
         return 0;

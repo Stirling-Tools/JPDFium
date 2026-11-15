@@ -833,13 +833,16 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
         scanPagePatterns(pw->core.get(), tp, wtext, idxMap, words, wordCount, wholeWord != 0,
                          caseSensitive != 0, useRegex != 0, padding, matches, &compiledPatterns,
                          rejectedPatterns, compiledCount);
-#endif
         if (matchCount) *matchCount = logicalMatchCount(matches);
-
         if (rejectedPatterns > 0 && compiledCount == 0) {
             FPDFText_ClosePage(tp);
             return JPDFIUM_ERR_INVALID;
         }
+#else
+        (void)rejectedPatterns;
+        (void)compiledCount;
+        if (matchCount) *matchCount = logicalMatchCount(matches);
+#endif
 
         if (matches.empty()) {
             FPDFText_ClosePage(tp);

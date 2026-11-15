@@ -744,11 +744,13 @@ class FontNormalizerTest {
                 assertNotNull(descriptor);
                 byte[] cidSet = streamBytes(descriptor, COSName.CID_SET);
                 assertEquals(5, cidSet.length,
-                        "CIDSet must stop at the highest retained CID, not describe the full program");
-                assertEquals((byte) 0x80, cidSet[0], "CID 0 (.notdef) must be present");
-                assertEquals((byte) 0x08, cidSet[4], "CID 36 is the only drawn glyph");
-                for (int i = 1; i < 4; i++)
-                    assertEquals(0, cidSet[i], "undrawn CID " + i + " must not be present");
+                        "CIDSet must stop at the highest present GID in the re-subsetted /Identity program");
+                // Re-subsetted /Identity program keeps glyph slots 0..36 (max_gid=36), so ISO 19005-2
+                // §6.2.11.4.2 requires CIDs 0..36 present in the font program to all be marked.
+                for (int i = 0; i < 4; i++) {
+                    assertEquals((byte) 0xFF, cidSet[i], "CIDSet byte " + i + " must mark all CIDs present");
+                }
+                assertEquals((byte) 0xF8, cidSet[4], "CIDSet final byte must mark CIDs 32..36");
                 assertEquals("A", new PDFTextStripper().getText(loaded).strip(),
                         "re-subsetting must preserve extracted text");
             }
