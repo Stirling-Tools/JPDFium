@@ -64,6 +64,40 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 class FontNormalizerTest {
 
     private static final byte[] EMPTY_BYTES = new byte[0];
+
+    /**
+     * Gzipped, base64-encoded minimal CFF-flavored OpenType font (12 sfnt
+     * tables, ~2.6 KiB) whose CFF Name INDEX reads {@code STIXGeneral-Regular},
+     * the PostScript name of the STIX project's regular text face
+     * (https://www.stixfonts.org, distributed under the permissive STIX font
+     * license). This blob is a minimized test artifact rather than the full
+     * upstream typeface; it drives CFF re-subsetting tests
+     * (see {@code resubsettingOpenTypeCffUpdatesCharSetToRetainedGlyphs})
+     * without bundling a complete font program.
+     */
+    private static final String CFF_MULTI_OTF_BASE64 =
+            "H4sIAAAAAAAC/61VXWwUVRQ+d3fbWbZriaWtkSzlqmDAtHW3RaANmJb+UaR2YcufIZVhOnQn2Z0pM7PQgoUSAZFJum3V1iK2" +
+            "hPjzIImpaNAYfZAHMEpsSBVMUHw0MdEXcFtau557d4CtUkKMM7n3nr/vO+eee3e2sampEbzQBU6oqKqtpe91jWwCcJwEcPbV" +
+            "VdfUQh56AH7FMb8u2BiqNtfHAIgL9YK60KY1mqCcxvhlqO9qDD1d0vzuzwPoH0N9hxQV25D7bdTDqC8Ly2LLxFjWKOrID8vD" +
+            "aHAvcS1GvRr1ReGo2T5nH/hRZvjcqNjeBhlBFOFbHJmqGJU3jeg9KGKMa36bZpjJT6EE8YvQTwEwNgOlW1jRZcghDThiyVuO" +
+            "3yAHCNq9kHoIvi4+E3BwHcADPnxJde36JnAD2x8kk3a8M7UkP2G57vEg3rVwugxAGJ1aPp0vjHLG9IdV5bCZcnEmfHWxmnF2" +
+            "cX0dz7c2mUx+ZuPZTB4d/OnU2eUvzl11E7Kc7Bzgmy1bXrm9Yr4aYdTJkG6egT0O0kt6WE5yg9xg/UitOEpIyb9rv/uEmuq3" +
+            "QgWshXWO35OZZNq1kFw4BSR5HfnJV45+rJfa1XtgGawBB+8XjYimCtmM7fn11RR9rHeE7+12H0lEaRWxRntXfNdsdePIsVdm" +
+            "c3B+fi5owM4QksvKqpNVWRcjRRvl1lhE1Jl9hY+8Aj5yjPjIqw4fOe70kcOubV7ndPNUo08YvfVaxgLsxeK5ODvLH/ZBBVML" +
+            "cyDDgdReMkjOkHPky82ybiiaSgPFgSqtrUNXWsMmXSItpSV+f6CoxB8I0J0d1AzLFMugwdhOWqVF20RVkY1CKmmqoRimorZS" +
+            "bRcPqozKuiKJKq0Ky1EUIjSkSYpsdhTOdNerCDNjpsyAwXCHoUjGP0IaRFSjonkflhQw3V0TMeQ9iqwXYgapuJCKagttQsiM" +
+            "fDURWTJ1DmT+lKqpikRr1FZFlbElKTylQU03sT0GbjW9OYGyspXYHH8pa06DIulaUJeNB0D5GWBmkZRWRiKURxkUWWR9j9xS" +
+            "fI9DTzPFVMUfKGU/fVjqIBZMVOaO/5HXOTi++Y1E82BmgcfZvzjpndPr9VzynO7p7o739MVf7/Z6L2V9FO+Jx7v7+nrj3ocK" +
+            "PJlJbw7ejHngJESKXxwSKno7T1iX3eP1gnX1xMD3ve6hyTPtwpUjbx6yVrknN0yeT2wQrB/f6h+zPVePDHRZq91TzwrWM10H" +
+            "Vx91tyc+EI4PZVTGD5y0xtyJ5sT5yZBgrTi0n/mErCGhrHv/CesH9/hzgnVlcOB6HHm+aBd+OTrwMmaYQuvqAwdXHGOxk2fb" +
+            "M68dHjhqlbuntgvbjuyNFOy1jg8deqfr/ZcGTcvdFtu9e/vH+oWbF79OLFg4Dlhyf/+1XncWZBDiynuiNDh5MzuRZQ0nPj+X" +
+            "+HCYTITyqSd78rQ1POEYJonv8h9DbV/nyPg0an9OPJX3uCc7sahzxGD+nHmnJiLcNm/HVOCvR/IwmH8kBHiB/UZdc/BnlQtn" +
+            "bJlAPvTbsgO/Bcds2YlfkwpbdsGTMN+WM1ACW87k9s0ggw4GKKCBit+ZABTz4YcQNEE9bIU6jFB5lAgRKIKNKLdCDGURbbUc" +
+            "Z0IDagauLK78AbHladlmeu6Nr8JcbdCBmoKxYcxGYQlIsBTXEuTwI1cRlwL4UtiJsRSjwshAbU6Kf1cx9FDOFkU+ETMoGGFA" +
+            "IVolvh/WD7YbBeVWtGqwK42pEnEyr0LiaMbFPFHbEuHZNJQZr4lVFN4XXc8zsmwm1mbyqFTGIGI6eDWSXd/sLOwETLsOkbP9" +
+            "l1rSM86GrkG7gfoebtW5je1BwpNkMmNqwbXJzjL7/hiTjDjzTg2RNHy6V+OnJHErOxOF34vU3U3Pz3agodW0b7Rhn+ls9yYA" +
+            "ZfiutO+NH0rv3JsGno9lDuLM7sf/kcl/h/9+XWQnE+G9uMtkcE3mGB1RMvaoGOBvSwHNd0wKAAA=";
+
     private static final String CFF_OTF_BASE64 =
             "H4sIAAAAAAAC/42Tz2sTQRTHvzOzSWgOm9iKtvhrkQjWWpQetIggshp6kaxtQEGhXZpNckjakGwhJxFPgUL1pAhe/A88eNOC" +
             "etGTePDUQ8GTIkUQlOyKsr6ZnQazB/XBzPu89+a9mX0zWyqXSxjBbQjk7WLR6l5dfAvwbwC2SgunZi79tAOAkYml5abb4nPs" +
@@ -800,8 +834,8 @@ class FontNormalizerTest {
             pdfWithStaleCidSet = out.toByteArray();
         }
 
-        try (PdfDocument doc = PdfDocument.open(pdfWithStaleCidSet)) {
-            PdfPage page = doc.page(0);
+        try (PdfDocument doc = PdfDocument.open(pdfWithStaleCidSet);
+                PdfPage page = doc.page(0)) {
             int tuc = FontNormalizer.fixToUnicode(doc, 0);
             assertEquals(0, tuc, "fixToUnicode should not report repairs when ToUnicode is already valid");
             assertEquals(0, page.rotation(), "page must remain valid; /CIDSet was not touched by single-purpose call");
@@ -1433,6 +1467,174 @@ class FontNormalizerTest {
             return;
         }
         throw new IllegalArgumentException("font has no name table");
+    }
+
+    @Test
+    void normalizingStandardEncodingPreservesQuoterightInDifferences() throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real native library");
+        byte[] pdf;
+        try (PDDocument doc = Loader.loadPDF(embeddedTrueTypePdf(true, false))) {
+            COSDictionary font = firstFontDictionary(doc);
+            assertNotNull(font);
+            COSDictionary encoding = new COSDictionary();
+            encoding.setItem(COSName.TYPE, COSName.ENCODING);
+            encoding.setItem(COSName.BASE_ENCODING, COSName.STANDARD_ENCODING);
+            font.setItem(COSName.ENCODING, encoding);
+
+            PDPage page = doc.getPage(0);
+            COSName fontKey = page.getResources().getFontNames().iterator().next();
+            String stream = "BT /" + fontKey.getName() + " 12 Tf 72 700 Td (a'b) Tj ET";
+            page.setContents(new PDStream(doc, new ByteArrayInputStream(
+                    stream.getBytes(StandardCharsets.US_ASCII))));
+
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            doc.save(out);
+            pdf = out.toByteArray();
+        }
+
+        try (PdfDocument doc = PdfDocument.open(pdf)) {
+            FontNormalizer.Result res = FontNormalizer.normalizePage(doc, 0);
+            assertTrue(res.fontsProcessed() >= 1);
+            byte[] normalized = doc.saveBytes();
+            try (PDDocument loaded = Loader.loadPDF(normalized)) {
+                PDFont font = firstFont(loaded);
+                assertNotNull(font);
+                COSDictionary enc = font.getCOSObject().getCOSDictionary(COSName.ENCODING);
+                assertNotNull(enc, "normalized font must retain encoding dictionary");
+                assertEquals(COSName.WIN_ANSI_ENCODING, enc.getDictionaryObject(COSName.BASE_ENCODING));
+                COSArray diffs = enc.getCOSArray(COSName.DIFFERENCES);
+                assertNotNull(diffs, "StandardEncoding differences must be preserved in /Differences");
+                boolean foundQuoteright = false;
+                int code = 0;
+                for (COSBase item : diffs) {
+                    if (item instanceof COSInteger ci) {
+                        code = ci.intValue();
+                    } else if (item instanceof COSName cn) {
+                        if (code == 0x27 && "quoteright".equals(cn.getName())) {
+                            foundQuoteright = true;
+                        }
+                        code++;
+                    }
+                }
+                assertTrue(foundQuoteright, "0x27 must remain /quoteright in /Differences: " + diffs);
+                assertEquals("\u2019", font.toUnicode(0x27),
+                        "0x27 ToUnicode must remain U+2019 after StandardEncoding -> WinAnsiEncoding normalization");
+                String extracted = new PDFTextStripper().getText(loaded).trim();
+                assertEquals("a\u2019b", extracted);
+            }
+        }
+    }
+
+    @Test
+    void normalizingDifferencesPreservesAlgorithmicUnicodeNames() throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real native library");
+        byte[] pdf;
+        try (PDDocument doc = Loader.loadPDF(embeddedTrueTypePdf(true, false))) {
+            COSDictionary font = firstFontDictionary(doc);
+            assertNotNull(font);
+            COSArray diffs = new COSArray();
+            diffs.add(COSInteger.get(1));
+            diffs.add(COSName.getPDFName("uni0041"));
+            diffs.add(COSName.getPDFName("u0042"));
+            diffs.add(COSName.getPDFName("BogusNonAgl999"));
+            COSDictionary encoding = new COSDictionary();
+            encoding.setItem(COSName.TYPE, COSName.ENCODING);
+            encoding.setItem(COSName.BASE_ENCODING, COSName.WIN_ANSI_ENCODING);
+            encoding.setItem(COSName.DIFFERENCES, diffs);
+            font.setItem(COSName.ENCODING, encoding);
+
+            PDPage page = doc.getPage(0);
+            COSName fontKey = page.getResources().getFontNames().iterator().next();
+            String stream = "BT /" + fontKey.getName() + " 12 Tf 72 700 Td <0102> Tj ET";
+            page.setContents(new PDStream(doc, new ByteArrayInputStream(
+                    stream.getBytes(StandardCharsets.US_ASCII))));
+
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            doc.save(out);
+            pdf = out.toByteArray();
+        }
+
+        try (PdfDocument doc = PdfDocument.open(pdf)) {
+            FontNormalizer.normalizePage(doc, 0);
+            byte[] normalized = doc.saveBytes();
+            try (PDDocument loaded = Loader.loadPDF(normalized)) {
+                COSDictionary font = firstFontDictionary(loaded);
+                COSDictionary enc = font.getCOSDictionary(COSName.ENCODING);
+                assertNotNull(enc);
+                COSArray diffs = enc.getCOSArray(COSName.DIFFERENCES);
+                assertNotNull(diffs, "/Differences with algorithmic glyph names must be preserved");
+                java.util.List<String> names = new java.util.ArrayList<>();
+                for (COSBase item : diffs) {
+                    if (item instanceof COSName cn) names.add(cn.getName());
+                }
+                assertTrue(names.contains("uni0041"), "Expected uni0041 to be preserved, got: " + names);
+                assertTrue(names.contains("u0042"), "Expected u0042 to be preserved, got: " + names);
+                assertFalse(names.contains("BogusNonAgl999"),
+                        "Expected unknown glyph name to be stripped, got: " + names);
+            }
+        }
+    }
+
+    @Test
+    void resubsettingOpenTypeCffUpdatesCharSetToRetainedGlyphs() throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real native library");
+        byte[] otf = gunzipBase64(CFF_MULTI_OTF_BASE64);
+        byte[] pdf;
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(PDRectangle.LETTER);
+            doc.addPage(page);
+
+            COSDictionary descriptor = new COSDictionary();
+            descriptor.setItem(COSName.TYPE, COSName.FONT_DESC);
+            descriptor.setName(COSName.FONT_NAME, "MultiCff-Regular");
+            descriptor.setInt(COSName.FLAGS, 32);
+            descriptor.setItem(COSName.FONT_BBOX, new COSArray());
+            descriptor.setInt(COSName.ITALIC_ANGLE, 0);
+            descriptor.setInt(COSName.ASCENT, 800);
+            descriptor.setInt(COSName.DESCENT, -200);
+            descriptor.setInt(COSName.CAP_HEIGHT, 700);
+            descriptor.setInt(COSName.STEM_V, 80);
+            descriptor.setString(COSName.CHAR_SET, "/H/I/J");
+            COSStream fontFile = new PDStream(doc, new ByteArrayInputStream(otf)).getCOSObject();
+            fontFile.setItem(COSName.SUBTYPE, COSName.getPDFName("OpenType"));
+            descriptor.setItem(COSName.FONT_FILE3, fontFile);
+
+            COSDictionary font = new COSDictionary();
+            font.setItem(COSName.TYPE, COSName.FONT);
+            font.setItem(COSName.SUBTYPE, COSName.TRUE_TYPE);
+            font.setName(COSName.BASE_FONT, "MultiCff-Regular");
+            font.setItem(COSName.ENCODING, COSName.WIN_ANSI_ENCODING);
+            font.setItem(COSName.FONT_DESC, descriptor);
+
+            COSDictionary fonts = new COSDictionary();
+            fonts.setItem(COSName.getPDFName("F1"), font);
+            COSDictionary resources = new COSDictionary();
+            resources.setItem(COSName.FONT, fonts);
+            page.setResources(new PDResources(resources));
+            page.setContents(new PDStream(doc, new ByteArrayInputStream(
+                    "BT /F1 12 Tf 72 700 Td (H) Tj ET".getBytes(StandardCharsets.US_ASCII))));
+
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            doc.save(out);
+            pdf = out.toByteArray();
+        }
+
+        try (PdfDocument doc = PdfDocument.open(pdf)) {
+            FontNormalizer.Result res = FontNormalizer.normalizePage(doc, 0);
+            assertEquals(1, res.resubset(), "Multi-glyph CFF OpenType font should be resubsetted");
+            byte[] normalized = doc.saveBytes();
+            try (PDDocument loaded = Loader.loadPDF(normalized)) {
+                COSDictionary font = firstFontDictionary(loaded);
+                assertNotNull(font);
+                COSDictionary desc = font.getCOSDictionary(COSName.FONT_DESC);
+                assertNotNull(desc);
+                String charset = desc.getString(COSName.CHAR_SET);
+                assertNotNull(charset, "Expected /CharSet to remain updated");
+                assertTrue(charset.contains("/H"), "Expected retained glyph /H in /CharSet: " + charset);
+                assertFalse(charset.contains("/I"), "Expected unretained glyph /I removed from /CharSet: " + charset);
+                assertFalse(charset.contains("/J"), "Expected unretained glyph /J removed from /CharSet: " + charset);
+            }
+        }
     }
 
     private static ByteBuffer tableBuffer(byte[] font) {
