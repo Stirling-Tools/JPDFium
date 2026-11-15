@@ -203,6 +203,7 @@ if(JPDFIUM_USE_PDFIUM)
         bridge/src/jpdfium_advanced.cpp
         bridge/src/jpdfium_pattern.cpp
         bridge/src/jpdfium_font_shared.cpp
+        bridge/src/jpdfium_font_normalizer.cpp
         bridge/src/jpdfium_image.cpp
         bridge/src/jpdfium_color.cpp
         bridge/src/jpdfium_pdfx.cpp
