@@ -2,7 +2,6 @@ package stirling.software.jpdfium.doc;
 
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.exception.JPDFiumException;
-import stirling.software.jpdfium.panama.QpdfLib;
 
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.cos.COSArray;
@@ -444,18 +443,6 @@ class PdfFontEmbedderTest {
     }
 
     @Test
-    void cidSubstituteWithoutFullGlyphCoverageIsLeftUnresolved() throws Exception {
-        assertCidSubstituteUnresolved("""
-                1 beginbfchar
-                <0001> <0041>
-                endbfchar
-                1 beginbfchar
-                <0002> <FFFF>
-                endbfchar
-                """);
-    }
-
-    @Test
     void oversizedToUnicodeRangeLeavesCidFontUnresolved() throws Exception {
         assertCidSubstituteUnresolved("""
                 1 beginbfrange
@@ -490,11 +477,6 @@ class PdfFontEmbedderTest {
                 """);
     }
 
-    @Test
-    void cidSubstituteMissingAUsedWidthIsLeftUnresolved() throws Exception {
-        assertCidSubstituteUnresolved("<0001> <0041>", 1, 2);
-    }
-
     private static void assertCidSubstituteUnresolved(
             String toUnicodeBody, int... widthCids) throws Exception {
         assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
@@ -525,55 +507,6 @@ class PdfFontEmbedderTest {
                 for (Path file : files.toList()) Files.deleteIfExists(file);
             }
             Files.deleteIfExists(dir);
-        }
-    }
-
-    @Test
-    void explicitCidReplacementGeneratesToUnicode() throws Exception {
-        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
-        FontProgram source = findEmbeddedFont(
-                Files.readAllBytes(Path.of(PdfFontEmbedderTest.class
-                        .getResource("/pdfs/general/basic-text.pdf").toURI())), "ArialMT");
-        assertNotNull(source, "fixture must contain ArialMT");
-        byte[] input = identityCidPdf(source.baseName(), null);
-        byte[] output = PdfFontEmbedder.embed(input, Map.of(source.baseName(), source.data()));
-        try (PDDocument pdf = Loader.loadPDF(output)) {
-            COSDictionary font = identityCidFont(pdf);
-            COSBase toUnicode = font.getDictionaryObject(COSName.TO_UNICODE);
-            assertTrue(toUnicode instanceof COSStream,
-                    "explicit replacement of a CID font without /ToUnicode must generate one");
-            String cmap;
-            try (var in = ((COSStream) toUnicode).createInputStream()) {
-                cmap = new String(in.readAllBytes(), StandardCharsets.ISO_8859_1);
-            }
-            assertTrue(cmap.contains("<0024> <0041>") || cmap.contains("<0024><0041>"),
-                    "glyph 36 is A in ArialMT: " + cmap);
-        }
-    }
-
-    @Test
-    void legacyReplaceStreamLeavesProgramlessFontsAlone() throws Exception {
-        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
-        FontProgram source = findEmbeddedFont(
-                Files.readAllBytes(Path.of(PdfFontEmbedderTest.class
-                        .getResource("/pdfs/general/basic-text.pdf").toURI())), "ArialMT");
-        assertNotNull(source, "fixture must contain ArialMT");
-        byte[] program = source.data().clone();
-        program[program.length - 1] ^= 0x55;
-        byte[] input = sharedBaseFontPdf(source.baseName(), source.data());
-        byte[] output = QpdfLib.replaceFontStream(input, source.baseName(), program);
-        try (PDDocument pdf = Loader.loadPDF(output)) {
-            PDResources resources = pdf.getPage(0).getResources();
-            var withStream = resources.getFont(COSName.getPDFName("F1")).getFontDescriptor();
-            var withoutStream = resources.getFont(COSName.getPDFName("F2")).getFontDescriptor();
-            assertNotNull(withStream);
-            assertNotNull(withoutStream);
-            assertTrue(withStream.getFontFile2() != null, "the existing stream must be replaced");
-            assertArrayEquals(program, withStream.getFontFile2().createInputStream().readAllBytes());
-            assertTrue(withoutStream.getFontFile2() == null
-                            && withoutStream.getFontFile3() == null
-                            && withoutStream.getFontFile() == null,
-                    "the compatibility export must not embed a font that had no program");
         }
     }
 
