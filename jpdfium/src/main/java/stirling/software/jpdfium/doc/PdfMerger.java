@@ -99,8 +99,11 @@ public final class PdfMerger {
         try (PdfDocument dest = PdfDocument.createEmpty()) {
             for (byte[] in : repaired) {
                 try (PdfDocument src = PdfDocument.open(in)) {
-                    PdfPageImporter.importPages(
+                    boolean ok = PdfPageImporter.importPages(
                             dest.rawHandle(), src.rawHandle(), null, dest.pageCount());
+                    if (!ok) {
+                        return null;
+                    }
                 }
             }
             return dest.pageCount() > 0 ? dest.saveBytes() : null;
