@@ -49,8 +49,8 @@ public final class NativeJsonParser {
                 }
                 if (c == '"') inQuotes = !inQuotes;
                 if ((c == ',' && !inQuotes) || i == objEnd) {
-                    int colon = json.indexOf(':', pairStart);
-                    if (colon >= 0 && colon < i) {
+                    int colon = pairStart < i ? json.indexOf(':', pairStart, i) : -1;
+                    if (colon >= 0) {
                         fields.put(keyText(json, pairStart, colon), valueText(json, colon + 1, i));
                     }
                     pairStart = i + 1;
@@ -188,14 +188,28 @@ public final class NativeJsonParser {
         if (json == null || key == null) return -1;
         int length = json.length();
         int keyLength = key.length();
-        int quote = json.indexOf('"');
-        while (quote >= 0) {
-            int keyStart = quote + 1;
-            int keyEnd = keyStart + keyLength;
-            if (keyEnd < length
-                    && json.charAt(keyEnd) == '"'
-                    && json.regionMatches(keyStart, key, 0, keyLength)) {
-                int i = keyEnd + 1;
+        int pos = 0;
+        while (pos < length) {
+            int quote = json.indexOf('"', pos);
+            if (quote < 0) return -1;
+            int strStart = quote + 1;
+            int strEnd = strStart;
+            boolean hasEscape = false;
+            while (strEnd < length) {
+                char c = json.charAt(strEnd);
+                if (c == '\\') {
+                    hasEscape = true;
+                    strEnd += 2;
+                } else if (c == '"') {
+                    break;
+                } else {
+                    strEnd++;
+                }
+            }
+            if (strEnd >= length) return -1;
+            if (!hasEscape && (strEnd - strStart) == keyLength
+                    && json.regionMatches(strStart, key, 0, keyLength)) {
+                int i = strEnd + 1;
                 while (i < length && json.charAt(i) <= ' ') i++;
                 if (i < length && json.charAt(i) == ':') {
                     i++;
@@ -203,7 +217,7 @@ public final class NativeJsonParser {
                     return i < length ? i : -1;
                 }
             }
-            quote = json.indexOf('"', quote + 1);
+            pos = strEnd + 1;
         }
         return -1;
     }

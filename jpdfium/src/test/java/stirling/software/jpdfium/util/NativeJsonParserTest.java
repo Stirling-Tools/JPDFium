@@ -221,4 +221,23 @@ class NativeJsonParserTest {
     void decodesUnterminatedString() {
         assertEquals("abc", NativeJsonParser.stringField("{\"s\":\"abc", "s"));
     }
+
+    @Test
+    void skipsEscapedQuoteInPrecedingKeyName() {
+        assertEquals(4, NativeJsonParser.intField("{\"not\\\"count\":1,\"count\":4}", "count"));
+    }
+
+    @Test
+    void parsesManyEmptyObjectsInLinearTime() {
+        StringBuilder sb = new StringBuilder("[");
+        for (int i = 0; i < 2000; i++) {
+            if (i > 0) sb.append(',');
+            sb.append("{}");
+        }
+        sb.append(",{\"a\":1}]");
+        List<Map<String, String>> parsed = NativeJsonParser.parseArray(sb.toString());
+        assertEquals(2001, parsed.size());
+        assertTrue(parsed.get(0).isEmpty());
+        assertEquals("1", parsed.get(2000).get("a"));
+    }
 }

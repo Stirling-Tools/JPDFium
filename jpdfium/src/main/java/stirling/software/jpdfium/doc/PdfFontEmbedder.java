@@ -580,17 +580,24 @@ public final class PdfFontEmbedder {
     }
 
     private static Face resolveName(Map<String, Face> index, String name) {
-        for (String candidate : nameKeys(name)) {
-            Face face = resolve(index, candidate);
-            if (face != null) return face;
-        }
-        return null;
+        return lookupName(index, name, true);
     }
 
     private static Face restrictedName(Map<String, Face> index, String name) {
-        for (String candidate : nameKeys(name)) {
-            Face face = restricted(index, candidate);
-            if (face != null) return face;
+        Face face = lookupName(index, name, false);
+        return face != null && !face.embeddable() ? face : null;
+    }
+
+    private static Face lookupName(Map<String, Face> index, String name, boolean embeddableOnly) {
+        List<String> candidates = nameKeys(name);
+        for (String candidate : candidates) {
+            if (candidate.isEmpty()) continue;
+            Face exact = index.get(candidate);
+            if (exact != null && (!embeddableOnly || exact.embeddable())) return exact;
+        }
+        for (String candidate : candidates) {
+            Face fallback = lookupFallback(index, candidate, embeddableOnly);
+            if (fallback != null) return fallback;
         }
         return null;
     }
@@ -685,6 +692,11 @@ public final class PdfFontEmbedder {
         if (key.isEmpty()) return null;
         Face exact = index.get(key);
         if (exact != null && (!embeddableOnly || exact.embeddable())) return exact;
+        return lookupFallback(index, key, embeddableOnly);
+    }
+
+    private static Face lookupFallback(Map<String, Face> index, String key, boolean embeddableOnly) {
+        if (key.isEmpty()) return null;
         for (String hint : CJK_FAMILY_HINTS) {
             if (key.contains(hint)) {
                 Face cjk = index.get("notosansscregular");
