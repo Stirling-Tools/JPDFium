@@ -1036,9 +1036,9 @@ public final class PdfDocument implements AutoCloseable {
      * Flatten all pages using the specified mode.
      *
      * <ul>
-     *   <li>{@link FlattenMode#ANNOTATIONS}: bakes annotations and form fields into
-     *       the content stream. Text remains selectable. Runs {@code
-     *       jpdfium_doc_flatten_annotations}.</li>
+     *   <li>{@link FlattenMode#ANNOTATIONS}: bakes every drawable annotation, including
+     *       no-view markup, and form fields into the content stream. Text remains
+     *       selectable. Runs {@code jpdfium_doc_flatten_annotations}.</li>
      *   <li>{@link FlattenMode#FULL}: rasterizes each page at the given DPI,
      *       replacing all content with an image. Nothing is selectable. Follows the
      *       on-screen view: screen-only markup is baked, while no-view, hidden and
@@ -1079,7 +1079,7 @@ public final class PdfDocument implements AutoCloseable {
                 // raster then contains the same values a viewer shows.
                 boolean hadAnnotations = hasAnnotations();
                 try {
-                    JpdfiumLib.docFlattenAnnotations(handle);
+                    JpdfiumLib.docFlattenAnnotationsDisplay(handle);
                 } finally {
                     // The bake rewrites page content and keeps open pages valid.
                     // A later raster failure only rolls back the raster pass, so
@@ -1427,8 +1427,9 @@ public final class PdfDocument implements AutoCloseable {
         if (dpi <= 0) throw new IllegalArgumentException("dpi must be > 0");
         // Page rasterization has no form environment; bake widget appearances
         // into the page before rasterizing so field values are not dropped.
+        // The bake follows the on-screen view, so no-view markup stays out.
         try (PdfPage page = page(pageIndex)) {
-            page.flatten();
+            page.flattenForDisplay();
         }
         JpdfiumLib.pageToImage(handle, pageIndex, dpi);
         // The page is replaced by an image, so the document no longer matches

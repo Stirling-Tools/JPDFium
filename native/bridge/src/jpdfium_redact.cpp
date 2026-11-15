@@ -659,23 +659,15 @@ void restoreNoViewFlags(FPDF_PAGE page) {
     }
 }
 
-int flattenForDisplay(FPDF_PAGE page) {
+int flattenPage(FPDF_PAGE page, bool displayOnly) {
+    if (!displayOnly) return FPDFPage_Flatten(page, FLAT_NORMALDISPLAY);
     hideNoViewAnnotations(page);
     const int rc = FPDFPage_Flatten(page, FLAT_NORMALDISPLAY);
     restoreNoViewFlags(page);
     return rc;
 }
 
-}  // namespace
-
-int32_t jpdfium_page_flatten(int64_t page) noexcept {
-    PageWrapper* pw = decodePage(page);
-    if (!pw || !pw->page) return JPDFIUM_ERR_INVALID;
-    int rc = flattenForDisplay(pw->page);
-    return (rc == FLATTEN_SUCCESS || rc == FLATTEN_NOTHINGTODO) ? JPDFIUM_OK : JPDFIUM_ERR_NATIVE;
-}
-
-int32_t jpdfium_doc_flatten_annotations(int64_t docHandle) noexcept {
+int32_t flattenDocument(int64_t docHandle, bool displayOnly) noexcept {
     bool mutated = false;
     try {
         DocWrapper* dw = decodeDoc(docHandle);
@@ -684,7 +676,7 @@ int32_t jpdfium_doc_flatten_annotations(int64_t docHandle) noexcept {
         for (int i = 0; i < count; ++i) {
             UniquePage page(FPDF_LoadPage(dw->core->doc, i));
             if (!page) return mutated ? JPDFIUM_ERR_CONTENT_MUTATED : JPDFIUM_ERR_NOT_FOUND;
-            const int rc = flattenForDisplay(page.get());
+            const int rc = flattenPage(page.get(), displayOnly);
             if (rc != FLATTEN_SUCCESS && rc != FLATTEN_NOTHINGTODO) {
                 return mutated ? JPDFIUM_ERR_CONTENT_MUTATED : JPDFIUM_ERR_NATIVE;
             }
@@ -696,6 +688,30 @@ int32_t jpdfium_doc_flatten_annotations(int64_t docHandle) noexcept {
     } catch (...) {
         return mutated ? JPDFIUM_ERR_CONTENT_MUTATED : JPDFIUM_ERR_NATIVE;
     }
+}
+
+}  // namespace
+
+int32_t jpdfium_page_flatten(int64_t page) noexcept {
+    PageWrapper* pw = decodePage(page);
+    if (!pw || !pw->page) return JPDFIUM_ERR_INVALID;
+    const int rc = flattenPage(pw->page, false);
+    return (rc == FLATTEN_SUCCESS || rc == FLATTEN_NOTHINGTODO) ? JPDFIUM_OK : JPDFIUM_ERR_NATIVE;
+}
+
+int32_t jpdfium_page_flatten_display(int64_t page) noexcept {
+    PageWrapper* pw = decodePage(page);
+    if (!pw || !pw->page) return JPDFIUM_ERR_INVALID;
+    const int rc = flattenPage(pw->page, true);
+    return (rc == FLATTEN_SUCCESS || rc == FLATTEN_NOTHINGTODO) ? JPDFIUM_OK : JPDFIUM_ERR_NATIVE;
+}
+
+int32_t jpdfium_doc_flatten_annotations(int64_t docHandle) noexcept {
+    return flattenDocument(docHandle, false);
+}
+
+int32_t jpdfium_doc_flatten_annotations_display(int64_t docHandle) noexcept {
+    return flattenDocument(docHandle, true);
 }
 
 // Word-list redaction with padding

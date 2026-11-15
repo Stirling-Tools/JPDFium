@@ -1583,6 +1583,24 @@ public final class JpdfiumLib {
         });
     }
 
+    /**
+     * Bakes the annotations a viewer draws into page content, leaving no-view markup out. Used
+     * before rasterizing a page.
+     */
+    public static void pageFlattenDisplay(long page) {
+        PdfiumRuntime.execute(() -> {
+            try {
+                check(
+                        (int) FlattenBindings.jpdfium_page_flatten_display.invokeExact(page),
+                        "pageFlattenDisplay");
+            } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
+                if (t instanceof JPDFiumException jpdfiumException) throw jpdfiumException;
+                throw new JPDFiumException("pageFlattenDisplay failed", t);
+            }
+        });
+    }
+
     public static String textGetCharPositions(long page) {
         return PdfiumRuntime.execute(() -> {
             check(JpdfiumH.jpdfium_text_get_char_positions(page, ADDR_SCRATCH), "textGetCharPositions");
@@ -1607,6 +1625,26 @@ public final class JpdfiumLib {
     public static void docFlattenAnnotations(long doc) {
         PdfiumRuntime.execute(() -> {
             check(JpdfiumH.jpdfium_doc_flatten_annotations(doc), "docFlattenAnnotations");
+        });
+    }
+
+    /**
+     * Bakes the annotations a viewer draws on every page, leaving no-view markup out. Used before
+     * rasterizing the document.
+     */
+    public static void docFlattenAnnotationsDisplay(long doc) {
+        PdfiumRuntime.execute(() -> {
+            try {
+                check(
+                        (int)
+                                FlattenBindings.jpdfium_doc_flatten_annotations_display.invokeExact(
+                                        doc),
+                        "docFlattenAnnotationsDisplay");
+            } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
+                if (t instanceof JPDFiumException jpdfiumException) throw jpdfiumException;
+                throw new JPDFiumException("docFlattenAnnotationsDisplay failed", t);
+            }
         });
     }
 

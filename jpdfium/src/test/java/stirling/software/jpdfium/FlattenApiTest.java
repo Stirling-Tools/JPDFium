@@ -599,6 +599,52 @@ class FlattenApiTest {
     @Test
     void fullBatchBakesScreenMarkupButNotNoView(@TempDir Path dir) throws Exception {
         assumeTrue(NativeRuntime.isFull(), "full flattening needs the real PDFium natives");
+        Path fixture = displayAnnotationsFixture(dir);
+        try (PdfDocument doc = PdfDocument.open(fixture)) {
+            try (PdfPage page = doc.page(0)) {
+                assertEquals(2, PdfAnnotations.count(page.rawHandleForRead()),
+                        "the fixture must carry both highlights");
+            }
+            doc.flatten(FlattenMode.FULL, 72);
+            byte[] out = doc.saveBytes();
+            try (PdfDocument flat = PdfDocument.open(out); PdfPage page = flat.page(0)) {
+                RenderResult rendered = page.renderAt(72);
+                assertTrue(
+                        countPixels(rendered, rgb ->
+                                (rgb >> 16) > 200 && ((rgb >> 8) & 255) > 150 && (rgb & 255) < 120)
+                                > 0,
+                        "screen-only markup is visible to a viewer, so FULL must bake it");
+                assertEquals(
+                        0,
+                        countPixels(rendered, rgb ->
+                                (rgb >> 16) > 200 && ((rgb >> 8) & 255) < 90 && (rgb & 255) < 90),
+                        "no-view markup is hidden on screen and must not be baked");
+            }
+        }
+    }
+
+    @Test
+    void annotationsFlattenBakesNoViewMarkup(@TempDir Path dir) throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "annotation flattening needs the real PDFium natives");
+        Path fixture = displayAnnotationsFixture(dir);
+        try (PdfDocument doc = PdfDocument.open(fixture)) {
+            doc.flatten(FlattenMode.ANNOTATIONS);
+            try (PdfPage page = doc.page(0)) {
+                assertEquals(
+                        0,
+                        PdfAnnotations.count(page.rawHandleForRead()),
+                        "the annotation pass bakes every drawable annotation");
+                assertTrue(
+                        countPixels(page.renderAt(72), rgb ->
+                                (rgb >> 16) > 200 && ((rgb >> 8) & 255) < 90 && (rgb & 255) < 90)
+                                > 0,
+                        "the no-view markup must be baked into content, not left as an annotation");
+            }
+        }
+    }
+
+    /** One screen-only highlight and one no-view highlight on a blank page. */
+    private static Path displayAnnotationsFixture(Path dir) throws IOException {
         Path base = writePdfBoxFixture(
                 dir.resolve("display-annotations-base.pdf"),
                 pdf -> pdf.addPage(new PDPage(new PDRectangle(300, 300))));
@@ -621,27 +667,7 @@ class FlattenApiTest {
             }
             doc.save(fixture);
         }
-        try (PdfDocument doc = PdfDocument.open(fixture)) {
-            try (PdfPage page = doc.page(0)) {
-                assertEquals(2, PdfAnnotations.count(page.rawHandleForRead()),
-                        "the fixture must carry both highlights");
-            }
-            doc.flatten(FlattenMode.FULL, 72);
-            byte[] out = doc.saveBytes();
-            try (PdfDocument flat = PdfDocument.open(out); PdfPage page = flat.page(0)) {
-                RenderResult rendered = page.renderAt(72);
-                assertTrue(
-                        countPixels(rendered, rgb ->
-                                (rgb >> 16) > 200 && ((rgb >> 8) & 255) > 150 && (rgb & 255) < 120)
-                                > 0,
-                        "screen-only markup is visible to a viewer, so FULL must bake it");
-                assertEquals(
-                        0,
-                        countPixels(rendered, rgb ->
-                                (rgb >> 16) > 200 && ((rgb >> 8) & 255) < 90 && (rgb & 255) < 90),
-                        "no-view markup is hidden on screen and must not be baked");
-            }
-        }
+        return fixture;
     }
 
     private static int countPixels(RenderResult page, IntPredicate match) {

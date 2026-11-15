@@ -942,11 +942,17 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t word_c
 int32_t jpdfium_page_flatten(int64_t page) noexcept {
     return g_page_doc.find(page) == g_page_doc.end() ? JPDFIUM_ERR_INVALID : JPDFIUM_OK;
 }
+int32_t jpdfium_page_flatten_display(int64_t page) noexcept {
+    return g_page_doc.find(page) == g_page_doc.end() ? JPDFIUM_ERR_INVALID : JPDFIUM_OK;
+}
 int32_t jpdfium_page_to_image(int64_t, int32_t, int32_t) {
     return JPDFIUM_OK;
 }
 
 int32_t jpdfium_doc_flatten_annotations(int64_t) noexcept {
+    return JPDFIUM_OK;
+}
+int32_t jpdfium_doc_flatten_annotations_display(int64_t) noexcept {
     return JPDFIUM_OK;
 }
 
