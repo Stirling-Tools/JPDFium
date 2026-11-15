@@ -2,11 +2,15 @@ package stirling.software.jpdfium.doc;
 
 import org.junit.jupiter.api.Test;
 
+import java.awt.color.ICC_ColorSpace;
+import java.awt.color.ICC_Profile;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 
 import stirling.software.jpdfium.exception.JPDFiumException;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -67,8 +71,100 @@ class IccCmykTransformTest {
 
         transform.toCmykFromIcc(source, new float[] {0f, 0f, 0f, 1f}, out);
 
-        for (int value : out) {
-            assertTrue(value >= 0 && value <= 255, "ink out of range: " + value);
+        assertTrue(out[3] >= 200, "K-only source must keep a strong K, was " + out[3]);
+        assertTrue(out[0] <= 32 && out[1] <= 32 && out[2] <= 32,
+                "K-only source must not become rich black: " + Arrays.toString(out));
+        assertTrue(tac(out) <= 2 * 270,
+                "K-only source TAC must stay reasonable: " + Arrays.toString(out));
+    }
+
+    @Test
+    void compactCmykProfilePreservesNeutrals() {
+        IccCmykTransform transform = new IccCmykTransform(PdfIccProfiles.compactCmyk());
+        int[] out = new int[4];
+
+        transform.toCmyk(0, 0, 0, out);
+        assertTrue(out[0] <= 2 && out[1] <= 2 && out[2] <= 2,
+                "black must be single-channel K: " + Arrays.toString(out));
+        assertTrue(out[3] >= 245, "black must keep a strong K: " + Arrays.toString(out));
+        assertTrue(tac(out) <= 255, "black TAC too high: " + Arrays.toString(out));
+
+        for (int grey : new int[] {26, 64, 128, 192}) {
+            transform.toCmyk(grey, grey, grey, out);
+            assertTrue(out[0] <= 2 && out[1] <= 2 && out[2] <= 2,
+                    "grey " + grey + " must stay neutral: " + Arrays.toString(out));
+        }
+
+        transform.toCmyk(255, 255, 255, out);
+        assertArrayEquals(new int[] {0, 0, 0, 0}, out, "white must be paper white");
+    }
+
+    @Test
+    void compactCmykProfileCapsTotalAreaCoverage() {
+        IccCmykTransform transform = new IccCmykTransform(PdfIccProfiles.compactCmyk());
+        int[] out = new int[4];
+        int maximum = 0;
+        for (int r = 0; r < 9; r++) {
+            for (int g = 0; g < 9; g++) {
+                for (int b = 0; b < 9; b++) {
+                    int ri = r * 255 / 8;
+                    int gi = g * 255 / 8;
+                    int bi = b * 255 / 8;
+                    transform.toCmyk(ri, gi, bi, out);
+                    int total = tac(out);
+                    maximum = Math.max(maximum, total);
+                    assertTrue(total <= (int) (2.60 * 255),
+                            "TAC " + total + " at rgb " + ri + "," + gi + "," + bi);
+                }
+            }
+        }
+        assertTrue(maximum > 0, "expected some ink coverage in the sampled grid");
+    }
+
+    @Test
+    void compactCmykProfileRoundTripsInGamutLab() {
+        ICC_ColorSpace cmyk =
+                new ICC_ColorSpace(ICC_Profile.getInstance(PdfIccProfiles.compactCmyk()));
+        double[][] points = {
+            {50, 0, 0}, {50, 0, 50}, {50, 50, 0}, {50, -50, 0},
+            {50, 40, 40}, {80, 0, 0}, {20, 0, 0}, {65, 20, -20}
+        };
+        for (double[] point : points) {
+            float[] ink = cmyk.fromCIEXYZ(labToXyz(point[0], point[1], point[2]));
+            double[] back = xyzToLab(cmyk.toCIEXYZ(ink));
+            double delta = Math.sqrt(Math.pow(back[0] - point[0], 2)
+                    + Math.pow(back[1] - point[1], 2)
+                    + Math.pow(back[2] - point[2], 2));
+            assertTrue(delta <= 12.0, "round-trip deltaE " + delta
+                    + " for Lab " + Arrays.toString(point));
+        }
+    }
+
+    @Test
+    void gamutTagDoesNotFlagDarkNeutralsOutOfGamut() {
+        byte[] icc = PdfIccProfiles.compactCmyk();
+        ByteBuffer buffer = ByteBuffer.wrap(icc);
+        int tagCount = buffer.getInt(128);
+        int gamutOffset = -1;
+        for (int i = 0; i < tagCount; i++) {
+            int entry = 132 + i * 12;
+            if (buffer.getInt(entry) == 0x67616D74) { // "gamt"
+                gamutOffset = buffer.getInt(entry + 4);
+                break;
+            }
+        }
+        assertTrue(gamutOffset > 0, "bundled profile is missing the gamut tag");
+
+        int clutOffset = buffer.getInt(gamutOffset + 24);
+        int inputChannels = icc[gamutOffset + 8] & 0xFF;
+        int outputChannels = icc[gamutOffset + 9] & 0xFF;
+        int grid = icc[gamutOffset + clutOffset] & 0xFF;
+        int entries = (int) Math.pow(grid, inputChannels) * outputChannels;
+        int clutStart = gamutOffset + clutOffset + inputChannels;
+        for (int i = 0; i < entries; i++) {
+            int value = buffer.getShort(clutStart + i * 2) & 0xFFFF;
+            assertTrue(value <= 2, "gamut entry " + i + " is " + value
+                    + "; dark neutrals must stay in gamut");
         }
     }
 
@@ -96,5 +192,34 @@ class IccCmykTransformTest {
         JPDFiumException error = assertThrows(JPDFiumException.class,
                 () -> new IccCmykTransform(malformed));
         assertTrue(error.getMessage().contains("tag"), "unexpected error: " + error.getMessage());
+    }
+
+    private static int tac(int[] cmyk) {
+        return cmyk[0] + cmyk[1] + cmyk[2] + cmyk[3];
+    }
+
+    private static float[] labToXyz(double lightness, double a, double b) {
+        double fy = (lightness + 16) / 116;
+        double fx = fy + a / 500;
+        double fz = fy - b / 200;
+        double[] white = {0.96422, 1.0, 0.82521};
+        double[] f = {fx, fy, fz};
+        float[] xyz = new float[3];
+        for (int i = 0; i < 3; i++) {
+            double t = f[i];
+            double v = t * t * t > 0.008856 ? t * t * t : (t - 16.0 / 116) / 7.787;
+            xyz[i] = (float) (v * white[i]);
+        }
+        return xyz;
+    }
+
+    private static double[] xyzToLab(float[] xyz) {
+        double[] white = {0.96422, 1.0, 0.82521};
+        double[] f = new double[3];
+        for (int i = 0; i < 3; i++) {
+            double t = xyz[i] / white[i];
+            f[i] = t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16.0 / 116;
+        }
+        return new double[] {116 * f[1] - 16, 500 * (f[0] - f[1]), 200 * (f[1] - f[2])};
     }
 }
