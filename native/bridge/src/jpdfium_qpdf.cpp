@@ -3618,7 +3618,11 @@ FontUsageIndexes buildFontUsageIndexes(QPDF& qpdf) {
                                 complete = false;
                                 break;
                             }
-                            if (separator) pageContent.push_back('\n');
+                            // Match PDFium's renderer join byte: a space after
+                            // each stream, never '\n' (comment termination and
+                            // 0x0A-vs-0x20 inside seam-split literal strings
+                            // would mispredict rendered CIDs).
+                            if (separator) pageContent.push_back(' ');
                             pageContent.append(reinterpret_cast<char const*>(data->getBuffer()),
                                                data->getSize());
                             bytes += data->getSize() + separator;
@@ -3759,7 +3763,11 @@ CidScanResult usedCidsForFont(QPDF& qpdf, QPDFObjectHandle const& target,
                                 contentsComplete = false;
                                 break;
                             }
-                            if (separator) pageContent.push_back('\n');
+                            // Match PDFium's renderer join byte: a space after
+                            // each stream, never '\n' (comment termination and
+                            // 0x0A-vs-0x20 inside seam-split literal strings
+                            // would mispredict rendered CIDs).
+                            if (separator) pageContent.push_back(' ');
                             pageContent.append(reinterpret_cast<char const*>(data->getBuffer()),
                                                data->getSize());
                             pageContentBytes += data->getSize() + separator;
