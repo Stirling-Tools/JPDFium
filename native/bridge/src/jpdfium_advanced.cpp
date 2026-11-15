@@ -1031,6 +1031,15 @@ static std::string build_tounicode_cmap(std::map<uint32_t, std::vector<uint32_t>
     return out;
 }
 
+static bool pdf_width_from_glyph(FT_Face face, FT_UInt gid, int& out_width) {
+    if (!face || gid == 0 || face->units_per_EM == 0) return false;
+    FT_Fixed advance = 0;
+    if (FT_Get_Advance(face, gid, FT_LOAD_NO_SCALE, &advance) != 0) return false;
+    const long long units = face->units_per_EM;
+    out_width = static_cast<int>((static_cast<long long>(advance) * 1000 + units / 2) / units);
+    return true;
+}
+
 // A /ToUnicode CMap counts as present only when it actually maps a code. Some
 // producers emit the boilerplate prologue with no bfchar/bfrange entries.
 static bool cmapSectionHasMapping(std::string const& body) {
@@ -1161,6 +1170,167 @@ static void repair_font_tounicode(QPDF& pdf, QPDFObjectHandle& font, FT_Face fac
         font.replaceKey("/ToUnicode", QPDFObjectHandle::newStream(
                                           &pdf, build_tounicode_cmap(code_to_unicode, cid)));
         ++state.tuc_fixed;
+        state.changed = true;
+    }
+}
+
+// Recompute and repair /Widths on a simple (8-bit) font from FreeType glyph advances,
+// preserving existing producer widths for unmapped codes in subsetted faces.
+static void repair_simple_font_widths(QPDFObjectHandle& target, FT_Face face,
+                                      SimpleEncoding const& simple_encoding, bool simple_any_gid,
+                                      std::vector<SimpleGlyph> const& simple_glyphs,
+                                      FontNormalizeState& state) {
+    if (simple_encoding.unsupportedEncoding || !simple_any_gid) return;
+    int first_char = 0;
+    int last_char = 255;
+    QPDFObjectHandle existing_first = target.getKey("/FirstChar");
+    QPDFObjectHandle existing_last = target.getKey("/LastChar");
+    if (existing_first.isInteger()) {
+        long long value = std::clamp(existing_first.getIntValue(), 0LL, 255LL);
+        first_char = static_cast<int>(value);
+    }
+    if (existing_last.isInteger()) {
+        long long value =
+            std::clamp(existing_last.getIntValue(), static_cast<long long>(first_char), 255LL);
+        last_char = static_cast<int>(value);
+    }
+
+    std::vector<int> widths;
+    std::vector<bool> resolved_codes;
+    widths.reserve(static_cast<size_t>(last_char - first_char + 1));
+    resolved_codes.reserve(static_cast<size_t>(last_char - first_char + 1));
+    bool any_positive = false;
+    QPDFObjectHandle existing_widths = target.getKey("/Widths");
+    const bool has_widths_array = existing_widths.isArray();
+    for (int code = first_char; code <= last_char; ++code) {
+        int width = 0;
+        if (simple_glyphs[code].gid != 0 &&
+            pdf_width_from_glyph(face, simple_glyphs[code].gid, width)) {
+            if (width > 0) any_positive = true;
+            widths.push_back(width);
+            resolved_codes.push_back(true);
+            continue;
+        }
+        // A re-subset face no longer maps codes whose glyphs were dropped.
+        // Preserve the producer's width for unresolved codes instead of zeroing them.
+        int preserved = 0;
+        if (has_widths_array) {
+            const int index = code - first_char;
+            if (index >= 0 && index < existing_widths.getArrayNItems()) {
+                QPDFObjectHandle item = existing_widths.getArrayItem(index);
+                if (item.isNumber())
+                    preserved = static_cast<int>(std::lround(item.getNumericValue()));
+            }
+        }
+        if (preserved > 0) any_positive = true;
+        widths.push_back(preserved);
+        resolved_codes.push_back(false);
+    }
+
+    bool differs =
+        !has_widths_array || existing_widths.getArrayNItems() != static_cast<int>(widths.size());
+    if (!differs) {
+        for (size_t i = 0; i < widths.size(); ++i) {
+            if (!resolved_codes[i]) continue;
+            // Accept real-valued widths within one PDF glyph unit of FreeType's rounded advance.
+            QPDFObjectHandle item = existing_widths.getArrayItem(static_cast<int>(i));
+            if (!item.isNumber() || std::abs(item.getNumericValue() - widths[i]) > 1.0) {
+                differs = true;
+                break;
+            }
+        }
+    }
+
+    if (differs && any_positive) {
+        QPDFObjectHandle array = QPDFObjectHandle::newArray();
+        for (int width : widths) array.appendItem(QPDFObjectHandle::newInteger(width));
+        target.replaceKey("/FirstChar", QPDFObjectHandle::newInteger(first_char));
+        target.replaceKey("/LastChar", QPDFObjectHandle::newInteger(last_char));
+        target.replaceKey("/Widths", array);
+        ++state.w_fixed;
+        state.changed = true;
+    }
+}
+
+// Synthesize a missing /W array on a horizontal CIDFont from FreeType glyph advances.
+static void repair_cid_font_widths(QPDFObjectHandle& font, QPDFObjectHandle& target, FT_Face face,
+                                   QPDFObjectHandle& cid_to_gid, bool cid_identity,
+                                   std::map<uint32_t, uint32_t> const& gid_to_cid,
+                                   FontNormalizeState& state) {
+    // Vertical writing uses /DW2 and /W2, not horizontal /W.
+    if (font.getKey("/Encoding").isNameAndEquals("/Identity-V")) return;
+    QPDFObjectHandle existing_w = target.getKey("/W");
+    if (existing_w.isArray() && existing_w.getArrayNItems() > 0) return;
+
+    QPDFObjectHandle dw = target.getKey("/DW");
+    const int default_dw = dw.isInteger() ? dw.getIntValueAsInt() : 1000;
+    // /W is keyed by CID, not GID.
+    std::map<uint32_t, int> cid_to_width;
+    if (cid_to_gid.isStream()) {
+        try {
+            std::shared_ptr<Buffer> map = cid_to_gid.getStreamData(qpdf_dl_generalized);
+            if (map) {
+                const auto* bytes = static_cast<const uint8_t*>(map->getBuffer());
+                const size_t entries = map->getSize() / 2;
+                for (size_t c = 1; c < entries && c <= 0xFFFF; ++c) {
+                    const uint32_t gid =
+                        (static_cast<uint32_t>(bytes[2 * c]) << 8) | bytes[2 * c + 1];
+                    if (gid == 0) continue;
+                    int width = 0;
+                    if (pdf_width_from_glyph(face, gid, width) && width >= 0 && width != default_dw)
+                        cid_to_width[static_cast<uint32_t>(c)] = width;
+                }
+            }
+        } catch (...) {
+            cid_to_width.clear();
+        }
+    } else if (cid_identity) {
+        if (FT_IS_CID_KEYED(face)) {
+            for (auto const& entry : gid_to_cid) {
+                int width = 0;
+                if (pdf_width_from_glyph(face, (FT_UInt)entry.first, width) && width >= 0 &&
+                    width != default_dw)
+                    cid_to_width[entry.second] = width;
+            }
+        } else {
+            const int max_gid = static_cast<int>(
+                std::min<FT_Long>(face->num_glyphs - 1, static_cast<FT_Long>(65535)));
+            for (int gid = 1; gid <= max_gid; ++gid) {
+                int width = 0;
+                if (pdf_width_from_glyph(face, (FT_UInt)gid, width) && width >= 0 &&
+                    width != default_dw)
+                    cid_to_width[static_cast<uint32_t>(gid)] = width;
+            }
+        }
+    }
+
+    if (cid_to_width.empty()) return;
+    std::vector<std::pair<uint32_t, int>> entries(cid_to_width.begin(), cid_to_width.end());
+    QPDFObjectHandle widths = QPDFObjectHandle::newArray();
+    size_t i = 0;
+    while (i < entries.size()) {
+        size_t j = i + 1;
+        bool same_width = true;
+        while (j < entries.size() && entries[j].first == entries[j - 1].first + 1) {
+            if (entries[j].second != entries[i].second) same_width = false;
+            ++j;
+        }
+        if (j - i >= 2 && same_width) {
+            widths.appendItem(QPDFObjectHandle::newInteger(entries[i].first));
+            widths.appendItem(QPDFObjectHandle::newInteger(entries[j - 1].first));
+            widths.appendItem(QPDFObjectHandle::newInteger(entries[i].second));
+        } else {
+            widths.appendItem(QPDFObjectHandle::newInteger(entries[i].first));
+            QPDFObjectHandle run = QPDFObjectHandle::newArray();
+            for (size_t k = i; k < j; ++k)
+                run.appendItem(QPDFObjectHandle::newInteger(entries[k].second));
+            widths.appendItem(run);
+        }
+        i = j;
+    }
+    if (widths.getArrayNItems() > 0) {
+        target.replaceKey("/W", widths);
+        ++state.w_fixed;
         state.changed = true;
     }
 }
@@ -1297,8 +1467,15 @@ static void process_font(QPDF& pdf, QPDFObjectHandle font, bool do_fix_tounicode
         repair_font_tounicode(pdf, font, face.get(), cid, cid_to_gid, cid_identity, gid_to_cid,
                               gid_to_unicode, ambiguous_gids, simple_any_gid, simple_glyphs, state);
     }
-    (void)do_repair_widths;
-    (void)simple_encoding;
+    if (do_repair_widths && face->units_per_EM > 0) {
+        if (!cid) {
+            repair_simple_font_widths(target, face.get(), simple_encoding, simple_any_gid,
+                                      simple_glyphs, state);
+        } else {
+            repair_cid_font_widths(font, target, face.get(), cid_to_gid, cid_identity, gid_to_cid,
+                                   state);
+        }
+    }
 }
 
 static int32_t font_normalize_qpdf(DocWrapper* w, int32_t page_index, bool do_fix_tounicode,
