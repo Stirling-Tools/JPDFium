@@ -876,8 +876,13 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
     // when no object was destroyed or edited.
     bool pixelsErased = false;
     // Crop mode: visible content was dropped because it could not be handled
-    // safely (failed replacement or un-erasable straddling image).
+    // safely (failed text replacement). Unerasable straddling images are not
+    // dropped; they stay whole and the crop boxes clip the view.
     bool cropReplacementFailed = false;
+    // Crop mode: straddling images that cannot be pixel-erased or promoted
+    // without disturbing another placement. Keeping them whole preserves the
+    // visible part; the page boxes still hide the outside part.
+    std::unordered_set<FPDF_PAGEOBJECT> cropKeepWhole;
 
     // Bounds of |obj| (parent space) transformed into page space.
     auto transformedBounds = [](FPDF_PAGEOBJECT obj, const FS_MATRIX& m, float& l, float& b,
@@ -952,8 +957,13 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
     auto promoteErasedImage = [&](FPDF_PAGEOBJECT child, FPDF_PAGEOBJECT formObj,
                                   const FS_MATRIX& parentToPage, float tMinX, float tMinY,
                                   float tMaxX, float tMaxY) {
+        if (cropKeepWhole.count(child)) return;
         FS_MATRIX childMatrix;
         if (!FPDFPageObj_GetMatrix(child, &childMatrix)) {
+            if (cropRect) {
+                cropKeepWhole.insert(child);
+                return;
+            }
             objsToDestroy.insert(child);
             promotionFailed = true;
             return;
@@ -969,6 +979,11 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
         if (!eraseImagePixels(doc, page, child, childToPage,
                               std::span<const FS_RECTF>(eraseRectsBuffer), argb, &pixelsErased,
                               core ? &core->erasedGrayImages : nullptr)) {
+            if (cropRect) {
+                // Preserve the whole image rather than dropping its visible part.
+                cropKeepWhole.insert(child);
+                return;
+            }
             objsToDestroy.insert(child);
             promotionFailed = true;
             return;
@@ -991,6 +1006,11 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
         // references, and the in-place erase never reaches the
         // file, so fail loudly instead.
         if (!FPDFFormObj_RemoveObject(formObj, child)) {
+            if (cropRect) {
+                // The erased child stays in its form; the form still paints it.
+                cropKeepWhole.insert(child);
+                return;
+            }
             promotionFailed = true;
             return;
         }
@@ -1062,7 +1082,10 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
                     continue;
                 }
                 if (childType == FPDF_PAGEOBJ_IMAGE) {
-                    promoteErasedImage(child, formObj, parentToPage, tMinX, tMinY, tMaxX, tMaxY);
+                    if (!cropKeepWhole.count(child)) {
+                        promoteErasedImage(child, formObj, parentToPage, tMinX, tMinY, tMaxX,
+                                           tMaxY);
+                    }
                 }
                 continue;
             }
@@ -1180,6 +1203,12 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
             bool hasLater = false;
             classifyPaintPosition(allObjs[cit->second], hasEarlier, hasLater);
             if (hasEarlier && hasLater) {
+                if (cropRect) {
+                    // Promotion would reorder the form's visible content.
+                    // Keep the image where it is and clip the page instead.
+                    cropKeepWhole.insert(cand);
+                    continue;
+                }
                 if (refusedUnmodified) *refusedUnmodified = true;
                 return JPDFIUM_ERR_REDACT_INCOMPLETE;
             }
@@ -1198,11 +1227,18 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
             }
             for (FPDF_PAGEOBJECT erased : pixelErased) {
                 for (FPDF_PAGEOBJECT other : survivingImages) {
-                    if (other != erased &&
-                        sameImageData(erased, keys.at(erased), other, keys.at(other))) {
-                        if (refusedUnmodified) *refusedUnmodified = true;
-                        return JPDFIUM_ERR_REDACT_INCOMPLETE;
+                    if (other == erased ||
+                        !sameImageData(erased, keys.at(erased), other, keys.at(other))) {
+                        continue;
                     }
+                    if (cropRect) {
+                        // Erasing this placement would also erase the shared
+                        // bitmap under the other one. Keep both whole.
+                        cropKeepWhole.insert(erased);
+                        break;
+                    }
+                    if (refusedUnmodified) *refusedUnmodified = true;
+                    return JPDFIUM_ERR_REDACT_INCOMPLETE;
                 }
             }
         }
@@ -1231,6 +1267,9 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
         if (!anyOverlap && !(cropRect && type == FPDF_PAGEOBJ_FORM)) continue;
 
         if (type == FPDF_PAGEOBJ_IMAGE) {
+            // Crop: a straddling image that cannot be erased safely stays
+            // whole and is clipped by the page boxes.
+            if (cropRect && cropKeepWhole.count(obj)) continue;
             // Redaction: fully contained or >70% covered images are removed.
             // Crop: only fully outside images are; a straddling image keeps
             // its visible part and is pixel-erased outside.
@@ -1266,13 +1305,14 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
                         argb, &pixelsErased, core ? &core->erasedGrayImages : nullptr);
                 }
                 if (!erased) {
-                    // Doctrine: pixel-true erase or full removal, never cover-and-keep.
-                    objsToDestroy.insert(obj);
-                    // Crop-only signal: in redaction mode the same outcome
-                    // (removal) has always meant success, and flagging it
-                    // would throw RedactIncompleteException for a fully
-                    // redacted page.
-                    if (cropRect) cropReplacementFailed = true;
+                    if (cropRect) {
+                        // Drop nothing: the visible part must survive. The
+                        // boxes clip the outside part.
+                        cropKeepWhole.insert(obj);
+                    } else {
+                        // Doctrine: pixel-true erase or full removal, never cover-and-keep.
+                        objsToDestroy.insert(obj);
+                    }
                 }
             }
         } else if (type == FPDF_PAGEOBJ_PATH) {
