@@ -689,7 +689,7 @@ int32_t jpdfium_font_subset(const uint8_t* font_data, int64_t font_len, const ui
         if (!*out_data) {
             hb_blob_destroy(result_blob);
             hb_face_destroy(subset_face);
-            return JPDFIUM_ERR_NATIVE;
+            return JPDFIUM_ERR_ALLOC;
         }
         memcpy(*out_data, result_data, result_len);
 

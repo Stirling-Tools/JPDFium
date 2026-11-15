@@ -26,6 +26,34 @@ publishing workflows, not library releases, so they are not listed here.
   `fontDirectories(Path...)`: PDF/X conversion embeds fonts used without a
   program through `PdfFontEmbedder.embedMissing`.
 
+- Ebook/comic compression: `CompressOptions.maxImageEdgePx` downsamples images
+  by their longest pixel edge, which is the only size signal that works for
+  CBZ/CBR pages laid out as 1 image pixel = 1 PDF point (they report 72 DPI and
+  escaped the DPI threshold). The image pass now honours `convertPngToJpeg`,
+  downsamples with the Rust Lanczos3 kernel, and encodes JPEG through the
+  pure-Rust mozjpeg port (trellis quantisation, deringing, optimized Huffman
+  tables). On a 24-page 2550x3301 comic scan, 150 DPI / 1600 px / quality 65
+  reduced 14.8 MB to 1.8 MB; Ghostscript `/ebook` left the same file at
+  14.7 MB.
+- Optional libvips integration in the compressor: when `jpdfium-vips` is on
+  the classpath, `PdfImageOptimizer` compares its JPEG output with the Rust
+  encoder and keeps the smaller stream. `jpdfium.vips.trellis=true` enables
+  libvips trellis/deringing on builds linked against mozjpeg.
+- `PdfCompressor` now deduplicates image XObjects with identical dictionaries
+  and raw stream bytes before writing. This collapses repeated covers, logos
+  and page backgrounds: a 10-page PDF repeating one 1600x2400 image went from
+  3.7 MB to 95 KB after the normal image pass, versus 938 KB without dedup.
+- `CompressOptions.jpegProgressive` writes rewritten images as progressive
+  JPEG. Saves 2-11% more depending on image content while remaining a standard
+  PDF DCT stream; baseline stays the default for maximum reader compatibility.
+- `CompressOptions.jbig2` (disabled by default, opt-in) encodes qualifying 1-bit DeviceGray
+  images as JBIG2 with a `/JBIG2Globals` stream and adopts it only when the
+  combined streams are smaller. A synthetic 2480x3508 bilevel bar scan went
+  from 3,109 B to 1,017 B; a 3-page 300 DPI text scan went from 93,672 B to
+  21,762 B.
+- `CompressOptions.ccittG4` (disabled by default, opt-in) re-encodes qualifying 1-bit
+  DeviceGray images as CCITT Group 4 and adopts the stream only when smaller.
+  A synthetic 2480x3508 bilevel bar scan went from 3,109 B to 1,690 B.
 - `PdfSplit.extractPageRangesToFiles` writes many page ranges of one file from a single qpdf
   parse instead of one parse per range. Ranges qpdf cannot write, and `MEMORY` storage, go
   through `extractPageRangeToFile` one at a time. 400 single-page parts of a 4.3 MB PDF take 0.12 s instead of
@@ -60,6 +88,25 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Changed
 
+- Compression no longer degrades an image that is already below the resize
+  threshold unless the caller opts in. `CompressPreset.WEB`, `SCREEN`, `PRINT`
+  and `CompressOptions.builder().maxImageDpi(...)` keep their historic
+  downsampling-only behaviour: a below-threshold JPEG is not re-encoded and a
+  non-resized PNG/Flate image is not converted to JPEG. Opt in with the new
+  `CompressOptions.reencodeWithoutResize(true)`, or by asking for a JPEG quality
+  with no resize threshold at all (`maxImageDpi <= 0 && maxImageEdgePx <= 0`).
+  This restores the pre-1.4 behaviour for existing callers; the lossy options
+  stay available and are documented as explicit choices.
+- The preview fidelity check that gates the image pass renders at 150 DPI (up
+  from 96) with a 2400 px long-edge cap (up from 1200). The lower preview hid
+  JPEG ringing around text on pages that were re-encoded without downsampling,
+  so the verify-and-rollback pass accepted visibly degraded output.
+- JBIG2 re-encoding is skipped on PDF/X-1a and PDF/X-3 documents, which are
+  PDF 1.3 profiles and forbid it; PDF/X-4 and later still allow it. CCITT G4 is
+  permitted by every PDF/X part and is unaffected.
+- The qpdf writer only raises the minimum PDF version to 1.4 when a JBIG2
+  stream was actually written, so requesting JBIG2 on a document with no
+  qualifying image no longer bumps the version.
 - `PdfXConverter` converts colours through a QPDF content-stream rewrite instead
   of PDFium page regeneration. Conversion time is now linear in page count (a
   6,269-page spreadsheet went from 582 s to 2 s), text runs and marked content

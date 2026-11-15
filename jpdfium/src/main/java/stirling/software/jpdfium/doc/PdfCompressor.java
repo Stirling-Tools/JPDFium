@@ -1,6 +1,7 @@
 package stirling.software.jpdfium.doc;
 
 import stirling.software.jpdfium.PdfDocument;
+import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.RustBridgeBindings;
 
@@ -24,8 +25,9 @@ import java.util.zip.Inflater;
  * <ol>
  *   <li><strong>Signed PDFs</strong>: documents containing digital signatures are
  *       returned byte-for-byte unchanged - any rewrite invalidates the signature.</li>
- *   <li><strong>Images</strong> (in-process): downsampling and recompression via
- *       {@link PdfImageOptimizer} (skipped for PDF/A documents)</li>
+ *   <li><strong>Images</strong> (in-process): downsampling by effective DPI or longest
+ *       pixel edge, and JPEG re-encoding via {@link PdfImageOptimizer} (skipped for
+ *       PDF/A documents)</li>
  *   <li><strong>qpdf</strong> (in-process FFM): structural optimization via object streams,
  *       cross-reference stream compression, and unreferenced object removal</li>
  *   <li><strong>PDFium</strong>: metadata stripping via {@link PdfSecurity}
@@ -76,6 +78,10 @@ public final class PdfCompressor {
     // raw scan can miss the claim; presence of this key triggers a scan of the
     // catalog's metadata stream only.
     private static final byte[] METADATA_MARKER = "/Metadata".getBytes(StandardCharsets.US_ASCII);
+    // PDF/X version claim. ISO 15930-1/-3 (PDF/X-1a, PDF/X-3) are PDF 1.3
+    // profiles and forbid JBIG2; only PDF/X-4 (15930-7) and later allow it.
+    private static final byte[] PDFX_VERSION_MARKER =
+            "GTS_PDFXVersion".getBytes(StandardCharsets.US_ASCII);
     // Upper bound on an inflated metadata stream: a crafted /Metadata Flate bomb
     // must not be able to exhaust the heap.
     private static final int MAX_XMP_BYTES = 4 << 20;
@@ -241,6 +247,15 @@ public final class PdfCompressor {
                     + "(image downsampling and metadata removal disabled)");
         }
 
+        // JBIG2 is forbidden by PDF/X-1a and PDF/X-3 (PDF 1.3 profiles) and only
+        // allowed from PDF/X-4 on. CCITT G4 is permitted by every PDF/X part.
+        boolean jbig2 = opts.jbig2();
+        if (jbig2 && !pdfxAllowsJbig2(sourceBytes)) {
+            jbig2 = false;
+            warnings.add("JBIG2 requested but the PDF/X profile forbids it; "
+                    + "bilevel images keep their existing encoding");
+        }
+
         // Preserved documents (PDF/A, or a signed doc opened from memory) skip
         // every lossy/mutating pass and get structural optimization only.
         // EXACT mode forbids every lossy/mutating pass; PDF/A and signed
@@ -249,7 +264,7 @@ public final class PdfCompressor {
         boolean preserve = pdfA || signed || mode == PreservationMode.EXACT;
         boolean wantImagePass = !preserve && mode.lossyAllowed()
                 && (opts.imageQuality() > 0 || opts.maxImageDpi() > 0
-                    || opts.convertPngToJpeg());
+                    || opts.maxImageEdgePx() > 0 || opts.convertPngToJpeg());
         boolean removeMetadata = opts.removeMetadata() && !preserve;
         if (wantImagePass && !PdfImageOptimizer.isSupported()) {
             warnings.add("image optimization was requested but is unavailable on this platform");
@@ -300,7 +315,18 @@ public final class PdfCompressor {
             byte[] preImage = baseBytes;
             int n = 0;
             try (PdfDocument working = PdfDocument.open(preImage)) {
-                n = PdfImageOptimizer.optimize(working, opts.maxImageDpi(), opts.imageQuality());
+                // A DPI/edge threshold alone must not degrade an image that is
+                // already below it: existing callers of a preset or of
+                // maxImageDpi(150) keep the downsampling-only behaviour. An
+                // explicit opt-in, or a quality-only request with no resize
+                // threshold at all, enables in-place re-encoding.
+                boolean allowQualityOnly = opts.reencodeWithoutResize()
+                        || (opts.maxImageDpi() <= 0 && opts.maxImageEdgePx() <= 0
+                                && opts.imageQuality() > 0);
+                n = PdfImageOptimizer.optimize(
+                        working, opts.maxImageDpi(), opts.imageQuality(),
+                        opts.maxImageEdgePx(), opts.convertPngToJpeg(),
+                        opts.jpegProgressive(), allowQualityOnly);
                 if (n > 0) {
                     imagePostBytes = working.saveBytes();
                 }
@@ -311,6 +337,10 @@ public final class PdfCompressor {
                 n = 0;
             }
             if (n > 0) {
+                String constraints = "quality=" + opts.imageQuality()
+                        + (opts.maxImageDpi() > 0 ? ", max DPI=" + opts.maxImageDpi() : "")
+                        + (opts.maxImageEdgePx() > 0
+                                ? ", max edge=" + opts.maxImageEdgePx() + "px" : "");
                 // Only keep rewritten images when they actually shrink the file;
                 // an inflated image pass is dropped so it cannot throw away the
                 // savings the structural passes earned.
@@ -320,15 +350,15 @@ public final class PdfCompressor {
                     warnings.add("image pass discarded: rewritten images were not smaller");
                 } else if (!verify) {
                     imagesOptimized = n;
-                    actions.add("Native: optimized %d image(s) (max DPI=%d)".formatted(
-                            n, opts.maxImageDpi()));
+                    actions.add("Native: optimized %d image(s) (%s)"
+                            .formatted(n, constraints));
                 } else {
                     double mad = maxPreviewMeanAbsDiff(preImage, imagePostBytes, expectedPages);
                     if (mad <= mode.maxMeanAbsDiff()) {
                         imagesOptimized = n;
-                        actions.add(("Native: optimized %d image(s) (max DPI=%d, "
+                        actions.add(("Native: optimized %d image(s) (%s, "
                                 + "verified mean-abs-diff=%.2f)").formatted(
-                                        n, opts.maxImageDpi(), mad));
+                                        n, constraints, mad));
                     } else {
                         imageRollbackBytes = preImage;
                         imagePostBytes = null;
@@ -363,7 +393,15 @@ public final class PdfCompressor {
                             PdfOptimizer.OBJECT_STREAMS_PRESERVE,
                             PdfOptimizer.STREAM_DATA_COMPRESS,
                             PdfOptimizer.DECODE_LEVEL_GENERALIZED)
-                    : PdfOptimizer.compress(resultBytes, 9, false, false);
+                    : PdfOptimizer.optimize(resultBytes,
+                            PdfOptimizer.RECOMPRESS_FLATE | PdfOptimizer.COMPRESS_STREAMS
+                                    | PdfOptimizer.DEDUPLICATE_IMAGES
+                                    | (jbig2 ? PdfOptimizer.JBIG2 : 0)
+                                    | (opts.ccittG4() ? PdfOptimizer.CCITT_G4 : 0),
+                            9,
+                            PdfOptimizer.OBJECT_STREAMS_GENERATE,
+                            PdfOptimizer.STREAM_DATA_COMPRESS,
+                            PdfOptimizer.DECODE_LEVEL_GENERALIZED);
             if (opt != null && opt.length < resultBytes.length) {
                 resultBytes = opt;
                 streamsOptimized = true;
@@ -378,7 +416,10 @@ public final class PdfCompressor {
             // required: the all-DEFAULT form measured worse than the source on
             // some inputs (inflating streams instead of recompressing them).
             byte[] opt = PdfOptimizer.optimize(resultBytes,
-                    PdfOptimizer.RECOMPRESS_FLATE | PdfOptimizer.COMPRESS_STREAMS, 9,
+                    PdfOptimizer.RECOMPRESS_FLATE | PdfOptimizer.COMPRESS_STREAMS
+                            | PdfOptimizer.DEDUPLICATE_IMAGES
+                            | (jbig2 ? PdfOptimizer.JBIG2 : 0)
+                            | (opts.ccittG4() ? PdfOptimizer.CCITT_G4 : 0), 9,
                     PdfOptimizer.OBJECT_STREAMS_PRESERVE,
                     PdfOptimizer.STREAM_DATA_COMPRESS,
                     PdfOptimizer.DECODE_LEVEL_GENERALIZED);
@@ -792,6 +833,58 @@ public final class PdfCompressor {
         return looksSignedByBytes(scanMarkers(pdf));
     }
 
+    // Whether a JBIG2 stream is allowed by this document's PDF/X claim. A file
+    // with no PDF/X claim, or one that claims PDF/X-4 or later, may use JBIG2;
+    // PDF/X-1a, PDF/X-3 and any unrecognised/older claim must not. The raw file
+    // is scanned first, then the catalog metadata stream, mirroring the PDF/A
+    // claim detection above.
+    static boolean pdfxAllowsJbig2(byte[] pdf) {
+        if (pdf == null) {
+            return true;
+        }
+        Boolean claim = pdfxVersionAllowsJbig2(pdf);
+        if (claim != null) {
+            return claim;
+        }
+        byte[] xmp = catalogMetadata(pdf, scanMarkers(pdf));
+        if (xmp == null) {
+            return true;
+        }
+        Boolean xmpClaim = pdfxVersionAllowsJbig2(xmp);
+        return xmpClaim == null || xmpClaim;
+    }
+
+    // Reads the version token that follows the first GTS_PDFXVersion marker.
+    // Returns null when the buffer carries no claim.
+    private static Boolean pdfxVersionAllowsJbig2(byte[] buf) {
+        int at = indexOf(buf, PDFX_VERSION_MARKER);
+        if (at < 0) {
+            return null;
+        }
+        int start = at + PDFX_VERSION_MARKER.length;
+        int end = Math.min(buf.length, start + 64);
+        StringBuilder version = new StringBuilder();
+        boolean started = false;
+        for (int i = start; i < end; i++) {
+            char c = (char) (buf[i] & 0xFF);
+            if (!started) {
+                // Skip the separator between the key and the value: an XMP
+                // attribute (="...") or an element (>...<).
+                if (c == ' ' || c == '\t' || c == '>' || c == '=' || c == '"' || c == '\''
+                        || c == '(') {
+                    continue;
+                }
+                started = true;
+            }
+            if (c == '<' || c == '"' || c == ')' || c == '\n' || c == '\r') {
+                break;
+            }
+            version.append(c);
+        }
+        String v = version.toString();
+        return v.contains("PDF/X-4") || v.contains("PDF/X-5") || v.contains("PDF/X-6");
+    }
+
     private static boolean containsAny(byte[] haystack, byte[][] needles) {
         if (haystack == null) {
             return false;
@@ -842,8 +935,9 @@ public final class PdfCompressor {
             }
             double max = 0.0;
             for (int i = 0; i < expectedPages; i++) {
+                int previewDpi = previewDpi(db, i);
                 double d = worstTileMeanAbsDiff(
-                        db.renderImage(i, PREVIEW_DPI), da.renderImage(i, PREVIEW_DPI));
+                        db.renderImage(i, previewDpi), da.renderImage(i, previewDpi));
                 if (d > max) {
                     max = d;
                 }
@@ -855,7 +949,30 @@ public final class PdfCompressor {
         }
     }
 
-    private static final int PREVIEW_DPI = 96;
+    // Preview DPI. A low 96 DPI preview hid JPEG ringing around text on pages
+    // that were re-encoded but not resized, so the fidelity gate accepted
+    // visibly degraded output. 150 DPI keeps glyph edges sharp enough to catch
+    // that ringing while staying cheap on ordinary pages.
+    private static final int PREVIEW_DPI = 150;
+
+    // Preview resolution is capped so a huge page is not rendered at print
+    // resolution just to compare it. 2400 px still resolves text ringing that
+    // 1200 px missed. Comic archives lay out one image pixel as one PDF point,
+    // so a 1600x2400 px page is 22x33 in; the cap keeps such a page at a
+    // manageable height instead of 4950 px at 150 DPI.
+    private static final int PREVIEW_MAX_EDGE_PX = 2400;
+
+    private static int previewDpi(PdfDocument doc, int pageIndex) {
+        try (PdfPage page = doc.page(pageIndex)) {
+            float longEdgeInches = Math.max(page.size().width(), page.size().height()) / 72f;
+            if (longEdgeInches <= 0f) return PREVIEW_DPI;
+            int capped = Math.round(PREVIEW_MAX_EDGE_PX / longEdgeInches);
+            return Math.max(24, Math.min(PREVIEW_DPI, capped));
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            return PREVIEW_DPI;
+        }
+    }
 
     // Worst per-tile mean absolute difference over a page; a size mismatch fails
     // outright (falling back to the pre-image), never a merely large value.

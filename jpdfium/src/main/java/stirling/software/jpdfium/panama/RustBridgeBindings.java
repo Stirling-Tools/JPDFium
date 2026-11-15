@@ -5,6 +5,7 @@ import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.MemorySegment;
 import java.lang.invoke.MethodHandle;
 
+
 import static java.lang.foreign.ValueLayout.ADDRESS;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 import static java.lang.foreign.ValueLayout.JAVA_INT;
@@ -99,6 +100,20 @@ public final class RustBridgeBindings {
             "jpdfium_rust_compress_png",
             FunctionDescriptor.of(JAVA_INT,
                     ADDRESS, JAVA_LONG, ADDRESS, ADDRESS, JAVA_INT));
+
+    /** {@code int32_t jpdfium_rust_encode_jpeg(pixels, len, w, h, components, quality, out, outLen)} */
+    static final MethodHandle RUST_ENCODE_JPEG = downcallOptional(
+            "jpdfium_rust_encode_jpeg",
+            FunctionDescriptor.of(JAVA_INT,
+                    ADDRESS, JAVA_LONG, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT,
+                    ADDRESS, ADDRESS));
+
+    /** {@code int32_t jpdfium_rust_encode_jpeg_ex(..., progressive, out, outLen)} */
+    static final MethodHandle RUST_ENCODE_JPEG_EX = downcallOptional(
+            "jpdfium_rust_encode_jpeg_ex",
+            FunctionDescriptor.of(JAVA_INT,
+                    ADDRESS, JAVA_LONG, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT,
+                    ADDRESS, ADDRESS));
 
     /** {@code void jpdfium_rust_free(uint8_t* ptr)} */
     static final MethodHandle RUST_FREE = downcallOptional(
@@ -203,6 +218,52 @@ public final class RustBridgeBindings {
             }
             return extractAndFree(outPtr, outLen);
         } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            return null;
+        }
+    }
+
+    /**
+     * Encode interleaved 8-bit gray ({@code components=1}) or RGB
+     * ({@code components=3}) pixels as a baseline JPEG with optimized Huffman
+     * tables and 4:2:0 chroma for RGB.
+     *
+     * @return JPEG bytes, or {@code null} if Rust is unavailable or encoding failed
+     */
+    public static byte[] rustEncodeJpeg(byte[] pixels, int width, int height,
+                                        int components, int quality) {
+        return rustEncodeJpeg(pixels, width, height, components, quality, false);
+    }
+
+    /**
+     * As {@link #rustEncodeJpeg(byte[], int, int, int, int)}, with an explicit
+     * progressive JPEG scan mode.
+     */
+    public static byte[] rustEncodeJpeg(byte[] pixels, int width, int height,
+                                        int components, int quality, boolean progressive) {
+        MethodHandle encoder = progressive ? RUST_ENCODE_JPEG_EX : RUST_ENCODE_JPEG;
+        if (!AVAILABLE || encoder == null || pixels == null || pixels.length == 0) {
+            return null;
+        }
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment inSeg = arena.allocateFrom(JAVA_BYTE, pixels);
+            MemorySegment outPtr = arena.allocate(ADDRESS);
+            MemorySegment outLen = arena.allocate(JAVA_LONG);
+
+            int rc = progressive
+                    ? (int) RUST_ENCODE_JPEG_EX.invokeExact(
+                            inSeg, (long) pixels.length, width, height, components,
+                            Math.max(1, Math.min(100, quality)), 1, outPtr, outLen)
+                    : (int) RUST_ENCODE_JPEG.invokeExact(
+                            inSeg, (long) pixels.length, width, height, components,
+                            Math.max(1, Math.min(100, quality)), outPtr, outLen);
+
+            if (rc != 0) {
+                return null;
+            }
+            return extractAndFree(outPtr, outLen);
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
             return null;
         }
     }
@@ -270,10 +331,12 @@ public final class RustBridgeBindings {
         if (ptr.equals(MemorySegment.NULL) || len <= 0) {
             return null;
         }
-        byte[] result = ptr.reinterpret(len).toArray(JAVA_BYTE);
-        if (RUST_FREE != null) {
-            RUST_FREE.invokeExact(ptr);
+        try {
+            return ptr.reinterpret(len).toArray(JAVA_BYTE);
+        } finally {
+            if (RUST_FREE != null) {
+                RUST_FREE.invokeExact(ptr);
+            }
         }
-        return result;
     }
 }
