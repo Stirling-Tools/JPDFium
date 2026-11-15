@@ -7,6 +7,7 @@ import org.apache.pdfbox.cos.COSBase;
 import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.PDPageContentStream;
 import org.apache.pdfbox.pdmodel.PDResources;
 import org.apache.pdfbox.pdmodel.graphics.form.PDFormXObject;
 import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
@@ -18,11 +19,15 @@ import stirling.software.jpdfium.doc.PageBoxes;
 import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.transform.PdfPageGeometry;
 
+import java.awt.Color;
+import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import javax.imageio.ImageIO;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -55,12 +60,12 @@ class CropImageContentTest {
         for (int x = 0; x < 100; x += 10) {
             assertEquals(0xFF0000, bi.getRGB(x, 10) & 0xFFFFFF,
                     "visible row 10 must stay red (flip regression)");
-            assertEquals(0x000000, bi.getRGB(x, 90) & 0xFFFFFF,
+            assertEquals(0xFFFFFF, bi.getRGB(x, 90) & 0xFFFFFF,
                     "hidden row 90 must be erased");
         }
         // Every hidden pixel is gone; every visible pixel is intact.
         assertPixelRows(bi, 0, 50, 0xFF0000, "visible half");
-        assertPixelRows(bi, 50, 100, 0x000000, "hidden half");
+        assertPixelRows(bi, 50, 100, 0xFFFFFF, "hidden half");
 
         // The rendered page shows the red half inside the crop.
         BufferedImage page = render(output);
@@ -77,10 +82,59 @@ class CropImageContentTest {
         // Bitmap columns 0..79 map to page x 100..180 (outside) -> erased;
         // columns 80..99 map to 180..200 (inside) -> red/blue preserved.
         for (int y = 0; y < 100; y += 10) {
-            assertEquals(0x000000, bi.getRGB(10, y) & 0xFFFFFF,
+            assertEquals(0xFFFFFF, bi.getRGB(10, y) & 0xFFFFFF,
                     "out-of-crop column must be erased, not the whole image dropped");
             assertEquals(y < 50 ? 0xFF0000 : 0x0000FF, bi.getRGB(90, y) & 0xFFFFFF,
                     "visible strip must keep its original colour");
+        }
+    }
+
+    @Test
+    void fullBleedImageCropHasNoDarkEdge() throws Exception {
+        byte[] input = solidFullPageImagePdf(new Color(210, 225, 240));
+        byte[] output = crop(input, new Rect(100, 350, 200, 200));
+        BufferedImage page = renderAt(output, 144);
+        assertEquals(400, page.getWidth(), "144 DPI must rasterize the 200pt crop at 400px");
+        assertEquals(400, page.getHeight(), "144 DPI must rasterize the 200pt crop at 400px");
+        int darkBorder = 0;
+        int border = 0;
+        for (int y = 0; y < page.getHeight(); y++) {
+            for (int x = 0; x < page.getWidth(); x++) {
+                boolean edge = x < 2 || y < 2 || x >= page.getWidth() - 2
+                        || y >= page.getHeight() - 2;
+                if (!edge) continue;
+                border++;
+                int rgb = page.getRGB(x, y) & 0xFFFFFF;
+                if ((rgb >> 16 & 255) < 80 && (rgb >> 8 & 255) < 80 && (rgb & 255) < 80) {
+                    darkBorder++;
+                }
+            }
+        }
+        assertTrue(darkBorder * 100 < border,
+                "crop must not paint a dark border: " + darkBorder + "/" + border);
+        int interior = page.getRGB(page.getWidth() / 2, page.getHeight() / 2) & 0xFFFFFF;
+        assertColorNear(0xD2E1F0, interior, 8,
+                "the full-bleed image must survive the crop, not be erased");
+    }
+
+    private static byte[] solidFullPageImagePdf(Color color) throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(org.apache.pdfbox.pdmodel.common.PDRectangle.LETTER);
+            doc.addPage(page);
+            BufferedImage bi = new BufferedImage(600, 800, BufferedImage.TYPE_INT_RGB);
+            Graphics2D g = bi.createGraphics();
+            g.setColor(color);
+            g.fillRect(0, 0, bi.getWidth(), bi.getHeight());
+            g.dispose();
+            ByteArrayOutputStream png = new ByteArrayOutputStream();
+            ImageIO.write(bi, "png", png);
+            PDImageXObject image = PDImageXObject.createFromByteArray(doc, png.toByteArray(), "solid");
+            try (var cs = new PDPageContentStream(doc, page)) {
+                cs.drawImage(image, 0, 0, 612, 792);
+            }
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            doc.save(out);
+            return out.toByteArray();
         }
     }
 
@@ -95,7 +149,7 @@ class CropImageContentTest {
 
         assertEquals(0, transparent >>> 24, "visible transparent pixel must stay transparent");
         assertEquals(0xFF00FF00, circle, "visible circle pixel must stay opaque green");
-        assertEquals(0xFF000000, erased, "out-of-crop masked pixel must be erased opaque");
+        assertEquals(0xFFFFFFFF, erased, "out-of-crop masked pixel must be erased opaque white");
         // A soft mask must still be attached to the image object.
         assertTrue(hasSoftMask(output), "erasing a masked image must keep its /SMask");
     }
@@ -107,7 +161,7 @@ class CropImageContentTest {
         assertEquals(1, countImageDraws(output), "image must be drawn exactly once after promotion");
         BufferedImage bi = onlyImage(output);
         assertPixelRows(bi, 0, 50, 0xFF0000, "visible half");
-        assertPixelRows(bi, 50, 100, 0x000000, "hidden half");
+        assertPixelRows(bi, 50, 100, 0xFFFFFF, "hidden half");
         BufferedImage page = render(output);
         assertEquals(0xFF0000, pixelAt(page, output, 150, 250) & 0xFFFFFF);
     }
@@ -153,7 +207,7 @@ class CropImageContentTest {
                     expected = (iy < 50 ? 0xFF0000 : 0x0000FF);
                     kept++;
                 } else {
-                    expected = 0x000000;
+                    expected = 0xFFFFFF;
                     erased++;
                 }
                 if ((bi.getRGB(ix, iy) & 0xFFFFFF) != expected) {
@@ -176,7 +230,7 @@ class CropImageContentTest {
         for (int y = 0; y < 100; y += 10) {
             assertEquals(y < 50 ? 0xFF0000 : 0x0000FF, bi.getRGB(20, y) & 0xFFFFFF,
                     "column inside the crop must survive");
-            assertEquals(0x000000, bi.getRGB(80, y) & 0xFFFFFF,
+            assertEquals(0xFFFFFF, bi.getRGB(80, y) & 0xFFFFFF,
                     "column outside the crop must be erased");
         }
     }
@@ -188,7 +242,7 @@ class CropImageContentTest {
         byte[] output = crop(CropTestPdfGenerator.nestedTransformedFormImagePdf(), KEEP_TOP);
         BufferedImage bi = onlyImage(output);
         assertPixelRows(bi, 0, 20, 0xFF0000, "visible rows through nested transforms");
-        assertPixelRows(bi, 60, 100, 0x000000, "hidden rows through nested transforms");
+        assertPixelRows(bi, 60, 100, 0xFFFFFF, "hidden rows through nested transforms");
 
         BufferedImage page = render(output);
         assertEquals(0xFF0000, pixelAt(page, output, 150, 220) & 0xFFFFFF,
@@ -374,9 +428,22 @@ class CropImageContentTest {
     // rendering helpers (JPDFium renders the MediaBox with its origin in view)
 
     private static BufferedImage render(byte[] pdf) {
+        return renderAt(pdf, 72);
+    }
+
+    private static BufferedImage renderAt(byte[] pdf, int dpi) {
         try (PdfDocument doc = PdfDocument.open(pdf); PdfPage page = doc.page(0)) {
-            return page.renderAt(72).toBufferedImage();
+            return page.renderAt(dpi).toBufferedImage();
         }
+    }
+
+    private static void assertColorNear(int expected, int actual, int tolerance, String ctx) {
+        int dr = Math.abs(((expected >> 16) & 255) - ((actual >> 16) & 255));
+        int dg = Math.abs(((expected >> 8) & 255) - ((actual >> 8) & 255));
+        int db = Math.abs((expected & 255) - (actual & 255));
+        assertTrue(dr <= tolerance && dg <= tolerance && db <= tolerance,
+                String.format("%s: pixel %06X, expected %06X +/- %d", ctx, actual, expected,
+                        tolerance));
     }
 
     private static int pixelAt(BufferedImage img, byte[] pdf, int pdfX, int pdfY) {

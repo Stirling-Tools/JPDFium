@@ -113,6 +113,12 @@ publishing workflows, not library releases, so they are not listed here.
   the source page tree cannot be rewritten, and refuses signed documents
   instead of silently invalidating the signature.
 
+- Full flatten rasterizes populated AcroForm widgets instead of dropping their
+  values: widget appearances are baked into page content before the page image
+  is generated, and the resulting document has no AcroForm left. The bake
+  follows the on-screen view, so no-view markup stays out of the image.
+- Cropping with content removal paints erased image pixels white instead of
+  black, so a full-bleed image no longer shows a dark fringe at the crop edge.
 - Word and regex redaction finds words PDFium reports hyphenated across a line
   break (`Trace-` / `Monkey`), and removes the hyphen with them; it previously
   missed them, and with eight or more words the keyword prefilter skipped such
