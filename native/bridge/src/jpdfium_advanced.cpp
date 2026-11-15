@@ -2872,6 +2872,7 @@ static void process_font(QPDF& pdf, QPDFObjectHandle font, bool do_fix_tounicode
             }
         }
         if (subtype_name == "/TrueType" && font.hasKey("/Encoding")) {
+            bool encoding_mutated = false;
             QPDFObjectHandle flags_obj = descriptor.getKey("/Flags");
             long long flags = flags_obj.isInteger() ? flags_obj.getIntValue() : 0LL;
             if ((flags & 4) != 0) {
@@ -2882,6 +2883,7 @@ static void process_font(QPDF& pdf, QPDFObjectHandle font, bool do_fix_tounicode
                 } else {
                     font.removeKey("/Encoding");
                     state.changed = true;
+                    encoding_mutated = true;
                 }
             }
             if ((flags & 4) == 0 && font.hasKey("/Encoding")) {
@@ -2890,17 +2892,48 @@ static void process_font(QPDF& pdf, QPDFObjectHandle font, bool do_fix_tounicode
                     QPDFObjectHandle base_obj = enc_obj.getKey("/BaseEncoding");
                     std::string base_name =
                         base_obj.isName() ? base_obj.getName() : "/WinAnsiEncoding";
-                    if (!base_obj.isName() ||
-                        (base_name != "/WinAnsiEncoding" && base_name != "/MacRomanEncoding")) {
+                    const bool replacing_base =
+                        !base_obj.isName() ||
+                        (base_name != "/WinAnsiEncoding" && base_name != "/MacRomanEncoding");
+                    std::map<int, std::string> clean_diffs;
+                    if (replacing_base) {
+                        // Preserve effective mappings that would change when switching
+                        // the base encoding to /WinAnsiEncoding (e.g. StandardEncoding 0x27/0x60).
+                        const bool from_standard =
+                            !is_type1_family &&
+                            (!base_obj.isName() || base_name == "/StandardEncoding");
+                        for (int code = 0x20; code <= 0xFF; ++code) {
+                            const uint32_t win_u = jpdfium_font_encoding::baseEncodingUnicode(
+                                jpdfium_font_encoding::BaseEncoding::WinAnsi, code);
+                            uint32_t old_u = 0;
+                            if (from_standard) {
+                                old_u = jpdfium_font_encoding::baseEncodingUnicode(
+                                    jpdfium_font_encoding::BaseEncoding::Standard, code);
+                            } else if (static_cast<size_t>(code) < simple_glyphs.size()) {
+                                old_u = simple_glyphs[static_cast<size_t>(code)].unicode;
+                            }
+                            if (old_u != 0 && old_u != win_u) {
+                                if (const char* agl =
+                                        jpdfium_font_encoding::adobeGlyphNameForUnicode(old_u)) {
+                                    clean_diffs[code] = std::string("/") + agl;
+                                } else if (old_u <= 0xFFFF) {
+                                    char buf[16];
+                                    std::snprintf(buf, sizeof(buf), "/uni%04X",
+                                                  static_cast<unsigned int>(old_u));
+                                    clean_diffs[code] = buf;
+                                }
+                            }
+                        }
                         base_name = "/WinAnsiEncoding";
                         enc_obj.replaceKey("/BaseEncoding",
                                            QPDFObjectHandle::newName("/WinAnsiEncoding"));
                         state.changed = true;
+                        encoding_mutated = true;
                     }
-                    if (enc_obj.hasKey("/Differences")) {
+                    const bool had_differences = enc_obj.hasKey("/Differences");
+                    if (had_differences) {
                         QPDFObjectHandle diff_obj = enc_obj.getKey("/Differences");
                         if (diff_obj.isArray()) {
-                            std::vector<std::pair<int, std::string>> clean_diffs;
                             int cur_code = 0;
                             for (auto& item : diff_obj.getArrayAsVector()) {
                                 if (item.isInteger()) {
@@ -2910,30 +2943,59 @@ static void process_font(QPDF& pdf, QPDFObjectHandle font, bool do_fix_tounicode
                                     if (gname == "/.null") gname = "/.notdef";
                                     const bool redundant_control =
                                         cur_code < 32 && gname == "/.notdef";
-                                    if (!redundant_control && cur_code >= 0 && cur_code <= 255 &&
-                                        jpdfium_font_encoding::isAdobeGlyphListMember(
-                                            gname.substr(1))) {
-                                        clean_diffs.emplace_back(cur_code, gname);
+                                    std::string const raw_name =
+                                        gname.size() > 1 ? gname.substr(1) : "";
+                                    const bool valid_glyph =
+                                        !raw_name.empty() &&
+                                        (jpdfium_font_encoding::isAdobeGlyphListMember(raw_name) ||
+                                         !jpdfium_font_encoding::unicodeSequenceForGlyphName(
+                                              raw_name)
+                                              .empty());
+                                    if (cur_code >= 0 && cur_code <= 255) {
+                                        if (!redundant_control && valid_glyph) {
+                                            clean_diffs[cur_code] = gname;
+                                        } else {
+                                            clean_diffs.erase(cur_code);
+                                        }
                                     }
                                     if (cur_code < 256) ++cur_code;
                                 }
                             }
-                            if (clean_diffs.empty()) {
-                                font.replaceKey("/Encoding", QPDFObjectHandle::newName(base_name));
-                                state.changed = true;
-                            } else {
-                                QPDFObjectHandle new_diffs = QPDFObjectHandle::newArray();
-                                int last_code = -2;
-                                for (auto const& [code, gname] : clean_diffs) {
-                                    if (code != last_code + 1) {
-                                        new_diffs.appendItem(QPDFObjectHandle::newInteger(code));
-                                    }
-                                    new_diffs.appendItem(QPDFObjectHandle::newName(gname));
-                                    last_code = code;
+                        }
+                    }
+                    if (had_differences || !clean_diffs.empty()) {
+                        if (clean_diffs.empty()) {
+                            font.replaceKey("/Encoding", QPDFObjectHandle::newName(base_name));
+                            state.changed = true;
+                            encoding_mutated = true;
+                        } else {
+                            QPDFObjectHandle new_diffs = QPDFObjectHandle::newArray();
+                            int last_code = -2;
+                            for (auto const& [code, gname] : clean_diffs) {
+                                if (code != last_code + 1) {
+                                    new_diffs.appendItem(QPDFObjectHandle::newInteger(code));
                                 }
-                                enc_obj.replaceKey("/Differences", new_diffs);
-                                state.changed = true;
+                                new_diffs.appendItem(QPDFObjectHandle::newName(gname));
+                                last_code = code;
                             }
+                            enc_obj.replaceKey("/Differences", new_diffs);
+                            state.changed = true;
+                            encoding_mutated = true;
+                        }
+                    }
+                }
+            }
+            if (encoding_mutated) {
+                simple_encoding = parseSimpleEncoding(font, descriptor);
+                if (!simple_encoding.unsupportedEncoding) {
+                    simple_glyphs =
+                        resolveSimpleChars(face.get(), has_unicode_charmap, gid_to_unicode,
+                                           simple_encoding, is_type1_family);
+                    simple_any_gid = false;
+                    for (auto const& glyph : simple_glyphs) {
+                        if (glyph.gid != 0) {
+                            simple_any_gid = true;
+                            break;
                         }
                     }
                 }
@@ -3001,12 +3063,19 @@ static void process_font(QPDF& pdf, QPDFObjectHandle font, bool do_fix_tounicode
     if (!cid && is_type1_family && descriptor.hasKey("/CharSet")) {
         std::string charset_str;
         char glyph_name[256];
-        for (FT_UInt gid = 1; gid < static_cast<FT_UInt>(face->num_glyphs); ++gid) {
-            if (FT_HAS_GLYPH_NAMES(face.get()) &&
+        auto append_glyph_name = [&](FT_UInt gid) {
+            if (gid != 0 && FT_HAS_GLYPH_NAMES(face.get()) &&
                 FT_Get_Glyph_Name(face.get(), gid, glyph_name, sizeof(glyph_name)) == 0 &&
                 std::strcmp(glyph_name, ".notdef") != 0 && glyph_name[0] != '\0') {
                 charset_str += "/";
                 charset_str += glyph_name;
+            }
+        };
+        if (did_resubset) {
+            for (FT_UInt gid : retained_glyphs) append_glyph_name(gid);
+        } else {
+            for (FT_UInt gid = 1; gid < static_cast<FT_UInt>(face->num_glyphs); ++gid) {
+                append_glyph_name(gid);
             }
         }
         if (!charset_str.empty()) {
