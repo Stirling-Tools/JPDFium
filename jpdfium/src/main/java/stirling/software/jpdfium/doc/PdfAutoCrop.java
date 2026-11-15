@@ -292,6 +292,7 @@ public final class PdfAutoCrop {
             float maxRight = -Float.MAX_VALUE;
             float maxTop = -Float.MAX_VALUE;
             boolean foundAny = false;
+            boolean[] detectionFailed = new boolean[count];
 
             for (int i = 0; i < count; i++) {
                 Rect bounds;
@@ -300,6 +301,7 @@ public final class PdfAutoCrop {
                             ? detectContentBoundsBitmap(doc, i, 72, 0.98f, margin)
                             : detectContentBoundsText(doc, i, margin);
                 } catch (RuntimeException e) {
+                    detectionFailed[i] = true;
                     continue;
                 }
                 if (bounds != null) {
@@ -320,6 +322,7 @@ public final class PdfAutoCrop {
             Rect unionBox = new Rect(minLeft, minBottom, maxRight - minLeft, maxTop - minBottom);
             int cropped = 0;
             for (int i = 0; i < count; i++) {
+                if (detectionFailed[i]) continue;
                 try (PdfPage page = doc.page(i)) {
                     PdfPageBoxes.setCropBox(page.rawHandle(), unionBox);
                     cropped++;
