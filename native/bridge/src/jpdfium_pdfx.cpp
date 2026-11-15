@@ -241,6 +241,27 @@ std::string Name(QPDFObjectHandle h) {
     return h.isName() ? h.getName() : std::string();
 }
 
+// Chromium 445740322: a non-finite or unbounded tiling-pattern step overflows
+// the renderer's tile raster dimensions. Clamp to the positive range that PDF
+// rasterisers accept.
+void ClampPatternSteps(QPDFObjectHandle pattern) {
+    if (!pattern.isDictionary()) return;
+    QPDFObjectHandle type = pattern.getKey("/PatternType");
+    if (!type.isInteger() || type.getIntValueAsInt() != 1) return;
+    for (const char* key : {"/XStep", "/YStep"}) {
+        QPDFObjectHandle value = pattern.getKey(key);
+        double step = value.isNumber() ? value.getNumericValue() : 1.0;
+        if (!std::isfinite(step) || step <= 0.0) {
+            step = 1.0;
+        } else if (step > 32767.0) {
+            step = 32767.0;
+        }
+        if (!value.isNumber() || value.getNumericValue() != step) {
+            pattern.replaceKey(key, QPDFObjectHandle::newReal(step, 4));
+        }
+    }
+}
+
 ColourSpaceInfo Replaced(Kind kind, const char* device) {
     ColourSpaceInfo info;
     info.kind = kind;
@@ -1293,6 +1314,7 @@ void Converter::ProcessResources(Resources& res, int depth) {
     if (patterns.isDictionary()) {
         for (const std::string& key : patterns.getKeys()) {
             QPDFObjectHandle pat = patterns.getKey(key);
+            ClampPatternSteps(pat);
             if (pat.isStream()) ProcessContentHolder(pat, res.dict, depth + 1);
         }
     }
