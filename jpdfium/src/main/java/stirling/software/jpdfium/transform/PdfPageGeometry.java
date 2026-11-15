@@ -120,7 +120,10 @@ public final class PdfPageGeometry {
      * wholly outside the crop are removed. Straddling images keep their
      * visible part and are pixel-erased outside, including images nested in
      * Form XObjects (soft masks kept when the image can be rendered); fully
-     * outside paths, shadings and forms are removed.
+     * outside paths, shadings and forms are removed. An image that cannot be
+     * erased without changing another surviving placement, or promoted
+     * without reordering form content, is kept whole and clipped by the page
+     * boxes instead of failing the crop.
      * Text with a single survivor run is edited in place; a form child is
      * first promoted to the page because PDFium regenerates a form stream
      * only when a child is removed from it. Outside annotations are

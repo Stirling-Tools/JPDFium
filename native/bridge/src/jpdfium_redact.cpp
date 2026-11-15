@@ -621,14 +621,53 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
 
 // Flatten
 
-int32_t jpdfium_page_flatten(int64_t page) noexcept {
-    PageWrapper* pw = decodePage(page);
-    if (!pw || !pw->page) return JPDFIUM_ERR_INVALID;
-    int rc = FPDFPage_Flatten(pw->page, FLAT_NORMALDISPLAY);
-    return (rc == FLATTEN_SUCCESS || rc == FLATTEN_NOTHINGTODO) ? JPDFIUM_OK : JPDFIUM_ERR_NATIVE;
+namespace {
+
+// FPDFPage_Flatten skips only hidden and invisible annotations, so no-view
+// markup would be baked into content a viewer shows. Hide it for the bake and
+// put the original flags back afterwards; the two high bits are scratch only.
+constexpr int kScratchAddedHidden = 1 << 30;
+constexpr int kScratchWasHidden = 1 << 29;
+
+void hideNoViewAnnotations(FPDF_PAGE page) {
+    const int count = FPDFPage_GetAnnotCount(page);
+    for (int i = 0; i < count; ++i) {
+        FPDF_ANNOTATION annot = FPDFPage_GetAnnot(page, i);
+        if (!annot) continue;
+        const int flags = FPDFAnnot_GetFlags(annot);
+        if (flags >= 0 && (flags & FPDF_ANNOT_FLAG_NOVIEW)) {
+            const int scratch =
+                (flags & FPDF_ANNOT_FLAG_HIDDEN) ? kScratchWasHidden : kScratchAddedHidden;
+            FPDFAnnot_SetFlags(annot, flags | scratch | FPDF_ANNOT_FLAG_HIDDEN);
+        }
+        FPDFPage_CloseAnnot(annot);
+    }
 }
 
-int32_t jpdfium_doc_flatten_annotations(int64_t docHandle) noexcept {
+void restoreNoViewFlags(FPDF_PAGE page) {
+    const int count = FPDFPage_GetAnnotCount(page);
+    for (int i = 0; i < count; ++i) {
+        FPDF_ANNOTATION annot = FPDFPage_GetAnnot(page, i);
+        if (!annot) continue;
+        const int flags = FPDFAnnot_GetFlags(annot);
+        if (flags >= 0 && (flags & (kScratchAddedHidden | kScratchWasHidden))) {
+            int restored = flags & ~(kScratchAddedHidden | kScratchWasHidden);
+            if (flags & kScratchAddedHidden) restored &= ~FPDF_ANNOT_FLAG_HIDDEN;
+            FPDFAnnot_SetFlags(annot, restored);
+        }
+        FPDFPage_CloseAnnot(annot);
+    }
+}
+
+int flattenPage(FPDF_PAGE page, bool displayOnly) {
+    if (!displayOnly) return FPDFPage_Flatten(page, FLAT_NORMALDISPLAY);
+    hideNoViewAnnotations(page);
+    const int rc = FPDFPage_Flatten(page, FLAT_NORMALDISPLAY);
+    restoreNoViewFlags(page);
+    return rc;
+}
+
+int32_t flattenDocument(int64_t docHandle, bool displayOnly) noexcept {
     bool mutated = false;
     try {
         DocWrapper* dw = decodeDoc(docHandle);
@@ -637,7 +676,7 @@ int32_t jpdfium_doc_flatten_annotations(int64_t docHandle) noexcept {
         for (int i = 0; i < count; ++i) {
             UniquePage page(FPDF_LoadPage(dw->core->doc, i));
             if (!page) return mutated ? JPDFIUM_ERR_CONTENT_MUTATED : JPDFIUM_ERR_NOT_FOUND;
-            const int rc = FPDFPage_Flatten(page.get(), FLAT_NORMALDISPLAY);
+            const int rc = flattenPage(page.get(), displayOnly);
             if (rc != FLATTEN_SUCCESS && rc != FLATTEN_NOTHINGTODO) {
                 return mutated ? JPDFIUM_ERR_CONTENT_MUTATED : JPDFIUM_ERR_NATIVE;
             }
@@ -649,6 +688,30 @@ int32_t jpdfium_doc_flatten_annotations(int64_t docHandle) noexcept {
     } catch (...) {
         return mutated ? JPDFIUM_ERR_CONTENT_MUTATED : JPDFIUM_ERR_NATIVE;
     }
+}
+
+}  // namespace
+
+int32_t jpdfium_page_flatten(int64_t page) noexcept {
+    PageWrapper* pw = decodePage(page);
+    if (!pw || !pw->page) return JPDFIUM_ERR_INVALID;
+    const int rc = flattenPage(pw->page, false);
+    return (rc == FLATTEN_SUCCESS || rc == FLATTEN_NOTHINGTODO) ? JPDFIUM_OK : JPDFIUM_ERR_NATIVE;
+}
+
+int32_t jpdfium_page_flatten_display(int64_t page) noexcept {
+    PageWrapper* pw = decodePage(page);
+    if (!pw || !pw->page) return JPDFIUM_ERR_INVALID;
+    const int rc = flattenPage(pw->page, true);
+    return (rc == FLATTEN_SUCCESS || rc == FLATTEN_NOTHINGTODO) ? JPDFIUM_OK : JPDFIUM_ERR_NATIVE;
+}
+
+int32_t jpdfium_doc_flatten_annotations(int64_t docHandle) noexcept {
+    return flattenDocument(docHandle, false);
+}
+
+int32_t jpdfium_doc_flatten_annotations_display(int64_t docHandle) noexcept {
+    return flattenDocument(docHandle, true);
 }
 
 // Word-list redaction with padding

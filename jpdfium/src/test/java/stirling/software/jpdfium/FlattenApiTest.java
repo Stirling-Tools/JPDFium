@@ -1,9 +1,11 @@
 package stirling.software.jpdfium;
 
+import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
+import org.apache.pdfbox.pdmodel.interactive.form.PDAcroForm;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import stirling.software.jpdfium.doc.AnnotationType;
@@ -29,6 +31,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.function.Consumer;
+import java.util.function.IntPredicate;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
@@ -46,6 +49,8 @@ class FlattenApiTest {
     private static final Path TWO_PAGE_PDF =
             Path.of("src/test/resources/pdfs/general/pdfjs_ZapfDingbats.pdf");
     private static final int FULL_DPI = 100;
+    /** ISO 32000-1 table 165, no-view flag. */
+    private static final int NO_VIEW = 1 << 5;
 
     @Test
     void annotationsBatchMatchesPerPage(@TempDir Path dir) throws IOException {
@@ -501,6 +506,190 @@ class FlattenApiTest {
                                 + after.stream().map(FormField::name).toList());
             }
         }
+    }
+
+    @Test
+    void fullBatchBakesPopulatedFormWidget() throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "full flattening needs the real PDFium natives");
+        try (PdfDocument doc = PdfDocument.open(resource("all_form_fields.pdf"))) {
+            String textField;
+            try (PdfPage page = doc.page(0)) {
+                textField = PdfFormReader.readPage(doc.rawHandle(), page.rawHandle(), 0).stream()
+                        .filter(f -> f.type() == FormFieldType.TEXT && !f.name().isEmpty())
+                        .map(FormField::name)
+                        .findFirst()
+                        .orElse(null);
+            }
+            assertNotNull(textField, "the fixture must carry a text field");
+            assertTrue(
+                    PdfFormFiller.fill(doc).text(textField, "FILLEDVALUE").apply()
+                            .filledFields()
+                            .contains(textField),
+                    "the text field must accept a value");
+
+            doc.flatten(FlattenMode.FULL, 100);
+            byte[] out = doc.saveBytes();
+            try (PdfDocument reopened = PdfDocument.open(out);
+                 PdfPage page = reopened.page(0)) {
+                List<FormField> after =
+                        PdfFormReader.readPage(reopened.rawHandle(), page.rawHandle(), 0);
+                assertTrue(after.isEmpty(),
+                        "full flatten must bake the filled widget, leaving no field: "
+                                + after.stream().map(FormField::name).toList());
+            }
+            try (PDDocument pdf = Loader.loadPDF(out)) {
+                PDAcroForm form = pdf.getDocumentCatalog().getAcroForm();
+                assertTrue(
+                        form == null || form.getFields().isEmpty(),
+                        "full flatten must clear the catalog /AcroForm field tree, but it still has "
+                                + (form == null ? 0 : form.getFields().size()));
+            }
+        }
+    }
+
+    @Test
+    void failedRasterPassKeepsBakedAnnotation(@TempDir Path dir) throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "full flattening needs the real PDFium natives");
+        Path base = writePdfBoxFixture(dir.resolve("annotated-oversized-base.pdf"), pdf -> {
+            pdf.addPage(new PDPage(new PDRectangle(300, 300)));
+            // Page 1 exceeds the raster budget, so the pass fails after page 0 was prepared.
+            pdf.addPage(new PDPage(new PDRectangle(500000, 500000)));
+        });
+        Path fixture = dir.resolve("annotated-oversized-last-page.pdf");
+        try (PdfDocument doc = PdfDocument.open(base)) {
+            try (PdfPage page = doc.page(0)) {
+                PdfAnnotationBuilder.on(page.rawHandle())
+                        .type(AnnotationType.HIGHLIGHT)
+                        .rect(20, 200, 120, 40)
+                        .color(255, 200, 0)
+                        .contents("annotation-survivor")
+                        .generateAppearance()
+                        .build();
+            }
+            doc.save(fixture);
+        }
+        try (PdfDocument doc = PdfDocument.open(fixture)) {
+            try (PdfPage page = doc.page(0)) {
+                assertEquals(1, PdfAnnotations.count(page.rawHandleForRead()),
+                        "the fixture must carry the highlight before flattening");
+            }
+            JPDFiumException failure = assertThrows(
+                    JPDFiumException.class, () -> doc.flatten(FlattenMode.FULL, 72));
+            assertFalse(
+                    failure.isContentMutated(),
+                    "a pass that failed before the originals were dropped must roll back instead"
+                            + " of reporting a mutation: "
+                            + failure.getMessage());
+            assertEquals(2, doc.pageCount(), "a rolled-back raster must keep every page");
+            assertTrue(
+                    doc.isContentModified(),
+                    "a baked annotation must mark the document modified even when raster rolls back");
+            try (PdfPage page = doc.page(0)) {
+                assertEquals(
+                        0,
+                        PdfAnnotations.count(page.rawHandleForRead()),
+                        "the bake must consume the annotation instead of dropping it");
+                assertTrue(
+                        nonWhitePixels(page.renderAt(72)) > 0,
+                        "the baked annotation must keep its visible appearance");
+            }
+        }
+    }
+
+    @Test
+    void fullBatchBakesScreenMarkupButNotNoView(@TempDir Path dir) throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "full flattening needs the real PDFium natives");
+        Path fixture = displayAnnotationsFixture(dir);
+        try (PdfDocument doc = PdfDocument.open(fixture)) {
+            try (PdfPage page = doc.page(0)) {
+                assertEquals(2, PdfAnnotations.count(page.rawHandleForRead()),
+                        "the fixture must carry both highlights");
+            }
+            doc.flatten(FlattenMode.FULL, 72);
+            byte[] out = doc.saveBytes();
+            try (PdfDocument flat = PdfDocument.open(out); PdfPage page = flat.page(0)) {
+                RenderResult rendered = page.renderAt(72);
+                assertTrue(
+                        countPixels(rendered, rgb ->
+                                (rgb >> 16) > 200 && ((rgb >> 8) & 255) > 150 && (rgb & 255) < 120)
+                                > 0,
+                        "screen-only markup is visible to a viewer, so FULL must bake it");
+                assertEquals(
+                        0,
+                        countPixels(rendered, rgb ->
+                                (rgb >> 16) > 200 && ((rgb >> 8) & 255) < 90 && (rgb & 255) < 90),
+                        "no-view markup is hidden on screen and must not be baked");
+            }
+        }
+    }
+
+    @Test
+    void annotationsFlattenBakesNoViewMarkup(@TempDir Path dir) throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "annotation flattening needs the real PDFium natives");
+        Path fixture = displayAnnotationsFixture(dir);
+        try (PdfDocument doc = PdfDocument.open(fixture)) {
+            doc.flatten(FlattenMode.ANNOTATIONS);
+            try (PdfPage page = doc.page(0)) {
+                assertEquals(
+                        0,
+                        PdfAnnotations.count(page.rawHandleForRead()),
+                        "the annotation pass bakes every drawable annotation");
+                assertTrue(
+                        countPixels(page.renderAt(72), rgb ->
+                                (rgb >> 16) > 200 && ((rgb >> 8) & 255) < 90 && (rgb & 255) < 90)
+                                > 0,
+                        "the no-view markup must be baked into content, not left as an annotation");
+            }
+        }
+    }
+
+    /** One screen-only highlight and one no-view highlight on a blank page. */
+    private static Path displayAnnotationsFixture(Path dir) throws IOException {
+        Path base = writePdfBoxFixture(
+                dir.resolve("display-annotations-base.pdf"),
+                pdf -> pdf.addPage(new PDPage(new PDRectangle(300, 300))));
+        Path fixture = dir.resolve("display-annotations.pdf");
+        try (PdfDocument doc = PdfDocument.open(base)) {
+            try (PdfPage page = doc.page(0)) {
+                PdfAnnotationBuilder.on(page.rawHandle())
+                        .type(AnnotationType.HIGHLIGHT)
+                        .rect(20, 200, 100, 40)
+                        .color(255, 200, 0)
+                        .generateAppearance()
+                        .build();
+                int noView = PdfAnnotationBuilder.on(page.rawHandle())
+                        .type(AnnotationType.HIGHLIGHT)
+                        .rect(20, 100, 100, 40)
+                        .color(255, 0, 0)
+                        .generateAppearance()
+                        .build();
+                PdfAnnotations.setFlags(page.rawHandle(), noView, NO_VIEW);
+            }
+            doc.save(fixture);
+        }
+        return fixture;
+    }
+
+    private static int countPixels(RenderResult page, IntPredicate match) {
+        byte[] px = page.rgba();
+        int matched = 0;
+        for (int i = 0; i + 3 < px.length; i += 4) {
+            int rgb = ((px[i] & 0xFF) << 16) | ((px[i + 1] & 0xFF) << 8) | (px[i + 2] & 0xFF);
+            if (match.test(rgb)) matched++;
+        }
+        return matched;
+    }
+
+    /** Counts pixels that differ from the white page background. */
+    private static int nonWhitePixels(RenderResult page) {
+        byte[] px = page.rgba();
+        int colored = 0;
+        for (int i = 0; i + 3 < px.length; i += 4) {
+            if ((px[i] & 0xFF) < 250 || (px[i + 1] & 0xFF) < 250 || (px[i + 2] & 0xFF) < 250) {
+                colored++;
+            }
+        }
+        return colored;
     }
 
     @Test
