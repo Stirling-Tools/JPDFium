@@ -2753,6 +2753,57 @@ public class JpdfiumH extends JpdfiumH$shared {
         }
     }
 
+    private static class jpdfium_doc_rebuild_clean {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            JpdfiumH.C_INT,
+            JpdfiumH.C_LONG
+        );
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_doc_rebuild_clean");
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    public static int jpdfium_doc_rebuild_clean(long doc) {
+        var mh$ = jpdfium_doc_rebuild_clean.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("jpdfium_doc_rebuild_clean", doc);
+            }
+            return (int)mh$.invokeExact(doc);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class jpdfium_page_replace_with_jpeg {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            JpdfiumH.C_INT,
+            JpdfiumH.C_LONG,
+            JpdfiumH.C_INT,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_LONG,
+            JpdfiumH.C_FLOAT,
+            JpdfiumH.C_FLOAT
+        );
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_page_replace_with_jpeg");
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    public static int jpdfium_page_replace_with_jpeg(long doc, int pageIndex, MemorySegment jpegData, long jpegLen, float wPt, float hPt) {
+        var mh$ = jpdfium_page_replace_with_jpeg.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("jpdfium_page_replace_with_jpeg", doc, pageIndex, jpegData, jpegLen, wPt, hPt);
+            }
+            return (int)mh$.invokeExact(doc, pageIndex, jpegData, jpegLen, wPt, hPt);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
     private static class jpdfium_doc_flatten_annotations {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,

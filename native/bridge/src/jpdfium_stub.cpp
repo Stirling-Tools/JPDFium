@@ -948,6 +948,13 @@ int32_t jpdfium_page_flatten_display(int64_t page) noexcept {
 int32_t jpdfium_page_to_image(int64_t, int32_t, int32_t) {
     return JPDFIUM_OK;
 }
+int32_t jpdfium_doc_rebuild_clean(int64_t) JPDFIUM_NOEXCEPT {
+    return JPDFIUM_OK;
+}
+int32_t jpdfium_page_replace_with_jpeg(int64_t, int32_t, const uint8_t*, int64_t, float,
+                                       float) JPDFIUM_NOEXCEPT {
+    return JPDFIUM_OK;
+}
 
 int32_t jpdfium_doc_flatten_annotations(int64_t) noexcept {
     return JPDFIUM_OK;
