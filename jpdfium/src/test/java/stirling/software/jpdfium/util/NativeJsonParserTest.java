@@ -44,4 +44,15 @@ class NativeJsonParserTest {
         assertEquals(1, rows.size());
         assertEquals("a\\b,c", rows.get(0).get("match"));
     }
+
+    @Test
+    void keepsClosingBracesInsideQuotes() {
+        // Repair reports carry match text that can itself contain a '}'.
+        List<Map<String, String>> rows =
+                NativeJsonParser.parseArray("[{\"match\":\"a}b\",\"kind\":\"obj\"},{\"x\":1}]");
+        assertEquals(2, rows.size());
+        assertEquals("a}b", rows.get(0).get("match"));
+        assertEquals("obj", rows.get(0).get("kind"));
+        assertEquals("1", rows.get(1).get("x"));
+    }
 }

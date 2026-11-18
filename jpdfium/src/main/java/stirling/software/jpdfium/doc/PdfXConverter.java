@@ -171,6 +171,26 @@ public final class PdfXConverter {
         return false;
     }
 
+    /** ISO 32000 signature dictionaries announce themselves with /ByteRange. */
+    private static final byte[] BYTE_RANGE = "/ByteRange".getBytes(StandardCharsets.US_ASCII);
+
+    /**
+     * Fails closed on a raw {@code /ByteRange} marker anywhere in the bytes.
+     * PDFium's signature enumeration only reports signatures it recognizes
+     * (AcroForm signature fields); a dictionary it cannot see would let the
+     * rewrite silently invalidate a real signature.
+     */
+    private static void requireNotSignedByRawScan(byte[] input) {
+        outer:
+        for (int i = 0; i + BYTE_RANGE.length <= input.length; i++) {
+            for (int j = 0; j < BYTE_RANGE.length; j++) {
+                if (input[i + j] != BYTE_RANGE[j]) continue outer;
+            }
+            throw new JPDFiumException("PDF/X conversion rewrites the document and would invalidate"
+                    + " its digital signature; remove the signature first");
+        }
+    }
+
     private static void applyFontData(Path pdf, PdfXOptions options) throws IOException {
         byte[] withFonts = PdfFontEmbedder.embed(Files.readAllBytes(pdf), options.fontData());
         Files.write(pdf, withFonts);
@@ -258,9 +278,9 @@ public final class PdfXConverter {
     }
 
     private static void applyDocumentInfo(PdfDocument document, PdfXOptions options) {
-        if (document.getTrapped() != DocBindings.PDFTRAPPED_TRUE) {
-            document.setTrappedFalse();
-        }
+        // ISO 15930 forbids /Trapped true in PDF/X output: the input's claim
+        // must not survive the conversion.
+        document.setTrappedFalse();
         if (options.standard() == PdfXStandard.PDF_X_1A || options.standard() == PdfXStandard.PDF_X_3) {
             document.setMetadata("GTS_PDFXVersion", options.standard().gtsVersion());
             if (options.standard().gtsConformance() != null) {
@@ -327,6 +347,7 @@ public final class PdfXConverter {
         if (input == null || input.length == 0) {
             throw new JPDFiumException("PDF/X metadata requires non-empty PDF bytes");
         }
+        requireNotSignedByRawScan(input);
         requireSupported(options);
         try (PdfDocument source = PdfDocument.open(input)) {
             prepare(source, options);
