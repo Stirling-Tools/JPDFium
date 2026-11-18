@@ -3,6 +3,8 @@ package stirling.software.jpdfium.doc;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.exception.JPDFiumException;
+import stirling.software.jpdfium.fonts.FontNormalizer;
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.QpdfLib;
 
 import org.apache.pdfbox.Loader;
@@ -24,6 +26,7 @@ import org.apache.pdfbox.pdmodel.font.PDFont;
 import org.apache.pdfbox.pdmodel.font.PDType1Font;
 import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
 import org.apache.pdfbox.text.PDFTextStripper;
+import stirling.software.jpdfium.panama.FontLib;
 import org.apache.pdfbox.pdmodel.interactive.form.PDAcroForm;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -816,8 +819,9 @@ class PdfFontEmbedderTest {
                     cidSetBytes = in.readAllBytes();
                 }
                 assertTrue(cidSetBytes.length > 0, "/CIDSet must not be empty");
-                assertEquals(0x80, cidSetBytes[0] & 0x80,
-                        "CID 0 (.notdef) must be marked in /CIDSet");
+                assertEquals(0, cidSetBytes[0] & 0x80,
+                        "CID 0 (.notdef) must stay clear in /CIDSet: veraPDF treats it as "
+                                + "a glyph that is not a CID");
                 assertEquals(0x80 >> (1 & 7), cidSetBytes[1 / 8] & (0x80 >> (1 & 7)),
                         "CID 1 must be marked in /CIDSet");
             }
@@ -947,6 +951,44 @@ class PdfFontEmbedderTest {
                 for (Path file : files.toList()) Files.deleteIfExists(file);
             }
             Files.deleteIfExists(dir);
+        }
+    }
+
+    @Test
+    void inheritedToUnicodeBlocksCidSubstitution(@TempDir Path temp) throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
+        FontProgram source = findEmbeddedFont(
+                Files.readAllBytes(Path.of(PdfFontEmbedderTest.class
+                        .getResource("/pdfs/general/basic-text.pdf").toURI())), "ArialMT");
+        assertNotNull(source, "fixture must contain ArialMT");
+        Path dir = Files.createDirectories(temp.resolve("fonts"));
+        Files.write(dir.resolve(source.baseName() + ".ttf"), source.data());
+        byte[] input = identityCidPdf(source.baseName(),
+                "1 beginbfchar <0001> <0041> endbfchar");
+        input = withInheritedToUnicode(input);
+
+        PdfFontEmbedder.Result result = PdfFontEmbedder.embedMissing(input, dir);
+
+        assertTrue(result.unresolved().contains(source.baseName()),
+                "a /UseCMap mapping must leave the CID font unresolved: " + result);
+        try (PDDocument pdf = Loader.loadPDF(result.pdf())) {
+            COSDictionary font = identityCidFont(pdf);
+            COSStream toUnicode = (COSStream) font.getDictionaryObject(COSName.TO_UNICODE);
+            assertNotNull(toUnicode, "the inherited ToUnicode stream must be preserved");
+            assertNotNull(toUnicode.getDictionaryObject(
+                    COSName.getPDFName("UseCMap")), "the inherited mapping must stay intact");
+        }
+    }
+
+    private static byte[] withInheritedToUnicode(byte[] pdfBytes) throws IOException {
+        try (PDDocument pdf = Loader.loadPDF(pdfBytes)) {
+            COSDictionary font = identityCidFont(pdf);
+            COSStream toUnicode = (COSStream) font.getDictionaryObject(COSName.TO_UNICODE);
+            assertNotNull(toUnicode);
+            toUnicode.setItem(COSName.getPDFName("UseCMap"), COSName.getPDFName("Identity-H"));
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            pdf.save(out);
+            return out.toByteArray();
         }
     }
 
@@ -1268,6 +1310,48 @@ class PdfFontEmbedderTest {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             pdf.save(out);
             return out.toByteArray();
+        }
+    }
+
+    @Test
+    void acceptsBareCffProgramMagic() {
+        byte[] cff = {(byte) 0x01, 0, (byte) 0x04, (byte) 0x04, 0, 0, 0, 0};
+        assertTrue(PdfFontAuditor.looksLikeFontProgram(cff),
+                "bare CFF programs begin with 01 00 04 04");
+    }
+
+    @Test
+    void replacesCorruptEmbeddedFontProgram() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
+        byte[] program;
+        try (InputStream in = liberationSansStream()) {
+            program = in.readAllBytes();
+        }
+        byte[] pdf = sharedBaseFontPdf("LiberationSans", program);
+        try (PDDocument doc = Loader.loadPDF(pdf)) {
+            COSDictionary font = doc.getPage(0).getResources()
+                    .getFont(COSName.getPDFName("F1")).getCOSObject();
+            COSDictionary descriptor =
+                    (COSDictionary) font.getDictionaryObject(COSName.FONT_DESC);
+            assertNotNull(descriptor);
+            PDStream corrupt = new PDStream(doc, new ByteArrayInputStream(new byte[] {1, 2, 3, 4}));
+            descriptor.setItem(COSName.FONT_FILE2, corrupt.getCOSObject());
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            doc.save(out);
+            pdf = out.toByteArray();
+        }
+        assertTrue(PdfFontAuditor.corruptEmbeddedKeys(pdf).contains("LiberationSans"),
+                "fixture must expose a corrupt embedded program");
+
+        PdfFontEmbedder.Result result = PdfFontEmbedder.embedMissing(pdf);
+
+        assertTrue(result.embedded().contains("LiberationSans"), result.statuses().toString());
+        assertTrue(result.unresolved().isEmpty(), result.unresolved().toString());
+        assertTrue(PdfFontAuditor.corruptEmbeddedKeys(result.pdf()).isEmpty(),
+                "corrupt program must be replaced");
+        try (PdfDocument doc = PdfDocument.open(result.pdf());
+                PdfPage page = doc.page(0)) {
+            assertTrue(page.extractText().contains("Hello"), page.extractText());
         }
     }
 
@@ -1884,6 +1968,57 @@ class PdfFontEmbedderTest {
     }
 
     @Test
+    void invisibleOnlyFontIsNotSubstituted() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
+        byte[] input;
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(PDRectangle.LETTER);
+            doc.addPage(page);
+            PDType1Font visible = new PDType1Font(Standard14Fonts.FontName.HELVETICA);
+            PDType1Font hidden = new PDType1Font(Standard14Fonts.FontName.TIMES_ROMAN);
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.beginText();
+                cs.setFont(visible, 14);
+                cs.newLineAtOffset(72, 700);
+                cs.showText("Visible text");
+                cs.endText();
+                cs.beginText();
+                cs.setFont(hidden, 14);
+                cs.newLineAtOffset(72, 680);
+                cs.setRenderingMode(
+                        org.apache.pdfbox.pdmodel.graphics.state.RenderingMode.NEITHER);
+                cs.showText("Hidden OCR layer");
+                cs.setRenderingMode(
+                        org.apache.pdfbox.pdmodel.graphics.state.RenderingMode.FILL);
+                cs.endText();
+            }
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            doc.save(out);
+            input = out.toByteArray();
+        }
+
+        PdfFontEmbedder.Result result = PdfFontEmbedder.embedMissing(input);
+        assertTrue(result.embedded().contains("Helvetica"), result.statuses().toString());
+        assertFalse(result.embedded().contains("Times-Roman"),
+                "invisible-only font must not be embedded: " + result.statuses());
+        assertTrue(result.statuses().stream().anyMatch(s ->
+                        s.baseName().equals("Times-Roman")
+                                && s.reason().contains("invisible")),
+                result.statuses().toString());
+    }
+
+    @Test
+    void coverageGateRejectsCodepointsMissingFromCandidateFace() throws Exception {
+        try (InputStream in = liberationSansStream()) {
+            byte[] program = in.readAllBytes();
+            boolean[] covered = FontLib.coversText(program, new int[] {'A', 0x6F22});
+            assertTrue(covered[0], "Liberation must cover Latin A");
+            assertFalse(covered[1],
+                    "Liberation must not claim coverage for CJK U+6F22");
+        }
+    }
+
+    @Test
     void restrictedFsTypeFontIsRejected(@TempDir Path temp) throws Exception {
         assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
         Path dir = Files.createDirectories(temp.resolve("restricted"));
@@ -1959,6 +2094,52 @@ class PdfFontEmbedderTest {
             assertNotNull(descriptor);
             assertNotNull(descriptor.getDictionaryObject(COSName.FONT_FILE),
                     "the PFB program must be installed as /FontFile");
+        }
+    }
+
+    @Test
+    void normalizerRepairsType1ProgramLengths() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
+        assumeTrue(NativeRuntime.isFull(), "needs real native library");
+        Path ghostscript = Path.of("/opt/homebrew/share/ghostscript/fonts");
+        assumeTrue(Files.isDirectory(ghostscript), "no Ghostscript Type 1 fonts");
+        PdfFontEmbedder.Result embedded =
+                PdfFontEmbedder.embedMissing(namedType1Pdf("NimbusSanL-Regu"), ghostscript);
+        assumeTrue(embedded.embedded().contains("NimbusSanL-Regu"), embedded.statuses().toString());
+
+        byte[] input;
+        long expected1;
+        long expected2;
+        long expected3;
+        try (PDDocument pdf = Loader.loadPDF(embedded.pdf())) {
+            COSDictionary font = pdf.getPage(0).getResources()
+                    .getFont(COSName.getPDFName("F1")).getCOSObject();
+            COSDictionary descriptor =
+                    (COSDictionary) font.getDictionaryObject(COSName.FONT_DESC);
+            COSStream program = (COSStream) descriptor.getDictionaryObject(COSName.FONT_FILE);
+            expected1 = program.getInt(COSName.LENGTH1);
+            expected2 = program.getInt(COSName.LENGTH2);
+            expected3 = program.getInt(COSName.LENGTH3);
+            program.setInt(COSName.LENGTH1, 1);
+            program.setInt(COSName.LENGTH2, 1);
+            program.setInt(COSName.LENGTH3, 1);
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            pdf.save(out);
+            input = out.toByteArray();
+        }
+
+        try (PdfDocument doc = PdfDocument.open(input)) {
+            FontNormalizer.normalizeAll(doc);
+            try (PDDocument loaded = Loader.loadPDF(doc.saveBytes())) {
+                COSDictionary font = loaded.getPage(0).getResources()
+                        .getFont(COSName.getPDFName("F1")).getCOSObject();
+                COSDictionary descriptor =
+                        (COSDictionary) font.getDictionaryObject(COSName.FONT_DESC);
+                COSStream program = (COSStream) descriptor.getDictionaryObject(COSName.FONT_FILE);
+                assertEquals(expected1, program.getInt(COSName.LENGTH1), "Length1");
+                assertEquals(expected2, program.getInt(COSName.LENGTH2), "Length2");
+                assertEquals(expected3, program.getInt(COSName.LENGTH3), "Length3");
+            }
         }
     }
 
@@ -2515,4 +2696,20 @@ class PdfFontEmbedderTest {
                     ? baseName.substring(7) : baseName;
         }
     }
+    @Test
+    void scriptFallbackPrefersMatchingCjkFamily() {
+        assertEquals("hiraginomincho",
+                PdfFontEmbedder.scriptFallbackKeys("kozminpromediumacro").get(0));
+        assertEquals("hiraginosans",
+                PdfFontEmbedder.scriptFallbackKeys("msgothic").get(0));
+        assertEquals("applegothic",
+                PdfFontEmbedder.scriptFallbackKeys("malgungothic").get(0));
+        assertEquals("pingfangtc",
+                PdfFontEmbedder.scriptFallbackKeys("pmingliu").get(0));
+        assertEquals("pingfangsc",
+                PdfFontEmbedder.scriptFallbackKeys("simsun").get(0));
+        assertTrue(PdfFontEmbedder.scriptFallbackKeys("notosanssc").contains("notosanssc"));
+        assertTrue(PdfFontEmbedder.scriptFallbackKeys("helvetica").isEmpty());
+    }
+
 }

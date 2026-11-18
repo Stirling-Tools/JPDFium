@@ -40,6 +40,22 @@ class PdfCompressorDetectionTest {
     }
 
     @Test
+    void singleQuotedAttributeFormPartOneIsPdfA1() {
+        byte[] pdf = ("%PDF-1.7\n<rdf:Description pdfaid:part='1' "
+                + "pdfaid:conformance='B'/>\n%%EOF")
+                .getBytes(StandardCharsets.ISO_8859_1);
+        assertEquals(1, PdfCompressor.pdfaPart(pdf));
+    }
+
+    @Test
+    void compressedSingleQuotedPdfA1MetadataIsDetected() throws Exception {
+        byte[] pdf = pdfWithMetadata(
+                "<x:xmpmeta><rdf:Description pdfaid:part='1' pdfaid:conformance='B'/></x:xmpmeta>",
+                "/FlateDecode", true);
+        assertEquals(1, PdfCompressor.pdfaPart(pdf));
+    }
+
+    @Test
     void attributeFormPartTwoIsNotPartOne() {
         byte[] pdf = ("%PDF-1.7\n<rdf:Description pdfaid:part=\"2\" "
                 + "pdfaid:conformance=\"B\"/>\n%%EOF")

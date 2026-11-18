@@ -1,10 +1,13 @@
 package stirling.software.jpdfium.doc;
 
 import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.cos.COSArray;
 import org.apache.pdfbox.cos.COSDictionary;
+import org.apache.pdfbox.cos.COSFloat;
 import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.cos.COSObject;
 import org.apache.pdfbox.cos.COSStream;
+import org.apache.pdfbox.cos.COSString;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
@@ -1121,5 +1124,183 @@ class PdfXConverterTest {
             pdfbox.save(out);
             return out.toByteArray();
         }
+    }
+
+    @Test
+    void shadingDefaultRgbAndDeviceNColorantsConvertToCmyk() throws Exception {
+        assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
+        byte[] input;
+        try (PDDocument doc = new PDDocument();
+                ByteArrayOutputStream bytes = new ByteArrayOutputStream()) {
+            PDPage page = new PDPage();
+            doc.addPage(page);
+
+            COSDictionary shFn = new COSDictionary();
+            shFn.setInt(COSName.FUNCTION_TYPE, 2);
+            shFn.setItem(COSName.DOMAIN, cosFloats(0f, 1f));
+            shFn.setItem(COSName.C0, cosFloats(1f, 0f, 0f));
+            shFn.setItem(COSName.C1, cosFloats(0f, 0f, 1f));
+            shFn.setInt(COSName.N, 1);
+
+            COSDictionary shading = new COSDictionary();
+            shading.setInt(COSName.SHADING_TYPE, 2);
+            shading.setItem(COSName.COLORSPACE, COSName.DEVICERGB);
+            shading.setItem(COSName.COORDS, cosFloats(0f, 0f, 100f, 0f));
+            shading.setItem(COSName.FUNCTION, shFn);
+            shading.setItem(COSName.BACKGROUND, cosFloats(1f, 1f, 0f));
+            COSArray extend = new COSArray();
+            extend.add(org.apache.pdfbox.cos.COSBoolean.TRUE);
+            extend.add(org.apache.pdfbox.cos.COSBoolean.TRUE);
+            shading.setItem(COSName.EXTEND, extend);
+
+            COSDictionary sepFn = new COSDictionary();
+            sepFn.setInt(COSName.FUNCTION_TYPE, 2);
+            sepFn.setItem(COSName.DOMAIN, cosFloats(0f, 1f));
+            sepFn.setItem(COSName.C0, cosFloats(1f, 1f, 1f));
+            sepFn.setItem(COSName.C1, cosFloats(1f, 0f, 0f));
+            sepFn.setInt(COSName.N, 1);
+            COSArray colorantSep = new COSArray();
+            colorantSep.add(COSName.SEPARATION);
+            colorantSep.add(COSName.getPDFName("SpotA"));
+            colorantSep.add(COSName.DEVICERGB);
+            colorantSep.add(sepFn);
+
+            COSDictionary colorants = new COSDictionary();
+            colorants.setItem(COSName.getPDFName("SpotA"), colorantSep);
+            COSDictionary process = new COSDictionary();
+            process.setItem(COSName.COLORSPACE, COSName.DEVICERGB);
+            COSDictionary attrs = new COSDictionary();
+            attrs.setItem(COSName.getPDFName("Colorants"), colorants);
+            attrs.setItem(COSName.getPDFName("Process"), process);
+
+            COSStream dnFn = doc.getDocument().createCOSStream();
+            dnFn.setInt(COSName.FUNCTION_TYPE, 4);
+            dnFn.setItem(COSName.DOMAIN, cosFloats(0f, 1f));
+            dnFn.setItem(COSName.RANGE, cosFloats(0f, 1f, 0f, 1f, 0f, 1f));
+            try (var os = dnFn.createOutputStream()) {
+                os.write("{ 1 exch sub dup }".getBytes(StandardCharsets.US_ASCII));
+            }
+            COSArray inks = new COSArray();
+            inks.add(COSName.getPDFName("SpotA"));
+            COSArray deviceN = new COSArray();
+            deviceN.add(COSName.DEVICEN);
+            deviceN.add(inks);
+            deviceN.add(COSName.DEVICERGB);
+            deviceN.add(dnFn);
+            deviceN.add(attrs);
+
+            COSDictionary spaces = new COSDictionary();
+            spaces.setItem(COSName.getPDFName("DefaultRGB"), COSName.DEVICERGB);
+            spaces.setItem(COSName.getPDFName("DN"), deviceN);
+            COSDictionary shadings = new COSDictionary();
+            shadings.setItem(COSName.getPDFName("Sh1"), shading);
+
+            PDResources resources = new PDResources();
+            resources.getCOSObject().setItem(COSName.COLORSPACE, spaces);
+            resources.getCOSObject().setItem(COSName.SHADING, shadings);
+            page.setResources(resources);
+
+            COSStream content = doc.getDocument().createCOSStream();
+            try (var os = content.createOutputStream()) {
+                os.write("/Sh1 sh /DN cs 0.4 sc 0 0 10 10 re f".getBytes(StandardCharsets.US_ASCII));
+            }
+            page.getCOSObject().setItem(COSName.CONTENTS, content);
+            doc.save(bytes);
+            input = bytes.toByteArray();
+        }
+
+        byte[] out = PdfXConverter.applyMetadata(input, PdfXOptions.builder()
+                .standard(PdfXStandard.PDF_X_4)
+                .useCompactCmyk()
+                .title("Shading and DeviceN")
+                .build());
+
+        try (PDDocument doc = Loader.loadPDF(out)) {
+            COSDictionary res = doc.getPage(0).getResources().getCOSObject();
+            COSDictionary spaces = res.getCOSDictionary(COSName.COLORSPACE);
+            assertNotNull(spaces);
+            assertFalse(spaces.containsKey(COSName.getPDFName("DefaultRGB")),
+                    "/DefaultRGB must be removed rather than rebound to /DeviceCMYK");
+
+            COSArray dn = (COSArray) spaces.getDictionaryObject(COSName.getPDFName("DN"));
+            assertEquals(COSName.DEVICECMYK, dn.getObject(2));
+            COSDictionary outAttrs = (COSDictionary) dn.getObject(4);
+            COSArray spotA = (COSArray) outAttrs.getCOSDictionary(COSName.getPDFName("Colorants"))
+                    .getDictionaryObject(COSName.getPDFName("SpotA"));
+            assertEquals(COSName.DEVICECMYK, spotA.getObject(2));
+            assertEquals(COSName.DEVICECMYK, outAttrs.getCOSDictionary(COSName.getPDFName("Process"))
+                    .getDictionaryObject(COSName.COLORSPACE));
+
+            COSDictionary sh = res.getCOSDictionary(COSName.SHADING).getCOSDictionary(COSName.getPDFName("Sh1"));
+            assertEquals(COSName.DEVICECMYK, sh.getDictionaryObject(COSName.COLORSPACE));
+            assertEquals(4, sh.getCOSArray(COSName.BACKGROUND).size());
+            COSDictionary convertedFn = sh.getCOSDictionary(COSName.FUNCTION);
+            assertEquals(4, convertedFn.getCOSArray(COSName.C0).size());
+            assertEquals(4, convertedFn.getCOSArray(COSName.C1).size());
+        }
+    }
+
+    @Test
+    void forbiddenActionsEmbeddedFilesAndOutOfRangeBoxesAreNormalized() throws Exception {
+        assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
+        byte[] input;
+        try (PDDocument doc = new PDDocument();
+                ByteArrayOutputStream bytes = new ByteArrayOutputStream()) {
+            PDPage page = new PDPage(new PDRectangle(0, 0, 200, 200));
+            doc.addPage(page);
+            page.setTrimBox(new PDRectangle(-25, -10, 285, 230));
+            page.setCropBox(new PDRectangle(-10, 20, 160, 230));
+            page.setBleedBox(new PDRectangle(300, 300, 100, 100));
+
+            COSDictionary catalog = doc.getDocumentCatalog().getCOSObject();
+            COSDictionary names = new COSDictionary();
+            COSArray efArr = new COSArray();
+            efArr.add(new COSString("secret.txt"));
+            efArr.add(new COSDictionary());
+            COSDictionary efTree = new COSDictionary();
+            efTree.setItem(COSName.NAMES, efArr);
+            names.setItem(COSName.EMBEDDED_FILES, efTree);
+            catalog.setItem(COSName.NAMES, names);
+            catalog.setItem(COSName.getPDFName("AF"), new COSArray());
+
+            COSDictionary launch = new COSDictionary();
+            launch.setItem(COSName.S, COSName.getPDFName("Launch"));
+            catalog.setItem(COSName.OPEN_ACTION, launch);
+            COSDictionary aa = new COSDictionary();
+            COSDictionary js = new COSDictionary();
+            js.setItem(COSName.S, COSName.JAVA_SCRIPT);
+            aa.setItem(COSName.getPDFName("WC"), js);
+            catalog.setItem(COSName.AA, aa);
+
+            doc.save(bytes);
+            input = bytes.toByteArray();
+        }
+
+        byte[] out = PdfXConverter.applyMetadata(input, PdfXOptions.builder()
+                .standard(PdfXStandard.PDF_X_4)
+                .useCompactCmyk()
+                .title("Sanitize")
+                .build());
+
+        try (PDDocument doc = Loader.loadPDF(out)) {
+            COSDictionary catalog = doc.getDocumentCatalog().getCOSObject();
+            COSDictionary names = catalog.getCOSDictionary(COSName.NAMES);
+            assertTrue(names == null || !names.containsKey(COSName.EMBEDDED_FILES),
+                    "PDF/X-4 must strip catalog /EmbeddedFiles");
+            assertFalse(catalog.containsKey(COSName.getPDFName("AF")), "PDF/X-4 must strip catalog /AF");
+            assertFalse(catalog.containsKey(COSName.OPEN_ACTION), "forbidden /Launch /OpenAction must be removed");
+            assertFalse(catalog.containsKey(COSName.AA), "catalog /AA triggers must be removed");
+
+            PDPage outPage = doc.getPage(0);
+            assertEquals(new PDRectangle(0, 0, 200, 200).toString(), outPage.getTrimBox().toString());
+            assertEquals(new PDRectangle(0, 20, 150, 180).toString(), outPage.getCropBox().toString());
+            assertEquals(new PDRectangle(0, 0, 200, 200).toString(), outPage.getBleedBox().toString());
+        }
+    }
+
+    private static COSArray cosFloats(float... values) {
+        COSArray arr = new COSArray();
+        for (float v : values) arr.add(new COSFloat(v));
+        return arr;
     }
 }
