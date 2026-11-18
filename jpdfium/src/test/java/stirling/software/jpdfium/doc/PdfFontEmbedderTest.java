@@ -848,8 +848,8 @@ class PdfFontEmbedderTest {
                     cidSetBytes = in.readAllBytes();
                 }
                 assertTrue(cidSetBytes.length > 0, "/CIDSet must not be empty");
-                assertEquals(0x80, cidSetBytes[0] & 0x80,
-                        "CID 0 (.notdef) must be marked in /CIDSet");
+                assertEquals(0, cidSetBytes[0] & 0x80,
+                        "CID 0 (.notdef) must stay clear in /CIDSet");
                 assertEquals(0x80 >> (1 & 7), cidSetBytes[1 / 8] & (0x80 >> (1 & 7)),
                         "CID 1 must be marked in /CIDSet");
             }
