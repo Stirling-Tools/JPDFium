@@ -63,7 +63,6 @@ bool sfntHasCmapSubtable(std::string_view sfnt, uint16_t platform, uint16_t enco
 bool ensureSfntCmapSubtable(std::string& sfnt, uint16_t platform, uint16_t encoding,
                             std::map<uint32_t, uint16_t> const& mapping);
 
-
 uint32_t decodeUnicodeScalar(uint32_t packedOrScalar);
 std::vector<uint32_t> decodeUtf16BeHex(std::string_view digits);
 void appendUtf16BeHex(std::string& out, uint32_t codepoint);
