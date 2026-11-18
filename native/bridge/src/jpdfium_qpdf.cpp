@@ -5444,6 +5444,45 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_inspect_fonts_file(const char* in_path, char
     }
 }
 
+namespace {
+
+// Substring presence for ASCII markers inside decoded XMP bytes.
+bool xmpContains(std::string_view hay, char const* needle) {
+    return std::search(hay.begin(), hay.end(), needle, needle + std::strlen(needle)) != hay.end();
+}
+
+}  // namespace
+
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_pdfa_part(const uint8_t* input, int64_t inputLen,
+                                              int32_t* outPart) {
+    if (!input || inputLen <= 0 || !outPart) return -1;
+    *outPart = -1;
+    try {
+        auto qpdf = QPDF::create();
+        qpdf->processMemoryFile("pdfa-part-in", reinterpret_cast<const char*>(input),
+                                static_cast<size_t>(inputLen));
+        auto metadata = qpdf->getRoot().getKey("/Metadata");
+        if (!metadata.isStream()) return 0;
+        auto data = metadata.getStreamData(qpdf_dl_generalized);
+        if (!data || !data->getSize()) return 0;
+        std::string_view xmp(reinterpret_cast<char const*>(data->getBuffer()), data->getSize());
+        // Claim markers mirror the JVM-side PDFA_MARKERS: an actual
+        // pdfaid:part/conformance claim, not the generic XMP schema
+        // description every Adobe XMP block embeds.
+        bool claim = xmpContains(xmp, "pdfaid:part>") || xmpContains(xmp, "pdfaid:part=\"") ||
+                     xmpContains(xmp, "pdfaid:conformance>") ||
+                     xmpContains(xmp, "pdfaid:conformance=\"") || xmpContains(xmp, "GTS_PDFA1");
+        if (!claim) return 0;
+        bool part1 = xmpContains(xmp, "pdfaid:part>1<") || xmpContains(xmp, "pdfaid:part=\"1\"") ||
+                     xmpContains(xmp, "GTS_PDFA1");
+        *outPart = part1 ? 1 : 2;
+        return 0;
+    } catch (...) {
+        // Unparseable input: the claim is unknown, not absent.
+        return -1;
+    }
+}
+
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_optimize_ex(const uint8_t* input, int64_t inputLen,
                                                 uint8_t** output, int64_t* outputLen, int32_t flags,
                                                 int32_t compressionLevel, int32_t objectStreamMode,
