@@ -632,6 +632,15 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_inspect_fonts(const uint8_t* input, int64_t 
 // File-backed font inventory; no document-sized buffer.
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_inspect_fonts_file(const char* in_path, char** json);
 
+// PDF/A conformance part from the parsed catalog: *outPart is -1 when no
+// claim is present, 1 for PDF/A-1, 2 for PDF/A-2 or later. Unlike a raw byte
+// sweep this is object-stream and Flate aware: a catalog (with its /Metadata
+// reference) compressed into an object stream is still read. Returns 0 on
+// success (including "no claim"), -1 when the input cannot be parsed; the
+// claim is then unknown and callers must not treat the file as PDF/A.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_pdfa_part(const uint8_t* input, int64_t inputLen,
+                                              int32_t* outPart);
+
 // Update/remove /Info entries; NULL value removes a key. Caller frees *output.
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_set_docinfo(const uint8_t* input, int64_t inputLen,
                                                 const char* const* keys, const char* const* values,
