@@ -820,7 +820,7 @@ JPDFIUM_EXPORT int32_t jpdfium_repair_inspect(const uint8_t* input, int64_t inpu
         os << "\"trailer_valid\":true,";
         os << "\"issues\":" << warnings_to_json(warnings);
 
-    } catch (QPDFExc& e) {
+    } catch (std::exception& e) {
         std::string msg = e.what();
         std::string escaped;
         escaped.reserve(msg.size());

@@ -26,7 +26,10 @@ using jpdfium_qpdf_internal::WriterLock;
 void updateCidSet(QPDF& qpdf, QPDFObjectHandle descriptor, std::set<uint32_t> const& activeCids) {
     if (!descriptor.isDictionary()) return;
     std::string bits = jpdfium::font::buildCidSetBits(activeCids);
-    if (!bits.empty()) descriptor.replaceKey("/CIDSet", QPDFObjectHandle::newStream(&qpdf, bits));
+    if (!bits.empty())
+        descriptor.replaceKey("/CIDSet", QPDFObjectHandle::newStream(&qpdf, bits));
+    else
+        descriptor.removeKey("/CIDSet");
 }
 
 std::set<uint32_t> cidsPresentInProgram(QPDFObjectHandle const& target, FT_Face face) {
@@ -928,17 +931,36 @@ void appendFontInventoryEntryJson(FontInventoryEntry const& entry, std::string& 
             return nullptr;
         }
     };
-    auto readableProgram = [&](QPDFObjectHandle const& desc) {
-        if (!desc.isDictionary()) return false;
+    auto validProgram = [](std::shared_ptr<Buffer> const& data) {
+        if (!data || data->getSize() < 4) return false;
+        auto const* b = reinterpret_cast<uint8_t const*>(data->getBuffer());
+        if (b[0] == 0x00 && b[1] == 0x01 && b[2] == 0x00 && b[3] == 0x00) return true;
+        if (b[0] == 0x01 && b[1] == 0x00 && b[2] == 0x04 && b[3] == 0x04) return true;
+        if ((b[0] == 'O' && b[1] == 'T' && b[2] == 'T' && b[3] == 'O') ||
+            (b[0] == 't' && b[1] == 'r' && b[2] == 'u' && b[3] == 'e') ||
+            (b[0] == 't' && b[1] == 't' && b[2] == 'c' && b[3] == 'f'))
+            return true;
+        if (b[0] == '%' && b[1] == '!') return true;
+        return (b[0] & 0xFF) == 0x80 && b[1] == 0x01;
+    };
+    auto programState = [&](QPDFObjectHandle const& desc) {
+        bool present = false;
+        bool valid = false;
+        if (!desc.isDictionary()) return std::pair<bool, bool>{false, false};
         for (char const* key : {"/FontFile", "/FontFile2", "/FontFile3"}) {
             auto data = tryReadStream(desc.getKey(key));
-            if (data && data->getSize() > 0) return true;
+            if (!data || data->getSize() == 0) continue;
+            present = true;
+            if (validProgram(data)) valid = true;
         }
-        return false;
+        return std::pair<bool, bool>{present, valid};
     };
     // Inspect both wrapper and descendant descriptors for embedded /FontFile* and /ToUnicode
     // streams.
-    bool hasProgram = readableProgram(descriptor) || readableProgram(targetDescriptor);
+    auto wrapperProgram = programState(descriptor);
+    auto descendantProgram = programState(targetDescriptor);
+    bool hasProgram = wrapperProgram.first || descendantProgram.first;
+    bool programValid = wrapperProgram.second || descendantProgram.second;
     auto toUnicodeData = tryReadStream(font.getKey("/ToUnicode"));
     bool hasToUnicode = toUnicodeData && toUnicodeData->getSize() > 0;
 
@@ -977,6 +999,8 @@ void appendFontInventoryEntryJson(FontInventoryEntry const& entry, std::string& 
     json += boolJson(descriptor.isDictionary() || targetDescriptor.isDictionary());
     json += ",\"program\":";
     json += boolJson(hasProgram);
+    json += ",\"programValid\":";
+    json += boolJson(programValid);
     json += ",\"cid\":";
     json += boolJson(cid);
     json += ",\"toUnicode\":";

@@ -53,6 +53,16 @@ void sanitizeSfntForSubset(std::string& sfnt);
 // preserving BMP (3,1) Format 4 and non-BMP (3,10) Format 12 subtables
 // (promoting (0,3)/(0,4) Unicode subtables cleanly when needed).
 void ensureUnicodeMicrosoftCmap(std::string& sfnt);
+// Reads the number of cmap subtables and whether (platform, encoding) exists.
+int sfntCmapSubtableCount(std::string_view sfnt);
+bool sfntHasCmapSubtable(std::string_view sfnt, uint16_t platform, uint16_t encoding);
+
+// Rebuilds the SFNT with a single Format 4 cmap subtable for the given
+// platform/encoding and codepoint->GID mapping. Existing tables are preserved
+// byte-for-byte; only cmap and the directory are replaced.
+bool ensureSfntCmapSubtable(std::string& sfnt, uint16_t platform, uint16_t encoding,
+                            std::map<uint32_t, uint16_t> const& mapping);
+
 
 uint32_t decodeUnicodeScalar(uint32_t packedOrScalar);
 std::vector<uint32_t> decodeUtf16BeHex(std::string_view digits);
