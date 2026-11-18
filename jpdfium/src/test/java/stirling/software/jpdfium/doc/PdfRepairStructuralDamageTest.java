@@ -493,6 +493,29 @@ class PdfRepairStructuralDamageTest {
         }
     }
 
+    @Test
+    void repairsTruncatedPageDictionaryMidArrayWithJunkHeader() throws Exception {
+        Assumptions.assumeTrue(NativeRuntime.isFull(), "Requires full native repair bridge");
+        String valid = new String(inlineThreePagePdf(), StandardCharsets.ISO_8859_1);
+        int pageObj = valid.indexOf("3 0 obj");
+        int annots = valid.indexOf("/Contents 6 0 R >>", pageObj);
+        assertTrue(annots > 0, "fixture must have a page dictionary to cut");
+        int cut = annots + 10;
+        String damaged = valid.substring(0, cut)
+                + " 11 0 R 13 0 R 16 0%PDF-1.3\n%junk injected by a broken merge\n"
+                + "garbage that is not a pdf object at all\n";
+        byte[] input = damaged.getBytes(StandardCharsets.ISO_8859_1);
+        RepairResult result = PdfRepair.builder().input(input).all().build().execute();
+        assertTrue(result.isUsable(),
+                "truncated page dict with junk header must repair: " + result.status());
+        try (PdfDocument doc = PdfDocument.open(result.repairedPdf())) {
+            assertTrue(doc.pageCount() >= 1, "at least one page must survive");
+        }
+        try (PDDocument doc = Loader.loadPDF(result.repairedPdf())) {
+            assertTrue(doc.getNumberOfPages() >= 1);
+        }
+    }
+
     private static byte[] inlineThreePagePdf() {
         java.util.List<String> objects = new java.util.ArrayList<>();
         objects.add("<< /Type /Catalog /Pages 2 0 R >>");
