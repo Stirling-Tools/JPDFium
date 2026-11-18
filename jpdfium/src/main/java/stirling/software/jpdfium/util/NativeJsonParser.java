@@ -29,7 +29,22 @@ public final class NativeJsonParser {
         while (pos < json.length()) {
             int objStart = json.indexOf('{', pos);
             if (objStart < 0) break;
-            int objEnd = json.indexOf('}', objStart);
+            // The object end must skip '}' inside string values: report text
+            // (e.g. a repair match) can itself contain a closing brace.
+            int objEnd = -1;
+            boolean objQuotes = false;
+            for (int i = objStart + 1; i < json.length(); i++) {
+                char c = json.charAt(i);
+                if (c == '\\' && objQuotes) {
+                    i++;
+                    continue;
+                }
+                if (c == '"') objQuotes = !objQuotes;
+                else if (c == '}' && !objQuotes) {
+                    objEnd = i;
+                    break;
+                }
+            }
             if (objEnd < 0) break;
 
             String obj = json.substring(objStart + 1, objEnd);
