@@ -21,6 +21,7 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.stream.Collectors;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -351,6 +352,42 @@ class PdfRepairTest {
     }
 
     @Test
+    void repairedOutputIsCompactedWithoutLosingContent() throws Exception {
+        Assumptions.assumeTrue(NativeRuntime.isFull(), "Requires full native repair bridge");
+        byte[] damaged = RepairCorpus.zeroXref(RepairCorpus.validMultiPage());
+        byte[] qdf = PdfOptimizer.repair(damaged);
+        assertNotNull(qdf);
+
+        RepairResult result = PdfRepair.builder().input(damaged).all().build().execute();
+        assertTrue(result.isUsable());
+        assertTrue(result.repairedPdf().length < qdf.length,
+                "repaired output must be smaller than raw QDF: "
+                        + result.repairedPdf().length + " vs " + qdf.length);
+        try (PDDocument reopened = Loader.loadPDF(result.repairedPdf())) {
+            assertEquals(3, reopened.getNumberOfPages());
+            assertTrue(new PDFTextStripper().getText(reopened).contains("Repair test page 1"));
+        }
+    }
+
+    @Test
+    void repairsMalformedEncryptionWithEmptyUserPassword() throws Exception {
+        Assumptions.assumeTrue(NativeRuntime.isFull(), "Requires full native repair bridge");
+        byte[] input;
+        try (var is = PdfRepairTest.class.getResourceAsStream(
+                "/pdfs/repair/encrypted-empty-user-malformed-length.pdf")) {
+            assertNotNull(is);
+            input = is.readAllBytes();
+        }
+        RepairResult result = PdfRepair.builder().input(input).all().build().execute();
+        assertTrue(result.isUsable(), "malformed empty-user encryption must repair: " + result.status());
+        try (var doc = stirling.software.jpdfium.PdfDocument.open(result.repairedPdf())) {
+            assertEquals(1, doc.pageCount());
+        }
+        String out = new String(result.repairedPdf(), StandardCharsets.ISO_8859_1);
+        assertFalse(out.contains("/Encrypt"), "repair must return a decrypted working document");
+    }
+
+    @Test
     void repairsBrokenPagesTreePreservingInheritedAttributes() throws Exception {
         Assumptions.assumeTrue(NativeRuntime.isFull(), "Requires full native repair bridge");
         String obj1 = "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n";
@@ -612,5 +649,23 @@ class PdfRepairTest {
             assertTrue(new PDFTextStripper().getText(reopened).contains("Marker"),
                     "stream data must not be edited by the repair-token normalizers");
         }
+    }
+
+    @Test
+    void signedDocumentsAreNotRewritten() {
+        byte[] marker = "\n% /ByteRange [0 1 2 3]\n".getBytes(StandardCharsets.US_ASCII);
+        byte[] signed = new byte[MINIMAL_PDF.length + marker.length];
+        System.arraycopy(MINIMAL_PDF, 0, signed, 0, MINIMAL_PDF.length);
+        System.arraycopy(marker, 0, signed, MINIMAL_PDF.length, marker.length);
+
+        RepairResult qdf = PdfRepair.repairQdf(signed);
+        assertEquals(RepairResult.Status.CLEAN, qdf.status());
+        assertArrayEquals(signed, qdf.repairedPdf(),
+                "a signed document must not be rewritten by QDF repair");
+
+        RepairResult cascade = PdfRepair.builder().input(signed).all().build().execute();
+        assertEquals(RepairResult.Status.CLEAN, cascade.status());
+        assertArrayEquals(signed, cascade.repairedPdf(),
+                "a signed document must not be rewritten by the repair cascade");
     }
 }
