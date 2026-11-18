@@ -5,6 +5,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import stirling.software.jpdfium.panama.NativeLoader;
 import stirling.software.jpdfium.panama.NativeRuntime;
+import stirling.software.jpdfium.panama.QpdfLib;
 import stirling.software.jpdfium.panama.RepairLib;
 
 import org.apache.pdfbox.Loader;
@@ -405,6 +406,67 @@ class PdfRepairTest {
             assertTrue(reopened.getNumberOfPages() >= 2,
                     "Expected base document pages preserved after truncated incremental rebuild");
         }
+    }
+
+    // The Java FLAG_* constants are passed to the native JPDFIUM_REPAIR_* bits
+    // verbatim. These two tests pin the mapping per flag: each exercises a
+    // single builder option whose effect is observable in the written output,
+    // so any future permutation of the bit assignments fails here.
+    @Test
+    void forceVersion14FlagAloneForcesA14Header() {
+        Assumptions.assumeTrue(NativeRuntime.isFull(), "Requires full native repair bridge");
+        byte[] pdf17 = MINIMAL_PDF.clone();
+        pdf17[5] = '1';
+        pdf17[6] = '.';
+        pdf17[7] = '7';
+
+        RepairResult untouched = PdfRepair.builder().input(pdf17).build().execute();
+        assertTrue(untouched.isUsable(), "baseline repair failed: " + untouched.status());
+        assertTrue(header(untouched.repairedPdf()).startsWith("%PDF-1.7"),
+                "baseline: without forceVersion14() qpdf keeps the 1.7 header");
+
+        RepairResult forced =
+                PdfRepair.builder().input(pdf17).forceVersion14(true).build().execute();
+        assertTrue(forced.isUsable(), "forced repair failed: " + forced.status());
+        assertTrue(header(forced.repairedPdf()).startsWith("%PDF-1.4"),
+                "forceVersion14() alone must reach JPDFIUM_REPAIR_FORCE_V14 in the bridge");
+    }
+
+    @Test
+    void normalizeXrefFlagAloneRewritesObjectStreamsToClassicXref() {
+        Assumptions.assumeTrue(NativeRuntime.isFull(), "Requires full native repair bridge");
+        Assumptions.assumeTrue(QpdfLib.isSupported(), "Requires qpdf native");
+        byte[] withObjStm = QpdfLib.optimize(MINIMAL_PDF, 0, -1,
+                2 /* qpdf_o_generate */, 1 /* qpdf_s_preserve */, 0 /* qpdf_dl_none */);
+        assertNotNull(withObjStm, "qpdf object-stream generation failed");
+        assertTrue(containsAscii(withObjStm, "/ObjStm"), "expected generated object streams");
+
+        RepairResult normalized =
+                PdfRepair.builder().input(withObjStm).normalizeXref(true).build().execute();
+        assertTrue(normalized.isUsable(), "normalized repair failed: " + normalized.status());
+        byte[] out = normalized.repairedPdf();
+        assertFalse(containsAscii(out, "/ObjStm"),
+                "normalizeXref() alone must reach JPDFIUM_REPAIR_NORMALIZE_XREF in the bridge");
+        assertFalse(containsAscii(out, "/Type/XRef"),
+                "xref stream must be replaced by a classic xref table");
+        assertTrue(containsAscii(out, " 65535 f "), "classic xref free-list head expected");
+    }
+
+    private static String header(byte[] pdf) {
+        int end = Math.min(pdf.length, 9);
+        return new String(pdf, 0, end, StandardCharsets.ISO_8859_1);
+    }
+
+    private static boolean containsAscii(byte[] haystack, String needle) {
+        byte[] target = needle.getBytes(StandardCharsets.US_ASCII);
+        outer:
+        for (int i = 0; i <= haystack.length - target.length; i++) {
+            for (int j = 0; j < target.length; j++) {
+                if (haystack[i + j] != target[j]) continue outer;
+            }
+            return true;
+        }
+        return false;
     }
 
 }
