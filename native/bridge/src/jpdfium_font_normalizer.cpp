@@ -61,6 +61,17 @@ static QPDFObjectHandle embeddedFontProgram(QPDFObjectHandle const& descriptor) 
     return QPDFObjectHandle();
 }
 
+// The descriptor key the program was read from, so cmap surgery writes the
+// updated stream back where readers (embeddedFontProgram) will find it -
+// never leaving a stale sibling entry or parking a TrueType stream under
+// /FontFile2 while the real program lives in /FontFile3.
+static char const* embeddedFontProgramKey(QPDFObjectHandle const& descriptor) {
+    for (char const* key : {"/FontFile2", "/FontFile3", "/FontFile"}) {
+        if (descriptor.getKey(key).isStream()) return key;
+    }
+    return nullptr;
+}
+
 static void markFormFontNotSubsettable(QPDFObjectHandle const& font, FontUsageCounts& usage) {
     if (!font.isDictionary()) return;
     QPDFObjectHandle target = font;
@@ -1088,26 +1099,79 @@ static void setSymbolicFlag(QPDFObjectHandle& descriptor, bool symbolic,
     }
 }
 
+// True when the bytes carry an SFNT (or TrueType Collection) table directory,
+// so cmap surgery is meaningful. A /TrueType font whose program is actually a
+// bare Type1/CFF blob must be left untouched - splicing a cmap into it would
+// produce a corrupt program.
+static bool isSfntBytes(std::string_view bytes) {
+    if (bytes.size() < 4) return false;
+    const uint32_t magic = (static_cast<uint8_t>(bytes[0]) << 24) |
+                           (static_cast<uint8_t>(bytes[1]) << 16) |
+                           (static_cast<uint8_t>(bytes[2]) << 8) | static_cast<uint8_t>(bytes[3]);
+    return magic == 0x00010000U || magic == 0x74727565U /* 'true' */ ||
+           magic == 0x4F54544FU /* 'OTTO' */ || magic == 0x74646366U /* 'ttcf' */;
+}
+
 static void repairSimpleTrueTypeCmap(QPDF& pdf, QPDFObjectHandle& font,
-                                     QPDFObjectHandle& descriptor,
+                                     QPDFObjectHandle& descriptor, FT_Library ftLib,
                                      std::shared_ptr<Buffer> const& data, FT_Face face,
-                                     FontNormalizeState& state) {
+                                     FT_Long faceIndex,
+                                     std::vector<SimpleGlyph> const& simpleGlyphs,
+                                     bool simpleAnyGid, FontNormalizeState& state,
+                                     bool programRewritten) {
     QPDFObjectHandle flagsObj = descriptor.getKey("/Flags");
     const bool symbolic = flagsObj.isInteger() && (flagsObj.getIntValue() & 4) != 0;
-    const std::string bytes(reinterpret_cast<const char*>(data->getBuffer()), data->getSize());
+    // Re-subsetting may have replaced the program after data/face were captured;
+    // surgery must operate on the stream that is actually in the document.
+    std::shared_ptr<Buffer> current = data;
+    FT_Face currentFace = face;
+    FtFaceGuard reloadedGuard;
+    if (programRewritten) {
+        QPDFObjectHandle stream = embeddedFontProgram(descriptor);
+        if (!stream.isStream()) return;
+        try {
+            current = stream.getStreamData(qpdf_dl_generalized);
+        } catch (...) {
+            return;
+        }
+        if (!current || current->getSize() == 0) return;
+        FT_Face reloaded = nullptr;
+        if (FT_New_Memory_Face(ftLib, current->getBuffer(),
+                               static_cast<FT_Long>(current->getSize()), faceIndex,
+                               &reloaded) != 0 ||
+            !reloaded)
+            return;
+        reloadedGuard.reset(reloaded);
+        currentFace = reloaded;
+    }
+    const std::string bytes(reinterpret_cast<const char*>(current->getBuffer()),
+                            current->getSize());
+    if (!isSfntBytes(bytes)) return;
+    char const* programKey = embeddedFontProgramKey(descriptor);
+    if (!programKey) return;
     if (symbolic) {
         if (font.hasKey("/Encoding")) {
             font.removeKey("/Encoding");
             state.changed = true;
         }
-        if (sfntCmapSubtableCount(bytes) == 1 || sfntHasCmapSubtable(bytes, 3, 0)) return;
-        std::map<uint32_t, uint16_t> identity;
-        for (uint32_t code = 0; code < 256 && code < static_cast<uint32_t>(face->num_glyphs);
-             ++code)
-            identity[code] = static_cast<uint16_t>(code);
+        // Only synthesize a (3,0) subtable when the program carries no cmap at
+        // all. Replacing an existing multi-subtable cmap would drop mappings
+        // other consumers rely on.
+        if (sfntCmapSubtableCount(bytes) != 0) return;
+        // Derive code->gid from the PDF-resolved encoding instead of assuming
+        // identity. A guessed identity cmap changes the rendered glyph for
+        // every code whose glyph does not sit at that slot in this program.
+        if (!simpleAnyGid) return;
+        std::map<uint32_t, uint16_t> codeToGid;
+        for (size_t code = 0; code < simpleGlyphs.size() && code < 256; ++code) {
+            if (simpleGlyphs[code].gid != 0)
+                codeToGid[static_cast<uint32_t>(code)] =
+                    static_cast<uint16_t>(simpleGlyphs[code].gid);
+        }
+        if (codeToGid.empty()) return;
         std::string updated = bytes;
-        if (!ensureSfntCmapSubtable(updated, 3, 0, identity)) return;
-        descriptor.replaceKey("/FontFile2", QPDFObjectHandle::newStream(&pdf, updated));
+        if (!ensureSfntCmapSubtable(updated, 3, 0, codeToGid)) return;
+        descriptor.replaceKey(programKey, QPDFObjectHandle::newStream(&pdf, updated));
         state.changed = true;
         return;
     }
@@ -1116,9 +1180,9 @@ static void repairSimpleTrueTypeCmap(QPDF& pdf, QPDFObjectHandle& font,
     if (sfntHasCmapSubtable(bytes, 3, 1) || sfntHasCmapSubtable(bytes, 3, 10)) return;
     std::map<uint32_t, uint16_t> unicodeByGid;
     char glyphName[256];
-    if (FT_HAS_GLYPH_NAMES(face)) {
-        for (FT_UInt gid = 1; gid < static_cast<FT_UInt>(face->num_glyphs); ++gid) {
-            if (FT_Get_Glyph_Name(face, gid, glyphName, sizeof(glyphName)) != 0 ||
+    if (FT_HAS_GLYPH_NAMES(currentFace)) {
+        for (FT_UInt gid = 1; gid < static_cast<FT_UInt>(currentFace->num_glyphs); ++gid) {
+            if (FT_Get_Glyph_Name(currentFace, gid, glyphName, sizeof(glyphName)) != 0 ||
                 glyphName[0] == '\0')
                 continue;
             for (uint32_t scalar : unicodeSequenceForGlyphName(glyphName)) {
@@ -1130,7 +1194,7 @@ static void repairSimpleTrueTypeCmap(QPDF& pdf, QPDFObjectHandle& font,
     if (unicodeByGid.empty()) return;
     std::string updated = bytes;
     if (!ensureSfntCmapSubtable(updated, 3, 1, unicodeByGid)) return;
-    descriptor.replaceKey("/FontFile2", QPDFObjectHandle::newStream(&pdf, updated));
+    descriptor.replaceKey(programKey, QPDFObjectHandle::newStream(&pdf, updated));
     state.changed = true;
 }
 
@@ -1656,7 +1720,14 @@ static void processFont(QPDF& pdf, FT_Library ftLib, QPDFObjectHandle font, bool
             }
         }
         const bool cffCid = target.getKey("/Subtype").isNameAndEquals("/CIDFontType0");
-        if (cffCid || (!didResubset && !cmapFitsProgram(data, cidSetFace))) {
+        // A CID-keyed CFF exposes its CID set directly (cidsPresentInProgram
+        // reads it via FT_Get_CID_From_Glyph_Index), so ISO 19005-2
+        // 6.2.11.4.2 is satisfied by rebuilding /CIDSet instead of dropping
+        // it. Only name-keyed CFF programs, where CIDs cannot be derived,
+        // keep the old remove.
+        const bool cffCidKeyed = cffCid && FT_IS_CID_KEYED(cidSetFace);
+        if ((cffCid && !cffCidKeyed) ||
+            (!cffCid && !didResubset && !cmapFitsProgram(data, cidSetFace))) {
             if (descriptor.hasKey("/CIDSet")) {
                 descriptor.removeKey("/CIDSet");
                 state.changed = true;
@@ -1703,7 +1774,8 @@ static void processFont(QPDF& pdf, FT_Library ftLib, QPDFObjectHandle font, bool
     }
 
     if (!cid && full && subtypeName == "/TrueType") {
-        repairSimpleTrueTypeCmap(pdf, font, descriptor, data, rawFace, state);
+        repairSimpleTrueTypeCmap(pdf, font, descriptor, ftLib, data, rawFace, faceIndex,
+                                 simpleGlyphs, simpleAnyGid, state, didResubset);
     }
 }
 

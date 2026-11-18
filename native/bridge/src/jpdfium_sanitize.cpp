@@ -178,73 +178,90 @@ bool parseToUnicode(const std::shared_ptr<Buffer>& buf, std::vector<CmapEntry>& 
     QPDFTokenizer tok;
     auto is = std::make_shared<BufferInputSource>("tounicode", data);
 
-    // Line-number index: bfchar/bfrange entries are one per LINE, so an entry
-    // is flushed when the token stream crosses a newline.
-    std::vector<size_t> lineStarts;
-    lineStarts.push_back(0);
-    for (size_t i = 0; i < data.size(); i++)
-        if (data[i] == '\n') lineStarts.push_back(i + 1);
-    auto lineOf = [&](qpdf_offset_t pos) -> size_t {
-        auto it = std::upper_bound(lineStarts.begin(), lineStarts.end(), static_cast<size_t>(pos));
-        return static_cast<size_t>(it - lineStarts.begin()) - 1;
-    };
-
+    // Entries are operand-counted, not line-counted: real-world CMaps put
+    // several bfchar/bfrange entries on one line, and a line-index flush
+    // silently drops every entry after the first of such a line.
     enum class CmapSection { None, BfChar, BfRange };
     CmapSection section = CmapSection::None;
     std::vector<std::string> pendingHex;
-    size_t pendingLine = 0;
-    bool havePending = false;
+    bool inArray = false;
+
+    // A hostile bfrange can claim a 4-byte code space; without a span cap one
+    // "entry" amplifies into billions of CmapEntry pushes.
+    constexpr uint64_t kMaxRangeSpan = 65536;
+    // Overall ceiling so a multi-megabyte hostile CMap cannot exhaust memory.
+    constexpr size_t kMaxEntries = 1U << 20;
+
+    auto codeFromBytes = [](std::string const& bytes, uint64_t& code) -> bool {
+        if (bytes.empty() || bytes.size() > 4) return false;
+        uint64_t value = 0;
+        for (unsigned char c : bytes) value = (value << 8) | c;
+        if (value > 0x7FFFFFFFULL) return false;  // CmapEntry::code is int
+        code = value;
+        return true;
+    };
+    // UTF-16 surrogate units are not valid mapping targets: consecutive-form
+    // ranges that walk into the surrogate block stop at the first bad unit.
+    auto hasSurrogateUnit = [](std::string const& uni) {
+        if (uni.size() % 2 != 0) return false;
+        for (size_t i = 0; i + 1 < uni.size(); i += 2) {
+            const unsigned unit =
+                (static_cast<unsigned char>(uni[i]) << 8) | static_cast<unsigned char>(uni[i + 1]);
+            if (unit >= 0xD800U && unit <= 0xDFFFU) return true;
+        }
+        return false;
+    };
 
     auto flushBfChar = [&]() {
-        if (pendingHex.size() >= 2) {
-            const std::string& codeBytes = pendingHex[0];
-            const std::string& uniBytes = pendingHex[1];
-            if (!codeBytes.empty()) {
-                int code = 0;
-                for (unsigned char c : codeBytes) code = (code << 8) | c;
-                out.push_back(CmapEntry{code, static_cast<int>(codeBytes.size()), uniBytes});
+        while (pendingHex.size() >= 2) {
+            uint64_t code = 0;
+            if (codeFromBytes(pendingHex[0], code) && out.size() < kMaxEntries) {
+                out.push_back(CmapEntry{static_cast<int>(code),
+                                        static_cast<int>(pendingHex[0].size()), pendingHex[1]});
             }
+            pendingHex.erase(pendingHex.begin(), pendingHex.begin() + 2);
         }
         pendingHex.clear();
-        havePending = false;
     };
     auto flushBfRange = [&]() {
-        if (pendingHex.size() >= 3) {
-            const std::string& loBytes = pendingHex[0];
-            const std::string& hiBytes = pendingHex[1];
-            const std::string& uniBytes = pendingHex[2];
-            if (!loBytes.empty() && loBytes.size() == hiBytes.size() && !uniBytes.empty()) {
-                int lo = 0, hi = 0;
-                for (unsigned char c : loBytes) lo = (lo << 8) | c;
-                for (unsigned char c : hiBytes) hi = (hi << 8) | c;
-                if (pendingHex.size() == 3) {
-                    // consecutive form: lo..hi -> u..u+n; advance the full
-                    // big-endian UTF-16 byte string in place so multi-unit
-                    // values (including surrogate pairs) never truncate.
-                    std::string ub = uniBytes;
-                    for (int code = lo; code <= hi; code++) {
-                        out.push_back(CmapEntry{code, static_cast<int>(loBytes.size()), ub});
-                        for (size_t idx = ub.size(); idx-- > 0;) {
-                            auto v = static_cast<unsigned char>(ub[idx]);
-                            if (v < 0xFF) {
-                                ub[idx] = static_cast<char>(v + 1);
-                                break;
-                            }
-                            ub[idx] = '\0';
-                        }
+        if (pendingHex.size() < 3) {
+            pendingHex.clear();
+            return;
+        }
+        uint64_t lo = 0;
+        uint64_t hi = 0;
+        if (!codeFromBytes(pendingHex[0], lo) || !codeFromBytes(pendingHex[1], hi) || lo > hi ||
+            hi - lo + 1 > kMaxRangeSpan) {
+            pendingHex.clear();
+            return;
+        }
+        const int loBytes = static_cast<int>(pendingHex[0].size());
+        if (inArray) {
+            // list form: pendingHex[2..] are the per-code unicodes
+            size_t k = 2;
+            for (uint64_t code = lo;
+                 code <= hi && k < pendingHex.size() && out.size() < kMaxEntries; code++, k++) {
+                out.push_back(CmapEntry{static_cast<int>(code), loBytes, pendingHex[k]});
+            }
+        } else {
+            // consecutive form: lo..hi -> u..u+n; advance the full big-endian
+            // UTF-16 byte string in place so multi-unit values (including
+            // surrogate pairs) never truncate.
+            std::string ub = pendingHex[2];
+            for (uint64_t code = lo; code <= hi && out.size() < kMaxEntries; code++) {
+                if (hasSurrogateUnit(ub)) break;
+                out.push_back(CmapEntry{static_cast<int>(code), loBytes, ub});
+                for (size_t idx = ub.size(); idx-- > 0;) {
+                    auto v = static_cast<unsigned char>(ub[idx]);
+                    if (v < 0xFF) {
+                        ub[idx] = static_cast<char>(v + 1);
+                        break;
                     }
-                } else {
-                    // list form: pendingHex[2..] are the unicodes
-                    for (int code = lo, k = 2;
-                         code <= hi && k < static_cast<int>(pendingHex.size()); code++, k++) {
-                        out.push_back(
-                            CmapEntry{code, static_cast<int>(loBytes.size()), pendingHex[k]});
-                    }
+                    ub[idx] = '\0';
                 }
             }
         }
         pendingHex.clear();
-        havePending = false;
     };
 
     while (true) {
@@ -252,48 +269,56 @@ bool parseToUnicode(const std::shared_ptr<Buffer>& buf, std::vector<CmapEntry>& 
         QPDFTokenizer::token_type_e tt = t.getType();
         if (tt == QPDFTokenizer::tt_eof || tt == QPDFTokenizer::tt_bad) break;
         if (tt == QPDFTokenizer::tt_space || tt == QPDFTokenizer::tt_comment) continue;
-        // InputSource::getLastOffset() points at the beginning of the last
-        // token read (QPDFTokenizer::readToken contract).
-        size_t line = lineOf(is->getLastOffset());
-        // A newline inside an entry group terminates the current entry.
-        if (havePending && line != pendingLine) {
-            if (section == CmapSection::BfChar)
-                flushBfChar();
-            else if (section == CmapSection::BfRange)
-                flushBfRange();
-        }
         if (tt == QPDFTokenizer::tt_word) {
             std::string w = t.getValue();
             if (w == "beginbfchar") {
                 flushBfRange();
+                inArray = false;
                 section = CmapSection::BfChar;
             } else if (w == "beginbfrange") {
                 flushBfChar();
+                inArray = false;
                 section = CmapSection::BfRange;
             } else if (w == "endbfchar") {
                 flushBfChar();
                 section = CmapSection::None;
             } else if (w == "endbfrange") {
                 flushBfRange();
+                inArray = false;
                 section = CmapSection::None;
             } else if (w.starts_with("begin")) {
                 // unrelated section: flush what we have and ignore it
                 flushBfChar();
                 flushBfRange();
+                inArray = false;
                 section = CmapSection::None;
             }
-        } else if (tt == QPDFTokenizer::tt_string) {
-            if (section != CmapSection::None) {
-                pendingHex.push_back(t.getValue());
-                pendingLine = line;
-                havePending = true;
-            }
+            continue;
+        }
+        if (tt == QPDFTokenizer::tt_array_close) {
+            if (section == CmapSection::BfRange && inArray) flushBfRange();
+            inArray = false;
+            continue;
+        }
+        if (tt == QPDFTokenizer::tt_array_open) {
+            // bfrange's third operand is either a string (consecutive form,
+            // flushed when it arrives) or an array of strings.
+            if (section == CmapSection::BfRange && !inArray && pendingHex.size() == 2)
+                inArray = true;
+            continue;
+        }
+        if (tt != QPDFTokenizer::tt_string) continue;
+        if (section == CmapSection::None) continue;
+        pendingHex.push_back(t.getValue());
+        if (section == CmapSection::BfChar) {
+            if (pendingHex.size() == 2) flushBfChar();
+        } else if (section == CmapSection::BfRange && !inArray && pendingHex.size() == 3) {
+            // consecutive form is complete
+            flushBfRange();
         }
     }
-    if (section == CmapSection::BfChar)
-        flushBfChar();
-    else if (section == CmapSection::BfRange)
-        flushBfRange();
+    flushBfChar();
+    flushBfRange();
     return !out.empty();
 }
 
