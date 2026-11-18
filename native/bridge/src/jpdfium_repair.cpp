@@ -561,6 +561,17 @@ static int try_qpdf_repair(const uint8_t* input, int64_t inputLen, uint8_t** out
         bool structurallyFixed = false;
         auto pdf = loadAndRepairMemory(input, static_cast<size_t>(inputLen), structurallyFixed);
 
+        // Rewriting a signed document always breaks its /ByteRange digest. The
+        // Java layer passes clean signed documents through untouched; a damaged
+        // signed document that still parses must fail here instead of producing
+        // output whose signature silently no longer verifies. pdfHasDigitalSignature
+        // enumerates parsed objects, so this also catches signature dictionaries
+        // hidden inside object streams that raw marker scans miss.
+        if (jpdfium::qpdf_detail::pdfHasDigitalSignature(*pdf)) {
+            errorMsg = "signed document cannot be repaired without invalidating its signature";
+            return JPDFIUM_REPAIR_FAILED;
+        }
+
         QPDFWriter writer(*pdf);
         writer.setOutputMemory();
         configureRepairWriter(writer, flags);
@@ -621,6 +632,18 @@ static int try_qpdf_repair_file(const char* inputPath, const char* outputPath, i
                 structurallyFixed = repairBrokenPageTree(*pdf);
             }
 
+            // Same signed-document refusal as the memory route: never rewrite a
+            // document carrying a /ByteRange signature dictionary.
+            if (jpdfium::qpdf_detail::pdfHasDigitalSignature(*pdf)) {
+                throw std::runtime_error(
+                    "signed document cannot be repaired without invalidating its signature");
+            }
+
+            // Parity with the Java execute() route: a repair that produced no
+            // pages is not a successful repair. CLEAN is deliberately skipped -
+            // a document that was already valid is the caller's business.
+            const size_t pages = safePageCount(*pdf);
+
             QPDFWriter writer(*pdf);
             // qpdf writes to our fd and leaves closure to us (close_file=false).
             writer.setOutputFile(staging.c_str(), probe, false);
@@ -633,6 +656,9 @@ static int try_qpdf_repair_file(const char* inputPath, const char* outputPath, i
             result = !closed                                              ? JPDFIUM_REPAIR_FAILED
                      : (structurallyFixed || !pdf->getWarnings().empty()) ? JPDFIUM_REPAIR_FIXED
                                                                           : JPDFIUM_REPAIR_CLEAN;
+            if (result == JPDFIUM_REPAIR_FIXED && pages == 0) {
+                result = JPDFIUM_REPAIR_FAILED;
+            }
         }
     } catch (QPDFExc& e) {
         if (probe) {
