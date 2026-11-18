@@ -146,6 +146,16 @@ void setCjkToUnicode(QPDF& qpdf, QPDFObjectHandle font, std::map<uint32_t, FT_UL
     if (!cmap.empty()) font.replaceKey("/ToUnicode", QPDFObjectHandle::newStream(&qpdf, cmap));
 }
 
+// PDFium reports raw control codepoints for glyphs without a usable Unicode
+// mapping, and U+FFFD when a ToUnicode entry is missing entirely (e.g.
+// pdfjs_TAMReview.pdf maps every drawn CID to U+0002). No substitute font
+// carries a real glyph for those, so requiring coverage would decline every
+// candidate. They map to .notdef instead - the same exemption the Java-side
+// usedCodepoints() applies before even choosing a candidate.
+bool nonRenderableScalar(uint32_t scalar) {
+    return !scalar || scalar <= 0x1F || (scalar >= 0x7F && scalar <= 0x9F) || scalar == 0xFFFD;
+}
+
 bool coversWidthCids(QPDFObjectHandle const& font, std::map<uint32_t, uint32_t> const& unicodeByCid,
                      std::set<uint32_t> const& usedCids, bool scanComplete) {
     if (!scanComplete) return false;
@@ -165,7 +175,10 @@ bool cidGlyphOrderMatches(FT_Face face, std::map<uint32_t, uint32_t> const& unic
     if (unicodeByCid.empty() || FT_Select_Charmap(face, FT_ENCODING_UNICODE)) return false;
     for (auto const& [cid, unicode] : unicodeByCid) {
         uint32_t scalar = jpdfium::font::decodeUnicodeScalar(unicode);
-        if (!scalar || FT_Get_Char_Index(face, scalar) != cid) return false;
+        // Non-renderable scalars are pinned to .notdef below, so they impose no
+        // glyph-order constraint on the donor.
+        if (nonRenderableScalar(scalar)) continue;
+        if (FT_Get_Char_Index(face, scalar) != cid) return false;
     }
     return true;
 }
@@ -176,7 +189,11 @@ bool mapCidsToGlyphs(FT_Face face, std::map<uint32_t, uint32_t> const& unicodeBy
     if (unicodeByCid.empty() || FT_Select_Charmap(face, FT_ENCODING_UNICODE)) return false;
     for (auto const& [cid, unicode] : unicodeByCid) {
         uint32_t scalar = jpdfium::font::decodeUnicodeScalar(unicode);
-        FT_UInt gid = scalar ? FT_Get_Char_Index(face, scalar) : 0;
+        if (nonRenderableScalar(scalar)) {
+            cidGlyph[cid] = 0;
+            continue;
+        }
+        FT_UInt gid = FT_Get_Char_Index(face, scalar);
         if (!gid) {
             cidGlyph.clear();
             return false;
@@ -610,6 +627,12 @@ bool prepareMissingCidMapping(QPDF& qpdf, QPDFObjectHandle& font, QPDFObjectHand
         if (!cidGlyphOrderMatches(program.face, job.cidUnicode)) return false;
         for (auto const& [mappedCid, unicode] : job.cidUnicode) {
             uint32_t scalar = jpdfium::font::decodeUnicodeScalar(unicode);
+            if (nonRenderableScalar(scalar)) {
+                // Control codes and the replacement marker have no glyph in any
+                // donor; pin them to .notdef like the TrueType route does.
+                job.cidGlyph[mappedCid] = 0;
+                continue;
+            }
             if (!scalar) {
                 job.cidGlyph.clear();
                 break;

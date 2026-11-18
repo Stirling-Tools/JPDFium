@@ -460,11 +460,31 @@ public final class PdfRepair {
         boolean comment = false;
         boolean hex = false;
         boolean stream = false;
+        // Streams whose declared /Length leads to an exact "endstream" landing
+        // end at that position: the data may legitimately contain the bytes
+        // "endstream" (embedded PDFs, image streams), and an early exit would
+        // leave the rest of the data unguarded so the normalizers below could
+        // edit content-stream bytes. Without a resolvable /Length the scan
+        // falls back to the first "endstream" at a token boundary.
+        int endstreamAt = -1;
         for (int i = 0; i < pdf.length; i++) {
             byte b = pdf[i];
             if (stream) {
                 guarded[i] = true;
-                if (matchesAscii(pdf, i, "endstream")) {
+                if (endstreamAt >= 0) {
+                    if (i == endstreamAt) {
+                        // Consume the closing keyword explicitly so its "stream"
+                        // suffix cannot re-enter the stream state.
+                        for (int k = i + 1; k < i + 9; k++) guarded[k] = true;
+                        i += 8;
+                        stream = false;
+                        endstreamAt = -1;
+                    }
+                    continue;
+                }
+                if (matchesAscii(pdf, i, "endstream") && isTokenStart(pdf, i)) {
+                    for (int k = i + 1; k < i + 9; k++) guarded[k] = true;
+                    i += 8;
                     stream = false;
                 }
                 continue;
@@ -502,13 +522,62 @@ public final class PdfRepair {
                     && (i == 0 || pdf[i - 1] != '<')) {
                 guarded[i] = true;
                 hex = true;
-            } else if (!stream && matchesAscii(pdf, i, "stream")
+            } else if (matchesAscii(pdf, i, "stream") && isTokenStart(pdf, i)
                     && (i + 6 == pdf.length || pdf[i + 6] == '\n' || pdf[i + 6] == '\r')) {
                 guarded[i] = true;
                 stream = true;
+                endstreamAt = resolveStreamEnd(pdf, i);
             }
         }
         return guarded;
+    }
+
+    /**
+     * Resolves where the "endstream" keyword that closes the stream whose
+     * "stream" token starts at {@code streamTokenStart} must sit, using the
+     * dictionary's declared {@code /Length}. Returns {@code -1} when no exact
+     * landing can be established (missing, indirect, or damaged /Length, a
+     * length that overshoots the file, or "endstream" not precisely where the
+     * length points); the caller then falls back to scanning for an anchored
+     * "endstream". Self-validating: the resolved position is only returned
+     * when the keyword really is there.
+     */
+    private static int resolveStreamEnd(byte[] pdf, int streamTokenStart) {
+        int windowStart = Math.max(0, streamTokenStart - 1024);
+        for (int p = streamTokenStart - 1; p >= windowStart; p--) {
+            if (!matchesAscii(pdf, p, "/Length")) continue;
+            int q = p + 7;
+            while (q < pdf.length && isPdfSpace(pdf[q])) q++;
+            int numStart = q;
+            long len = 0;
+            while (q < pdf.length && pdf[q] >= '0' && pdf[q] <= '9') {
+                len = len * 10 + (pdf[q] - '0');
+                if (len > pdf.length) return -1;
+                q++;
+            }
+            if (q == numStart) return -1;  // indirect reference or missing value
+            int j = streamTokenStart + 6;
+            if (j + 1 < pdf.length && pdf[j] == '\r' && pdf[j + 1] == '\n') j += 2;
+            else if (j < pdf.length && (pdf[j] == '\n' || pdf[j] == '\r')) j += 1;
+            if (j + len >= pdf.length) return -1;
+            int k = (int) (j + len);
+            if (k + 1 < pdf.length && pdf[k] == '\r' && pdf[k + 1] == '\n') k += 2;
+            else if (k < pdf.length && (pdf[k] == '\n' || pdf[k] == '\r')) k += 1;
+            if (k + 9 > pdf.length) return -1;
+            return matchesAscii(pdf, k, "endstream") ? k : -1;
+        }
+        return -1;
+    }
+
+    // A keyword occurrence is only a PDF token when preceded by whitespace or
+    // a delimiter; otherwise it is part of a longer word (e.g. the "stream"
+    // inside "endstream" must not re-enter the stream state).
+    private static boolean isTokenStart(byte[] pdf, int i) {
+        if (i == 0) return true;
+        byte prev = pdf[i - 1];
+        return isPdfSpace(prev) || prev == '(' || prev == ')' || prev == '<' || prev == '>'
+                || prev == '[' || prev == ']' || prev == '{' || prev == '}' || prev == '/'
+                || prev == '%';
     }
 
     private static byte[] normalizeRepairTokens(byte[] pdf) {
@@ -574,7 +643,9 @@ public final class PdfRepair {
             if (base + m.start() < guarded.length && guarded[base + m.start()]) continue;
             starts.add(m.start());
             ends.add(m.end());
-            groups.add(depth > 0 ? stack[depth - 1] : -1);
+            // Hostile input can nest deeper than the tracking window; report the
+            // innermost tracked level instead of throwing.
+            groups.add(depth > 0 ? stack[Math.min(depth - 1, stack.length - 1)] : -1);
             keys.add(m.group(1));
         }
         Map<Integer, Map<String, Integer>> lastByGroup = new LinkedHashMap<>();
@@ -616,16 +687,12 @@ public final class PdfRepair {
         if (pdf == null || pdf.length < 4) return pdf;
         ByteArrayOutputStream out = new ByteArrayOutputStream(pdf.length + 8);
         boolean changed = false;
-        boolean inStream = false;
+        // protectedPositions() is the single stream/lexical guard: bytes it
+        // marks (streams, strings, comments, hex strings) must never be
+        // rewritten as object syntax.
         boolean[] guarded = protectedPositions(pdf);
         for (int i = 0; i < pdf.length; i++) {
-            if (!inStream && matchesAscii(pdf, i, "stream")
-                    && (i + 6 == pdf.length || pdf[i + 6] == '\n' || pdf[i + 6] == '\r')) {
-                inStream = true;
-            } else if (inStream && matchesAscii(pdf, i, "endstream")) {
-                inStream = false;
-            }
-            if (!inStream && !guarded[i] && pdf[i] == 'o'
+            if (!guarded[i] && pdf[i] == 'o'
                     && (i == 0 || !isPdfNameByte(pdf[i - 1]))) {
                 int p = i - 1;
                 while (p >= 0 && isPdfSpace(pdf[p])) p--;
@@ -683,16 +750,12 @@ public final class PdfRepair {
         if (pdf == null || pdf.length < 6) return pdf;
         ByteArrayOutputStream out = new ByteArrayOutputStream(pdf.length + 16);
         boolean changed = false;
-        boolean inStream = false;
+        // protectedPositions() is the single stream/lexical guard: bytes it
+        // marks (streams, strings, comments, hex strings) must never be
+        // rewritten as object syntax.
         boolean[] guarded = protectedPositions(pdf);
         for (int i = 0; i < pdf.length; i++) {
-            if (!inStream && matchesAscii(pdf, i, "stream")
-                    && (i + 6 == pdf.length || pdf[i + 6] == '\n' || pdf[i + 6] == '\r')) {
-                inStream = true;
-            } else if (inStream && matchesAscii(pdf, i, "endstream")) {
-                inStream = false;
-            }
-            boolean marker = !inStream && !guarded[i] && matchesAscii(pdf, i, "endobj");
+            boolean marker = !guarded[i] && matchesAscii(pdf, i, "endobj");
             boolean boundary = i == 0 || pdf[i - 1] == '>' || pdf[i - 1] == '\n'
                     || pdf[i - 1] == '\r' || pdf[i - 1] == ' ' || pdf[i - 1] == '\t';
             if (marker && boundary && i + 7 < pdf.length && pdf[i + 6] >= '0' && pdf[i + 6] <= '9') {
@@ -940,7 +1003,9 @@ public final class PdfRepair {
                 hex = true;
             }
         }
-        return depth > 0 ? stack[depth - 1] : -1;
+        // Hostile input can nest deeper than the tracking window; report the
+        // innermost tracked level instead of throwing.
+        return depth > 0 ? stack[Math.min(depth - 1, stack.length - 1)] : -1;
     }
 
     private static int dictionaryEnd(String s, int start) {
@@ -1262,7 +1327,13 @@ public final class PdfRepair {
             java.util.regex.Matcher m = java.util.regex.Pattern
                     .compile("(?m)(\\d+)\\s+\\d+\\s+obj")
                     .matcher(body);
-            while (m.find()) maxObj = Math.max(maxObj, Integer.parseInt(m.group(1)));
+            // parseObjectNumber caps accepted object numbers at 9,000,000 everywhere
+            // else; honor the same fail-closed bound here instead of letting a
+            // hostile 10+ digit token throw NumberFormatException out of execute().
+            while (m.find()) {
+                long parsed = parseObjectNumber(m.group(1));
+                if (parsed > maxObj) maxObj = (int) parsed;
+            }
             trailer.append("\ntrailer\n<< /Size ").append(Math.max(maxObj + 1, root[0] + 1))
                     .append(" /Root ").append(root[0]).append(' ').append(root[1])
                     .append(" R >>\nstartxref\n0\n");

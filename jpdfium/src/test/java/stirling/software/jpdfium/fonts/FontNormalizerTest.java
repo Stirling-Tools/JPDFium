@@ -709,12 +709,15 @@ class FontNormalizerTest {
         assumeTrue(NativeRuntime.isFull(), "needs real native library");
         // The stale /CIDSet marks only CID 0, the drawn CID 36, and unreferenced
         // CID 50. ISO 19005-2 6.2.11.4 test 4 requires every CID present in the
-        // program, so the normalizer must rebuild the full 0..numGlyphs-1 bitmap.
+        // program. CID 0 is the .notdef glyph, not a CID of the subset, and the
+        // buildCidSetBits writers (embedder and normalizer) deliberately leave
+        // its bit clear so validators comparing CIDSet to the program's glyph
+        // set do not see a phantom entry.
         byte[] staleCidSet = new byte[] {(byte) 0x80, 0, 0, 0, 0x08, 0, 0x20};
         byte[] pdf = cidTrueTypePdf("ABCDEF+LiberationSans", staleCidSet);
         int numGlyphs = FontNormalizer.classify(liberationSansBytes()).numGlyphs();
         byte[] expected = new byte[(numGlyphs + 7) / 8];
-        for (int cid = 0; cid < numGlyphs; cid++)
+        for (int cid = 1; cid < numGlyphs; cid++)
             expected[cid / 8] |= (byte) (0x80 >> (cid % 8));
 
         try (PdfDocument doc = PdfDocument.open(pdf)) {
@@ -760,8 +763,11 @@ class FontNormalizerTest {
                 assertEquals(5, cidSet.length,
                         "CIDSet must stop at the highest present GID in the re-subsetted /Identity program");
                 // Re-subsetted /Identity program keeps glyph slots 0..36 (max_gid=36), so ISO 19005-2
-                // §6.2.11.4.2 requires CIDs 0..36 present in the font program to all be marked.
-                for (int i = 0; i < 4; i++) {
+                // §6.2.11.4.2 requires CIDs 1..36 present in the font program to all be marked.
+                // Slot 0 is .notdef and stays clear (see PdfFontEmbedderTest for the embedder's
+                // matching CIDSet policy - the two writers must not drift).
+                assertEquals((byte) 0x7F, cidSet[0], "CIDSet byte 0 must exclude the .notdef CID 0");
+                for (int i = 1; i < 4; i++) {
                     assertEquals((byte) 0xFF, cidSet[i], "CIDSet byte " + i + " must mark all CIDs present");
                 }
                 assertEquals((byte) 0xF8, cidSet[4], "CIDSet final byte must mark CIDs 32..36");
@@ -803,7 +809,9 @@ class FontNormalizerTest {
                 byte[] cidSet = streamBytes(descriptor, COSName.CID_SET);
                 assertEquals((entries + 7) / 8, cidSet.length,
                         "CIDSet must cover every CID in the map");
-                for (int cid = 0; cid < entries; cid++) {
+                assertTrue((cidSet[0] & 0x80) == 0,
+                        "CIDSet must not mark the .notdef CID 0");
+                for (int cid = 1; cid < entries; cid++) {
                     assertTrue((cidSet[cid / 8] & (0x80 >> (cid % 8))) != 0,
                             "CIDSet must mark CID " + cid);
                 }

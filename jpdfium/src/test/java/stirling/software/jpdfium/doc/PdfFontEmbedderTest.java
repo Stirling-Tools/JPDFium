@@ -2570,4 +2570,128 @@ class PdfFontEmbedderTest {
                     ? baseName.substring(7) : baseName;
         }
     }
+
+    /**
+     * Two non-embedded Type1 resources on one page: {@code f1Base} is drawn with the default
+     * (visible) text render mode, {@code f2Base} only under render mode 3 (invisible). The
+     * fonts must have distinct base names so the per-name visibility scan can tell them apart.
+     */
+    private static byte[] twoFontMixedVisibilityPdf(String f1Base, String f2Base) throws IOException {
+        try (PDDocument pdf = new PDDocument()) {
+            PDPage page = new PDPage(PDRectangle.LETTER);
+            pdf.addPage(page);
+            COSDictionary fonts = new COSDictionary();
+            fonts.setItem("F1", type1FontDict(f1Base));
+            fonts.setItem("F2", type1FontDict(f2Base));
+            COSDictionary resources = new COSDictionary();
+            resources.setItem(COSName.FONT, fonts);
+            page.setResources(new PDResources(resources));
+            page.setContents(new PDStream(pdf, new ByteArrayInputStream(
+                    ("BT /F1 12 Tf 40 700 Td (Hello) Tj 0 -20 Td /F2 12 Tf 3 Tr (Hidden) Tj ET")
+                            .getBytes(StandardCharsets.US_ASCII))));
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            pdf.save(out);
+            return out.toByteArray();
+        }
+    }
+
+    private static COSDictionary type1FontDict(String baseFont) {
+        COSDictionary descriptor = new COSDictionary();
+        descriptor.setItem(COSName.TYPE, COSName.FONT_DESC);
+        descriptor.setName(COSName.FONT_NAME, baseFont);
+        descriptor.setInt(COSName.FLAGS, 32);
+        COSDictionary font = new COSDictionary();
+        font.setItem(COSName.TYPE, COSName.FONT);
+        font.setItem(COSName.SUBTYPE, COSName.TYPE1);
+        font.setName(COSName.BASE_FONT, baseFont);
+        font.setItem(COSName.FONT_DESC, descriptor);
+        return font;
+    }
+
+    @Test
+    void bestEffortSkipsInvisibleOnlyFontButStrictEmbedsIt() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native font replacement unavailable");
+        byte[] pdf = twoFontMixedVisibilityPdf("Helvetica", "Helvetica-Bold");
+
+        // Best-effort: the render-mode-3 font is skipped with an explicit reason.
+        // It stays unembedded in the output (it is not attempted), so it is
+        // reported in the unresolved list together with the Tr 3 reason.
+        PdfFontEmbedder.Result bestEffort = PdfFontEmbedder.embedMissing(pdf);
+        assertTrue(bestEffort.embedded().contains("Helvetica"),
+                "visible font must be embedded: " + bestEffort.embedded());
+        assertFalse(bestEffort.embedded().contains("Helvetica-Bold"),
+                "best-effort embedding must skip the invisible-only font");
+        assertTrue(bestEffort.unresolved().contains("Helvetica-Bold"),
+                "the skipped font must remain in the unresolved list: "
+                        + bestEffort.unresolved());
+        assertTrue(bestEffort.statuses().stream().anyMatch(s -> s.baseName().equals("Helvetica-Bold")
+                        && !s.resolved() && s.reason().contains("invisible text")),
+                "the skipped font must carry the Tr 3 reason: " + bestEffort.statuses());
+
+        // Strict (PDF/A embedding): the invisible-only font must be embedded too,
+        // because PDF/A-2 6.2.11.5 requires invisible-text fonts to be embedded.
+        PdfFontEmbedder.Result strict = PdfFontEmbedder.embedMissingStrict(pdf);
+        assertTrue(strict.unresolved().isEmpty(),
+                "strict embedding must resolve every font: " + strict.unresolved());
+        assertTrue(strict.embedded().contains("Helvetica")
+                        && strict.embedded().contains("Helvetica-Bold"),
+                "strict embedding must embed both the visible and invisible fonts: "
+                        + strict.embedded());
+        try (PDDocument embedded = Loader.loadPDF(strict.pdf())) {
+            PDResources resources = embedded.getPage(0).getResources();
+            for (COSName name : resources.getFontNames()) {
+                PDFont font = resources.getFont(name);
+                assertNotNull(font.getFontDescriptor(),
+                        "substituted font " + font.getName() + " must carry a descriptor");
+                assertNotNull(font.getFontDescriptor().getFontFile2(),
+                        "substituted font " + font.getName() + " must carry an embedded program");
+            }
+        }
+    }
+
+    @Test
+    void bestEffortEmbedsFontWhenAllTextIsInvisible() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native font replacement unavailable");
+        // A document whose only text is invisible must not regress to leaving the
+        // font unembedded: the visibility scan reports no visible usage at all and
+        // the skip is disabled for the whole document.
+        byte[] pdf = twoFontMixedVisibilityPdf("Times-Roman", "Times-Roman");
+        PdfFontEmbedder.Result result = PdfFontEmbedder.embedMissing(pdf);
+        assertTrue(result.unresolved().isEmpty(), "unresolved: " + result.unresolved());
+        assertTrue(result.embedded().contains("Times-Roman"),
+                "all-invisible document must still embed its font: " + result.embedded());
+    }
+
+    @Test
+    void controlCodepointsDoNotBlockSubstitution() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native font replacement unavailable");
+        // PDFium reports raw control codes for glyphs without a usable Unicode
+        // mapping (pdfjs_TAMReview.pdf maps its CIDs to U+0002). No substitute
+        // font covers C0 controls, so requiring them would reject every candidate.
+        byte[] pdf = identityCidPdf("LiberationSans", "<0001> <0002>");
+        PdfFontEmbedder.Result result = PdfFontEmbedder.embedMissing(pdf);
+        assertTrue(result.unresolved().isEmpty(),
+                "control codepoints must not block substitution: " + result.unresolved()
+                        + " statuses=" + result.statuses());
+        try (PdfDocument doc = PdfDocument.open(result.pdf())) {
+            assertFalse(PdfFontAuditor.hasNonEmbeddedFonts(doc),
+                    "the font must be embedded in the output");
+        }
+    }
+
+    @Test
+    void replacementMarkerCodepointDoesNotBlockSubstitution() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native font replacement unavailable");
+        // U+FFFD is what PDFium reports when a ToUnicode entry is missing entirely;
+        // like C0/C1 controls it can never be covered by a substitute font.
+        byte[] pdf = identityCidPdf("LiberationSans", "<0001> <FFFD>");
+        PdfFontEmbedder.Result result = PdfFontEmbedder.embedMissing(pdf);
+        assertTrue(result.unresolved().isEmpty(),
+                "the replacement marker must not block substitution: " + result.unresolved()
+                        + " statuses=" + result.statuses());
+        try (PdfDocument doc = PdfDocument.open(result.pdf())) {
+            assertFalse(PdfFontAuditor.hasNonEmbeddedFonts(doc),
+                    "the font must be embedded in the output");
+        }
+    }
 }

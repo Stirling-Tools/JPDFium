@@ -291,6 +291,12 @@ public final class PdfFontEmbedder {
      * signed documents can have missing fonts embedded.
      */
     public static Result embedMissing(byte[] pdf, boolean stripSignatures, Path... fontDirs) throws IOException {
+        return embedMissingCore(pdf, stripSignatures, false, fontDirs);
+    }
+
+    private static Result embedMissingCore(
+            byte[] pdf, boolean stripSignatures, boolean includeInvisibleText, Path... fontDirs)
+            throws IOException {
         if (pdf == null || pdf.length == 0) {
             return new Result(pdf == null ? new byte[0] : pdf, List.of(), List.of(), List.of());
         }
@@ -322,7 +328,11 @@ public final class PdfFontEmbedder {
         Map<Face, byte[]> operationPrograms = new HashMap<>();
         List<FontStatus> statuses = new ArrayList<>(missing.size());
         for (String name : missing) {
-            if (visibleFonts != null && !visibleFonts.isEmpty() && !visibleFonts.contains(key(name))
+            // Best-effort embedding may skip fonts whose text is entirely invisible
+            // (render mode 3). The strict path must not: PDF/A-2 6.2.11.5 requires
+            // invisible-text fonts to carry an embedded program too.
+            if (!includeInvisibleText && visibleFonts != null && !visibleFonts.isEmpty()
+                    && !visibleFonts.contains(key(name))
                     && !resourceOnly.contains(name)) {
                 statuses.add(new FontStatus(name, "", -1, false,
                         "font is only used in invisible text (Tr 3)"));
@@ -452,14 +462,16 @@ public final class PdfFontEmbedder {
 
     /**
      * Embed missing fonts, optionally stripping signatures, and reject any result that still has
-     * an unembedded font.
+     * an unembedded font. Fonts used only by invisible text (render mode 3) are embedded too:
+     * PDF/A-2 6.2.11.5 requires them to carry a font program, so the strict path never skips
+     * them the way the best-effort {@link #embedMissing(byte[], boolean, Path...)} entry does.
      */
     public static Result embedMissingStrict(byte[] pdf, boolean stripSignatures, Path... fontDirs) throws IOException {
         if (!QpdfLib.isFontInventorySupported()) {
             throw new JPDFiumException(
                     "strict font embedding requires the native font inventory");
         }
-        return embedMissing(pdf, stripSignatures, fontDirs).requireAllEmbedded();
+        return embedMissingCore(pdf, stripSignatures, true, fontDirs).requireAllEmbedded();
     }
 
     /**
@@ -770,6 +782,18 @@ public final class PdfFontEmbedder {
             for (PageText page : PdfTextExtractor.extractAll(doc)) {
                 for (TextChar ch : page.chars()) {
                     if (ch.unicode() <= 0 || ch.fontName() == null || ch.fontName().isEmpty()) {
+                        continue;
+                    }
+                    // PDFium reports raw character codes for glyphs without a
+                    // Unicode mapping and U+FFFD when a ToUnicode entry is
+                    // missing entirely. Requiring a substitute to "cover" those
+                    // would reject every candidate (no fallback font carries a
+                    // C0/C1 control glyph), so control characters and the
+                    // replacement marker are excluded from the required set.
+                    // The original font never renders them through a real glyph
+                    // mapping either, so dropping them cannot change the text.
+                    if (ch.unicode() <= 0x1F || (ch.unicode() >= 0x7F && ch.unicode() <= 0x9F)
+                            || ch.unicode() == 0xFFFD) {
                         continue;
                     }
                     result.computeIfAbsent(key(ch.fontName()), k -> new HashSet<>())
