@@ -587,7 +587,9 @@ public final class PdfFontAuditor {
                 MemorySegment raw = page.rawHandleForRead();
                 int annotations =
                         (int) AnnotationBindings.FPDFPage_GetAnnotCount.invokeExact(raw);
-                if (annotations > 0) return Set.of();
+                // Annotation appearance streams are not walked here, so the
+                // visible set would be incomplete.
+                if (annotations > 0) return null;
                 int count = (int) PageEditBindings.FPDFPage_CountObjects.invokeExact(raw);
                 for (int j = 0; j < count; j++) {
                     MemorySegment obj =
@@ -596,7 +598,9 @@ public final class PdfFontAuditor {
                 }
             } catch (Throwable t) {
                 NativeRuntime.rethrowFatal(t);
-                // A page that cannot be walked tells us nothing; do not hide fonts.
+                // A page that cannot be walked tells us nothing; signal an
+                // incomplete result instead of hiding fonts.
+                return null;
             }
         }
         return keys;
@@ -688,7 +692,8 @@ public final class PdfFontAuditor {
                 if (len <= 0) return null;
                 return buf.asSlice(0, len).toArray(ValueLayout.JAVA_BYTE);
             }
-        } catch (Throwable _) {
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
             return null;
         }
     }

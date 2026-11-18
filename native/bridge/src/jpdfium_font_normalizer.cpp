@@ -862,12 +862,11 @@ static bool cmapFitsProgram(std::shared_ptr<Buffer> const& data, FT_Face face) {
             if (base + static_cast<size_t>(groups) * 12 > cmapOff + cmapLen) continue;
             for (uint32_t g = 0; g < groups; ++g) {
                 const size_t p = base + static_cast<size_t>(g) * 12;
+                const uint32_t first = readU32BE(b + p);
                 const uint32_t last = readU32BE(b + p + 4);
-                const uint32_t first = readU32BE(b + p + 8);
-                const uint32_t startGid = readU32BE(b + p + 12);
-                (void)last;
+                const uint32_t startGid = readU32BE(b + p + 8);
                 if (first > last) continue;
-                if (startGid + (last - first) >= maxGid) return false;
+                if (static_cast<uint64_t>(startGid) + (last - first) >= maxGid) return false;
             }
         } else if (fmt == 6 && cmapLen - rel >= 10) {
             const uint16_t first = readU16BE(b + off + 6);
