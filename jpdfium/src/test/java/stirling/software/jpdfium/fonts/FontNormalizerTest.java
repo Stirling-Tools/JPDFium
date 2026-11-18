@@ -1,12 +1,15 @@
 package stirling.software.jpdfium.fonts;
 
 import org.junit.jupiter.api.Test;
+import stirling.software.jpdfium.exception.PdfCorruptException;
 import stirling.software.jpdfium.model.FontType;
+import stirling.software.jpdfium.panama.NativeRuntime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * Tests for {@link FontNormalizer}.
@@ -44,27 +47,19 @@ class FontNormalizerTest {
 
     @Test
     void classifyEmptyFontDataRejects() {
-        // Real FreeType correctly rejects empty data; stub returns a default
-        try {
-            FontNormalizer.FontClassification fc = FontNormalizer.classify(EMPTY_BYTES);
-            assertNotNull(fc);
-            assertNotNull(fc.type());
-        } catch (Exception e) {
-            // Real library throws for invalid/empty font data - acceptable
-            assertNotNull(e.getMessage());
-        }
+        // The real bridge must fail closed on empty font data: FreeType rejects
+        // it and classify surfaces that as PdfCorruptException. The stub
+        // returns a default, so the pin only runs against the real library.
+        assumeTrue(NativeRuntime.isFull(), "classify contract requires the real native library");
+        assertThrows(PdfCorruptException.class, () -> FontNormalizer.classify(EMPTY_BYTES));
     }
 
     @Test
     void classifyNonFontDataRejectsGracefully() {
-        // Real FreeType correctly rejects random bytes; stub returns a default
-        try {
-            FontNormalizer.FontClassification fc = FontNormalizer.classify(
-                    new byte[]{0x00, 0x01, 0x02, 0x03});
-            assertNotNull(fc);
-        } catch (Exception e) {
-            // Real library throws for invalid font data - acceptable
-            assertNotNull(e.getMessage());
-        }
+        // Random bytes are not a font in any format FreeType recognizes; the
+        // real bridge must reject them instead of reporting a classification.
+        assumeTrue(NativeRuntime.isFull(), "classify contract requires the real native library");
+        assertThrows(PdfCorruptException.class,
+                () -> FontNormalizer.classify(new byte[] {0x00, 0x01, 0x02, 0x03}));
     }
 }
