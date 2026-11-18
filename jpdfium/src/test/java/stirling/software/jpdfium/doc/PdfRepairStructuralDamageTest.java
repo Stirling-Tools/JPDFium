@@ -6,6 +6,7 @@ import org.apache.pdfbox.text.PDFTextStripper;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import stirling.software.jpdfium.PdfDocument;
+import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.panama.NativeRuntime;
 
 import java.io.IOException;
@@ -91,7 +92,11 @@ class PdfRepairStructuralDamageTest {
         assertTrue(result.isUsable(), "rotated PDF must repair: " + result.status());
         try (PdfDocument doc = PdfDocument.open(result.repairedPdf())) {
             assertEquals(1, doc.pageCount());
-            assertEquals(1, doc.page(0).rotation(), "90-degree page rotation must survive repair");
+            // One try-with-resources page: an unclosed doc.page() pins a tracked
+            // native page for the whole JVM and later lifecycle restores fail.
+            try (PdfPage page = doc.page(0)) {
+                assertEquals(1, page.rotation(), "90-degree page rotation must survive repair");
+            }
         }
     }
 
@@ -400,9 +405,13 @@ class PdfRepairStructuralDamageTest {
         assertTrue(result.isUsable(), "inherited attributes must repair: " + result.status());
         try (PdfDocument doc = PdfDocument.open(result.repairedPdf())) {
             assertEquals(1, doc.pageCount());
-            assertEquals(300.0, doc.page(0).size().width(), 1.0);
-            assertEquals(200.0, doc.page(0).size().height(), 1.0);
-            assertEquals(1, doc.page(0).rotation(), "90-degree rotation must be inherited");
+            // All three asserts share one page handle: three unclosed doc.page()
+            // calls would pin three tracked pages for the rest of the JVM.
+            try (PdfPage page = doc.page(0)) {
+                assertEquals(300.0, page.size().width(), 1.0);
+                assertEquals(200.0, page.size().height(), 1.0);
+                assertEquals(1, page.rotation(), "90-degree rotation must be inherited");
+            }
         }
     }
 
@@ -445,7 +454,9 @@ class PdfRepairStructuralDamageTest {
         assertTrue(result.isUsable(), "orphan with Resources before Type must repair: " + result.status());
         try (PdfDocument doc = PdfDocument.open(result.repairedPdf())) {
             assertEquals(1, doc.pageCount());
-            assertEquals(200.0, doc.page(0).size().width(), 1.0);
+            try (PdfPage page = doc.page(0)) {
+                assertEquals(200.0, page.size().width(), 1.0);
+            }
         }
     }
 
