@@ -19,8 +19,8 @@ import java.util.List;
  * {@code @Tag("corpus")} and guarded with {@code @EnabledIfSystemProperty} so they are skipped
  * in offline CI environments.
  * <p>
- * Sources: Mozilla pdf.js test suite (public domain test files) and pdfcpu samples
- * (Apache-2.0) - both stable, no authentication required.
+ * Sources: Mozilla pdf.js test suite and pdfcpu samples - both Apache-2.0,
+ * both stable, no authentication required.
  */
 public final class PdfCorpus {
 
