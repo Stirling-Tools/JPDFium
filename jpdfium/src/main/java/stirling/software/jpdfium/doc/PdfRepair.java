@@ -1048,6 +1048,141 @@ public final class PdfRepair {
         return -1;
     }
 
+    /**
+     * Returns the index just past the first balanced {@code << >>} dictionary in
+     * {@code fragment}, or -1 when the fragment never closes one. Truncated
+     * repair candidates use the balanced prefix instead of the broken tail.
+     */
+    // Closes an unbalanced PDF fragment by dropping an unterminated tail:
+    // everything after the last complete value before the first unclosed
+    // structural token. Mirrors how tolerant parsers recover objects cut
+    // mid-array or mid-dictionary.
+    private static String closeUnbalancedFragment(String fragment) {
+        int depthDict = 0;
+        int depthArray = 0;
+        boolean literal = false;
+        boolean literalEscape = false;
+        boolean hex = false;
+        boolean comment = false;
+        int lastKeyStart = -1;
+        for (int i = 0; i < fragment.length(); i++) {
+            char c = fragment.charAt(i);
+            if (comment) {
+                if (c == '\n' || c == '\r') comment = false;
+                continue;
+            }
+            if (literal) {
+                if (literalEscape) literalEscape = false;
+                else if (c == '\\') literalEscape = true;
+                else if (c == ')') literal = false;
+                continue;
+            }
+            if (hex) {
+                if (c == '>') hex = false;
+                continue;
+            }
+            if (c == '%') {
+                comment = true;
+                continue;
+            }
+            if (c == '(') {
+                literal = true;
+                continue;
+            }
+            if (c == '<' && i + 1 < fragment.length() && fragment.charAt(i + 1) == '<') {
+                depthDict++;
+                i++;
+                continue;
+            }
+            if (c == '>' && i + 1 < fragment.length() && fragment.charAt(i + 1) == '>') {
+                depthDict--;
+                i++;
+                if (depthDict <= 0) return null; // balanced already
+                continue;
+            }
+            if (c == '<') {
+                hex = true;
+                continue;
+            }
+            if (c == '[') {
+                depthArray++;
+                continue;
+            }
+            if (c == ']') {
+                depthArray--;
+                if (depthArray < 0) return null;
+                continue;
+            }
+            if (c == '/' && depthArray == 0 && depthDict == 1 && !literal && !hex && !comment) {
+                // Remember each top-level key start: the cut point for a fragment
+                // truncated inside a later value is just before the last key.
+                lastKeyStart = i;
+            }
+        }
+        if (lastKeyStart < 0) return null;
+        // Drop the unterminated key and everything after it, then close the
+        // containers that were open at that point (counted from the cut).
+        String head = fragment.substring(0, lastKeyStart).stripTrailing();
+        int openArrays = 0;
+        int openDicts = 0;
+        for (int i = 0; i < lastKeyStart; i++) {
+            char c = fragment.charAt(i);
+            if (c == '[') openArrays++;
+            else if (c == ']') openArrays--;
+            else if (i + 1 < lastKeyStart && c == '<' && fragment.charAt(i + 1) == '<') {
+                openDicts++;
+                i++;
+            } else if (i + 1 < lastKeyStart && c == '>' && fragment.charAt(i + 1) == '>') {
+                openDicts--;
+                i++;
+            }
+        }
+        if (openDicts <= 0 || openArrays < 0) return null;
+        StringBuilder tail = new StringBuilder();
+        for (int i = 0; i < openArrays; i++) tail.append(" ]");
+        tail.append(" >>");
+        return head + tail;
+    }
+
+    private static int closedDictionaryEnd(String fragment) {
+        int depth = 0;
+        boolean literal = false;
+        boolean hex = false;
+        boolean comment = false;
+        boolean escape = false;
+        for (int i = 0; i < fragment.length(); i++) {
+            char c = fragment.charAt(i);
+            char n = i + 1 < fragment.length() ? fragment.charAt(i + 1) : '\0';
+            if (comment) {
+                if (c == '\n' || c == '\r') comment = false;
+                continue;
+            }
+            if (literal) {
+                if (escape) escape = false;
+                else if (c == '\\') escape = true;
+                else if (c == ')') literal = false;
+                continue;
+            }
+            if (hex) {
+                if (c == '>') hex = false;
+                continue;
+            }
+            if (c == '%') comment = true;
+            else if (c == '(') literal = true;
+            else if (c == '<' && n == '<') {
+                depth++;
+                i++;
+            } else if (c == '>' && n == '>') {
+                depth--;
+                i++;
+                if (depth == 0) return i + 1;
+            } else if (c == '<') {
+                hex = true;
+            }
+        }
+        return -1;
+    }
+
     private static String replaceParent(String dict, long parent) {
         java.util.regex.Matcher m = Pattern.compile("/Parent\\s+\\d+\\s+\\d+\\s+R").matcher(dict);
         if (m.find()) {
@@ -1258,8 +1393,30 @@ public final class PdfRepair {
             int start = pageStarts.get(i);
             out.append(text, cursor, start);
             int end = text.indexOf("endobj", start);
+            int junk = text.indexOf("%PDF-", start + 5);
+            if (junk >= 0 && (end < 0 || junk < end)) end = junk;
             if (end < 0) end = text.length();
             String dict = text.substring(start, end);
+            int close = closedDictionaryEnd(dict);
+            if (close >= 0 && close < dict.length()) {
+                // A page dictionary truncated mid-way (e.g. by a mid-file second
+                // %PDF header) keeps a usable prefix; close it and drop the tail.
+                dict = dict.substring(0, close);
+            } else {
+                // The dictionary itself never closes: the object was cut mid-way
+                // (often inside /Annots or another array). Close any open arrays
+                // and dictionaries so the fragment becomes a valid object again.
+                String recovered = closeUnbalancedFragment(dict);
+                if (recovered != null) {
+                    dict = recovered;
+                    // The original object body ran into following junk; rewrite
+                    // the recovered fragment as a complete object of its own and
+                    // skip past the junk instead of splicing the tail back in.
+                    out.append(dict).append("\nendobj\n");
+                    cursor = end;
+                    continue;
+                }
+            }
             if (pageNumbers.get(i) >= 0) {
                 dict = inheritPageAttributes(dict, text, pageNumbers.get(i), 0);
             }
