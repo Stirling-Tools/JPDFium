@@ -47,10 +47,17 @@ import java.nio.file.Path;
  */
 public final class PdfRepair {
 
-    // Core repair flags - must match jpdfium.h
-    private static final int FLAG_FORCE_V14 = 0x0001;
-    private static final int FLAG_NORMALIZE_XREF = 0x0002;
-    private static final int FLAG_FIX_STARTXREF = 0x0004;
+    // Core repair flags - bit values must match the JPDFIUM_REPAIR_* defines in
+    // native/bridge/include/jpdfium.h. The previous permutation silently mapped
+    // forceVersion14() to xref normalization and normalizeXref() to startxref
+    // correction; it went unnoticed because Builder.all() sets every bit.
+    // Core repair flags - bit values must match the JPDFIUM_REPAIR_* defines in
+    // native/bridge/include/jpdfium.h. The previous permutation silently mapped
+    // forceVersion14() to xref normalization and normalizeXref() to startxref
+    // correction; it went unnoticed because Builder.all() sets every bit.
+    private static final int FLAG_NORMALIZE_XREF = 0x0001;
+    private static final int FLAG_FIX_STARTXREF = 0x0002;
+    private static final int FLAG_FORCE_V14 = 0x0004;
 
     private final byte[] inputBytes;
     private final int flags;
