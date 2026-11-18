@@ -136,6 +136,10 @@ public final class QpdfLib {
                     "jpdfium_qpdf_inspect_fonts_file",
                     FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
 
+    private static final MethodHandle PDFA_PART_HANDLE = Symbols.downcallOptionalUnguarded(
+            "jpdfium_qpdf_pdfa_part",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS));
+
     private static final MethodHandle SUBSET_FONTS_HANDLE = Symbols.downcallOptionalUnguarded(
             "jpdfium_qpdf_subset_fonts",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
@@ -252,6 +256,35 @@ public final class QpdfLib {
         } catch (Throwable t) {
             NativeRuntime.rethrowFatal(t);
             throw new JPDFiumException("qpdf font inspection failed", t);
+        } finally {
+            releaseSlot(held);
+        }
+    }
+
+    /** True when this native build can inspect the PDF/A conformance part. */
+    public static boolean isPdfaPartSupported() {
+        return PDFA_PART_HANDLE != null;
+    }
+
+    /**
+     * PDF/A conformance part through the parsed catalog: -1 no claim, 1 PDF/A-1, 2 PDF/A-2 or
+     * later. Object-stream and Flate aware, unlike the JVM's raw-byte sweep: a catalog
+     * compressed into an object stream still reports its claim.
+     *
+     * @return the part, or -1 when the input cannot be parsed or no claim is present
+     */
+    public static int pdfaPart(byte[] input) {
+        if (PDFA_PART_HANDLE == null || input == null || input.length == 0) return -1;
+        Semaphore held = acquireSlotOrThrow("qpdf pdfa part");
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment partPtr = arena.allocate(JAVA_INT);
+            int rc = (int) PDFA_PART_HANDLE.invokeExact(
+                    arena.allocateFrom(JAVA_BYTE, input), (long) input.length, partPtr);
+            if (rc != 0) return -1;
+            return partPtr.get(JAVA_INT, 0);
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            return -1;
         } finally {
             releaseSlot(held);
         }

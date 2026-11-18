@@ -84,6 +84,12 @@ public final class PdfCompressor {
     // profiles and forbid JBIG2; only PDF/X-4 (15930-7) and later allow it.
     private static final byte[] PDFX_VERSION_MARKER =
             "GTS_PDFXVersion".getBytes(StandardCharsets.US_ASCII);
+
+    // Object-stream marker: its presence means dictionaries can be hidden
+    // from the raw sweep, which gates the native catalog fallback in
+    // resolvePdfaPart.
+    private static final byte[] OBJSTM_MARKER = "/ObjStm".getBytes(StandardCharsets.US_ASCII);
+
     // Upper bound on an inflated metadata stream: a crafted /Metadata Flate bomb
     // must not be able to exhaust the heap.
     private static final int MAX_XMP_BYTES = 4 << 20;
@@ -116,7 +122,8 @@ public final class PdfCompressor {
     private static final int N_TYPE_SIG = 9;
     private static final int N_TYPE_SPACE_SIG = 10;
     private static final int N_SUBFILTER = 11;
-    private static final int N_NEEDLES = 12;
+    private static final int N_OBJSTM = 12;
+    private static final int N_NEEDLES = 13;
 
     // The /ID key is matched byte-by-byte and its range is packed into a long, so the
     // signed fast path performs no allocation of its own.
@@ -140,6 +147,7 @@ public final class PdfCompressor {
             SIG_MARKERS[0],
             SIG_MARKERS[1],
             SIG_MARKERS[2],
+            OBJSTM_MARKER,
     };
 
     private static final int[] NO_NEEDLES = new int[0];
@@ -241,7 +249,7 @@ public final class PdfCompressor {
         // 1. A PDF/A conformance claim pins the file's structure and colour
         //    handling; lossy image passes and metadata removal would break it,
         //    so preserve conformance instead.
-        int pdfPart = pdfaPart(sourceBytes, markers);
+        int pdfPart = resolvePdfaPart(sourceBytes, pdfaPart(sourceBytes, markers), markers);
         boolean pdfA = pdfPart >= 1;
         boolean pdfA1 = pdfPart == 1;
         if (pdfA) {
@@ -609,7 +617,28 @@ public final class PdfCompressor {
     // catalog's /Metadata stream is inflated, never the whole file, so a large
     // embedded image is not decompressed just to look for a claim.
     static int pdfaPart(byte[] pdf) {
-        return pdfaPart(pdf, scanMarkers(pdf));
+        Markers m = scanMarkers(pdf);
+        return resolvePdfaPart(pdf, pdfaPart(pdf, m), m);
+    }
+
+    // Final PDF/A part resolution: raw-scan result plus a structural fallback.
+    // When the raw sweep and the metadata-stream scan both miss but the file
+    // uses object streams, the catalog (and its /Metadata reference) may be
+    // compressed where the sweep cannot see it - and this pipeline's own qpdf
+    // stage writes exactly that layout, so re-compressing a PDF/A file must
+    // not lose its claim. The native side reads the parsed catalog, which is
+    // object-stream and Flate aware; unparseable input answers -1, so the
+    // fallback never fails a claim open.
+    private static int resolvePdfaPart(byte[] pdf, int rawPart, Markers m) {
+        if (rawPart >= 0) return rawPart;
+        if (pdf == null || m.first[N_OBJSTM] < 0) return -1;
+        if (!QpdfLib.isPdfaPartSupported()) return -1;
+        try {
+            return QpdfLib.pdfaPart(pdf);
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            return -1;
+        }
     }
 
     private static int pdfaPart(byte[] pdf, Markers m) {
