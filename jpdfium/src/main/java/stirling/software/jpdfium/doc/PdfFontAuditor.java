@@ -5,6 +5,7 @@ import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.panama.AnnotationBindings;
 import stirling.software.jpdfium.panama.NativeRuntime;
+import stirling.software.jpdfium.panama.AnnotationBindings;
 import stirling.software.jpdfium.panama.PageEditBindings;
 import stirling.software.jpdfium.panama.QpdfLib;
 import stirling.software.jpdfium.util.NativeJsonParser;
@@ -571,6 +572,162 @@ public final class PdfFontAuditor {
             if (!child.equals(MemorySegment.NULL)) {
                 scanObject(child, pageIdx, fontMap, seenOnPage, depth + 1);
             }
+        }
+    }
+
+    /**
+     * Font base names used by text objects that are actually painted. Text in
+     * rendering mode 3 (invisible OCR layers) is excluded. Nested form XObjects
+     * are traversed when the native build supports it.
+     */
+    public static Set<String> visibleFontKeys(PdfDocument doc) {
+        Set<String> keys = new LinkedHashSet<>();
+        for (int i = 0; i < doc.pageCount(); i++) {
+            try (PdfPage page = doc.page(i)) {
+                MemorySegment raw = page.rawHandleForRead();
+                int annotations =
+                        (int) AnnotationBindings.FPDFPage_GetAnnotCount.invokeExact(raw);
+                if (annotations > 0) return Set.of();
+                int count = (int) PageEditBindings.FPDFPage_CountObjects.invokeExact(raw);
+                for (int j = 0; j < count; j++) {
+                    MemorySegment obj =
+                            (MemorySegment) PageEditBindings.FPDFPage_GetObject.invokeExact(raw, j);
+                    collectVisibleFonts(obj, keys, 0);
+                }
+            } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
+                // A page that cannot be walked tells us nothing; do not hide fonts.
+            }
+        }
+        return keys;
+    }
+
+    /**
+     * Embedded font base names whose stored program is empty, unreadable, or
+     * does not start with a recognized font magic. Such a font renders with a
+     * fallback and should be replaced when an embeddable substitute exists.
+     */
+    public static Set<String> corruptEmbeddedKeys(PdfDocument doc) {
+        Set<String> keys = new LinkedHashSet<>();
+        for (int i = 0; i < doc.pageCount(); i++) {
+            try (PdfPage page = doc.page(i)) {
+                MemorySegment raw = page.rawHandleForRead();
+                int count = (int) PageEditBindings.FPDFPage_CountObjects.invokeExact(raw);
+                for (int j = 0; j < count; j++) {
+                    MemorySegment obj =
+                            (MemorySegment) PageEditBindings.FPDFPage_GetObject.invokeExact(raw, j);
+                    collectCorruptFonts(obj, keys, 0);
+                }
+            } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
+                // Best effort; leave unknown fonts alone.
+            }
+        }
+        return keys;
+    }
+
+    /**
+     * Names of fonts whose descriptor points at an embedded program that is not a
+     * recognizable font program. Uses the qpdf inventory so a program PDFium refuses to expose
+     * is still detected.
+     */
+    static List<String> corruptEmbeddedKeys(byte[] pdf) {
+        if (pdf == null || pdf.length == 0 || !QpdfLib.isFontInventorySupported()) return List.of();
+        String json = QpdfLib.inspectFonts(pdf);
+        if (json == null || json.length() <= 2) return List.of();
+        Set<String> names = new LinkedHashSet<>();
+        for (Map<String, String> field : NativeJsonParser.parseArray(json)) {
+            if ("true".equals(field.get("program"))
+                    && "false".equals(field.get("programValid"))) {
+                String name = field.getOrDefault("baseFont", "");
+                if (!name.isEmpty()) names.add(name);
+            }
+        }
+        return List.copyOf(names);
+    }
+
+    private static void collectCorruptFonts(MemorySegment obj, Set<String> keys, int depth) {
+        if (depth > 64 || obj == null || obj.equals(MemorySegment.NULL)) return;
+        try {
+            int type = (int) PageEditBindings.FPDFPageObj_GetType.invokeExact(obj);
+            if (type == 1) {
+                MemorySegment font =
+                        (MemorySegment) PageEditBindings.FPDFTextObj_GetFont.invokeExact(obj);
+                String name = getFontBaseName(font);
+                if (name.isEmpty() || "<unknown>".equals(name)) return;
+                if ((int) PageEditBindings.FPDFFont_GetIsEmbedded.invokeExact(font) == 1) {
+                    byte[] data = getFontProgram(font);
+                    if (!looksLikeFontProgram(data)) {
+                        keys.add(name);
+                    }
+                }
+            } else if (type == 5 && PageEditBindings.formTraversalAvailable()) {
+                int children =
+                        (int) PageEditBindings.FPDFFormObj_CountObjects.invokeExact(obj);
+                for (int i = 0; i < children; i++) {
+                    collectCorruptFonts(PageEditBindings.formObject(obj, i), keys, depth + 1);
+                }
+            }
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            // Best effort.
+        }
+    }
+
+    private static byte[] getFontProgram(MemorySegment font) {
+        try {
+            long needed = getFontDataSize(font);
+            if (needed <= 0 || needed > 64L * 1024 * 1024) return null;
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment buf = arena.allocate(needed);
+                MemorySegment outLen = arena.allocate(ValueLayout.JAVA_LONG);
+                int ok = (int) PageEditBindings.FPDFFont_GetFontData.invokeExact(
+                        font, buf, needed, outLen);
+                if (ok == 0) return null;
+                long len = Math.min(needed, outLen.get(ValueLayout.JAVA_LONG, 0));
+                if (len <= 0) return null;
+                return buf.asSlice(0, len).toArray(ValueLayout.JAVA_BYTE);
+            }
+        } catch (Throwable _) {
+            return null;
+        }
+    }
+
+    static boolean looksLikeFontProgram(byte[] data) {
+        if (data == null || data.length < 4) return false;
+        if (data[0] == 0x00 && data[1] == 0x01 && data[2] == 0x00 && data[3] == 0x00) return true;
+        if (data[0] == 0x01 && data[1] == 0x00 && data[2] == 0x04 && data[3] == 0x04) return true;
+        String head = new String(data, 0, Math.min(4, data.length), StandardCharsets.ISO_8859_1);
+        if ("OTTO".equals(head) || "true".equals(head) || "ttcf".equals(head)) return true;
+        if (data.length >= 4 && data[0] == '%' && data[1] == '!') return true;
+        return data.length >= 2 && (data[0] & 0xFF) == 0x80 && data[1] == 0x01;
+    }
+
+    private static void collectVisibleFonts(MemorySegment obj, Set<String> keys, int depth) {
+        if (depth > 64 || obj == null || obj.equals(MemorySegment.NULL)) return;
+        try {
+            int type = (int) PageEditBindings.FPDFPageObj_GetType.invokeExact(obj);
+            if (type == 1) {
+                int renderMode =
+                        (int) PageEditBindings.FPDFTextObj_GetTextRenderMode.invokeExact(obj);
+                if (renderMode != 3) {
+                    MemorySegment font =
+                            (MemorySegment) PageEditBindings.FPDFTextObj_GetFont.invokeExact(obj);
+                    String name = getFontBaseName(font);
+                    if (!name.isEmpty() && !"<unknown>".equals(name)) {
+                        keys.add(PdfFontEmbedder.key(name));
+                    }
+                }
+            } else if (type == 5 && PageEditBindings.formTraversalAvailable()) {
+                int children =
+                        (int) PageEditBindings.FPDFFormObj_CountObjects.invokeExact(obj);
+                for (int i = 0; i < children; i++) {
+                    MemorySegment child = PageEditBindings.formObject(obj, i);
+                    collectVisibleFonts(child, keys, depth + 1);
+                }
+            }
+        } catch (Throwable _) {
+            // Best-effort scan; keep whatever was collected.
         }
     }
 
