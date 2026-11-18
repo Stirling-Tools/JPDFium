@@ -215,6 +215,19 @@ pub unsafe extern "C" fn jpdfium_rust_repair_lopdf(
 
     let input_slice = slice::from_raw_parts(input, input_len as usize);
 
+    // Rewriting a signed document always breaks its /ByteRange digest. The
+    // Java repair pipeline refuses marker inputs before reaching this
+    // fallback, and the qpdf routes verify parsed signature dictionaries;
+    // this raw scan keeps direct native callers of the lopdf fallback from
+    // silently invalidating signatures.
+    const BYTE_RANGE: &[u8] = b"/ByteRange";
+    if input_slice
+        .windows(BYTE_RANGE.len())
+        .any(|w| w == BYTE_RANGE)
+    {
+        return JPDFIUM_REPAIR_FAILED;
+    }
+
     match repair_lopdf_impl(input_slice) {
         Ok(bytes) => {
             let ptr = malloc_copy(&bytes);

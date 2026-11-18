@@ -8,6 +8,7 @@
 
 #include "jpdfium.h"
 #include "jpdfium_font_encoding.h"
+#include "jpdfium_rust.h"
 
 namespace {
 
@@ -492,6 +493,63 @@ void runRepairEdgeChecks() {
                 jpdfium_doc_close(doc);
             }
             jpdfium_free_buffer(repaired);
+        }
+    }
+
+    // 3. Every native rewrite route must refuse a signed document instead of
+    // silently invalidating its /ByteRange digest.
+    {
+        std::string pdf = "%PDF-1.4\n";
+        size_t o1 = pdf.size();
+        pdf += "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n";
+        size_t o2 = pdf.size();
+        pdf += "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n";
+        size_t o3 = pdf.size();
+        pdf += "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>\nendobj\n";
+        size_t o4 = pdf.size();
+        pdf +=
+            "4 0 obj\n<< /Type /Sig /Filter /Adobe.PPKLite /ByteRange [0 100 100 100] "
+            "/Contents <00> >>\nendobj\n";
+        size_t xOff = pdf.size();
+        char xb[320];
+        std::snprintf(xb, sizeof(xb),
+                      "xref\n0 5\n0000000000 65535 f \n%010zu 00000 n \n%010zu 00000 n \n"
+                      "%010zu 00000 n \n%010zu 00000 n \ntrailer\n<< /Root 1 0 R /Size 5 >>\n"
+                      "startxref\n%zu\n%%%%EOF\n",
+                      o1, o2, o3, o4, xOff);
+        pdf += xb;
+
+        uint8_t* out = nullptr;
+        int64_t outLen = 0;
+        int32_t rc = jpdfium_repair_pdf(reinterpret_cast<const uint8_t*>(pdf.data()),
+                                        static_cast<int64_t>(pdf.size()), &out, &outLen,
+                                        0x7 /* all repair flags */);
+        CHECK(rc == JPDFIUM_REPAIR_FAILED && out == nullptr,
+              "repair refuses a signed document instead of rewriting it");
+
+        out = nullptr;
+        outLen = 0;
+        int32_t oc = jpdfium_qpdf_optimize_ex(reinterpret_cast<const uint8_t*>(pdf.data()),
+                                              static_cast<int64_t>(pdf.size()), &out, &outLen, 0,
+                                              -1, -1, -1, -1, -1);
+        CHECK(oc == -1 && out == nullptr, "qpdf optimize refuses a signed document");
+
+        out = nullptr;
+        outLen = 0;
+        int32_t pages = 0;
+        int32_t pc =
+            jpdfium_pdfio_try_repair(reinterpret_cast<const uint8_t*>(pdf.data()),
+                                     static_cast<int64_t>(pdf.size()), &out, &outLen, &pages);
+        CHECK((pc == JPDFIUM_REPAIR_FAILED || pc == JPDFIUM_ERR_NATIVE) && out == nullptr,
+              "pdfio repair refuses a signed document");
+
+        if (jpdfium_has_rust() == 1) {
+            out = nullptr;
+            outLen = 0;
+            int32_t rr = jpdfium_rust_repair_lopdf(reinterpret_cast<const uint8_t*>(pdf.data()),
+                                                   static_cast<int64_t>(pdf.size()), &out, &outLen);
+            CHECK(rr == JPDFIUM_REPAIR_FAILED && out == nullptr,
+                  "rust lopdf repair refuses a signed document");
         }
     }
 }
