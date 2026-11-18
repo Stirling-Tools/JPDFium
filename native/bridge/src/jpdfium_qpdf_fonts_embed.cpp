@@ -117,10 +117,13 @@ void applyWidths(QPDFObjectHandle& font, QPDFObjectHandle const& widths) {
     font.replaceKey("/Widths", widths);
 }
 
+bool hasInheritedToUnicode(QPDFObjectHandle const& font);
+
 void setToUnicode(QPDF& qpdf, QPDFObjectHandle font, std::map<uint32_t, FT_ULong> const& codes,
                   bool twoByte) {
     if (codes.empty()) return;
-    if (font.hasKey("/ToUnicode") && !parseToUnicode(font).empty()) return;
+    if (font.hasKey("/ToUnicode") && (hasInheritedToUnicode(font) || !parseToUnicode(font).empty()))
+        return;
     std::map<uint32_t, uint32_t> clean;
     for (auto const& [code, u] : codes) {
         if (u > 0 && u <= 0x10FFFFU) clean.emplace(code, static_cast<uint32_t>(u));
@@ -132,7 +135,8 @@ void setToUnicode(QPDF& qpdf, QPDFObjectHandle font, std::map<uint32_t, FT_ULong
 void setCjkToUnicode(QPDF& qpdf, QPDFObjectHandle font, std::map<uint32_t, FT_ULong> const& codes,
                      bool rksj) {
     if (codes.empty()) return;
-    if (font.hasKey("/ToUnicode") && !parseToUnicode(font).empty()) return;
+    if (font.hasKey("/ToUnicode") && (hasInheritedToUnicode(font) || !parseToUnicode(font).empty()))
+        return;
     std::map<uint32_t, uint32_t> clean;
     for (auto const& [code, u] : codes) {
         if (code <= 0xFFFFU && u > 0 && u <= 0x10FFFFU)
@@ -526,6 +530,11 @@ void collectEmbedCandidateFonts(QPDF& qpdf, std::vector<QPDFObjectHandle>& fonts
     if (acroForm.isDictionary()) collectFromResources(acroForm.getKey("/DR"));
 }
 
+bool hasInheritedToUnicode(QPDFObjectHandle const& font) {
+    auto toUnicode = font.getKey("/ToUnicode");
+    return toUnicode.isStream() && !toUnicode.getDict().getKey("/UseCMap").isNull();
+}
+
 bool prepareMissingCidMapping(QPDF& qpdf, QPDFObjectHandle& font, QPDFObjectHandle& target,
                               FontProgram const& program, bool indexedUsage,
                               FontUsageIndexes const& usage, FontEmbedJobState& job) {
@@ -541,6 +550,9 @@ bool prepareMissingCidMapping(QPDF& qpdf, QPDFObjectHandle& font, QPDFObjectHand
     bool korea1Ksc = isKscEucCidEncoding(predefinedEnc);
     bool cjkVertical = isVerticalCidEncoding(predefinedEnc);
 
+    // An inherited ToUnicode map can describe CIDs the local stream does not list;
+    // rebuilding a CIDToGIDMap from the local map alone would drop those glyphs.
+    if (hasInheritedToUnicode(font)) return false;
     // Rebuilding /CIDToGIDMap is only safe for Identity CID maps; custom maps stay verbatim.
     if (!job.identityCidMap) return false;
     if (job.predefinedCjk) {
@@ -662,7 +674,12 @@ void populateEmbeddedFontProgram(QPDF& qpdf, FT_Library lib, QPDFObjectHandle& f
     // Subsetting TrueType CID fonts renumbers retained GIDs, requiring a fresh /CIDToGIDMap.
     std::map<uint32_t, FT_UInt> remappedGlyph;
     std::set<FT_UInt> targetGlyphs;
-    if (cid && glyf && (job.identityEncoding || job.predefinedCjk) && job.identityCidMap) {
+    bool identityCidMap = job.identityCidMap || target.getKey("/CIDToGIDMap").isNull() ||
+                          target.getKey("/CIDToGIDMap").isNameAndEquals("/Identity");
+    bool identityEncoding = job.identityEncoding ||
+                            font.getKey("/Encoding").isNameAndEquals("/Identity-H") ||
+                            font.getKey("/Encoding").isNameAndEquals("/Identity-V");
+    if (cid && glyf && (identityEncoding || job.predefinedCjk) && identityCidMap) {
         std::map<uint32_t, FT_ULong> codes;
         if (job.predefinedCjk && !job.codeUnicode.empty()) {
             for (auto const& [code, unicode] : job.codeUnicode) codes[code] = unicode;
