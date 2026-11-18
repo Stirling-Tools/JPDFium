@@ -95,6 +95,92 @@ class PdfRepairTest {
     }
 
     @Test
+    void inspectDetectsZeroAreaClipPath() {
+        Assumptions.assumeTrue(PdfRepair.isSupported(), "zero-area clip scan needs qpdf");
+        String json = PdfRepair.inspect(singlePagePdf(
+                "q 0 0 0 0 re W n BT /F1 24 Tf 72 700 Td (Hidden) Tj ET Q", false));
+        assertTrue(json.contains("\"zero_area_clip_pages\":[1]"),
+                "page with 0-width clip must be listed: " + json);
+        assertTrue(json.contains("zero-area clipping path applied"),
+                "a diagnostic issue entry must explain the blank-render risk: " + json);
+    }
+
+    @Test
+    void inspectDetectsZeroAreaClipInCompressedContent() throws Exception {
+        Assumptions.assumeTrue(PdfRepair.isSupported(), "zero-area clip scan needs qpdf");
+        String json = PdfRepair.inspect(singlePagePdf(
+                "q 0 0 0 0 re W n BT /F1 24 Tf 72 700 Td (Hidden) Tj ET Q", true));
+        assertTrue(json.contains("\"zero_area_clip_pages\":[1]"),
+                "FlateDecode content must be scanned decompressed: " + json);
+    }
+
+    @Test
+    void inspectReportsNoClipIssueForCleanContent() {
+        Assumptions.assumeTrue(PdfRepair.isSupported(), "zero-area clip scan needs qpdf");
+        String json = PdfRepair.inspect(singlePagePdf(
+                "BT /F1 24 Tf 72 700 Td (Hello) Tj ET", false));
+        assertTrue(json.contains("\"zero_area_clip_pages\":[]"),
+                "clean page must not be flagged: " + json);
+        assertFalse(json.contains("zero-area"), "no issue entry without a degenerate clip");
+    }
+
+    /**
+     * Builds a structurally valid one-page PDF whose content stream is the given
+     * operators, optionally Flate-compressed, with a real xref table so no
+     * reconstruction is involved.
+     */
+    private static byte[] singlePagePdf(String content, boolean flate) {
+        byte[] streamBytes;
+        String dict;
+        if (flate) {
+            java.util.zip.Deflater def = new java.util.zip.Deflater();
+            def.setInput(content.getBytes(StandardCharsets.US_ASCII));
+            def.finish();
+            byte[] buf = new byte[4096];
+            int len = 0;
+            for (;;) {
+                int chunk = def.deflate(buf, len, buf.length - len);
+                if (chunk <= 0) break;
+                len += chunk;
+            }
+            def.end();
+            streamBytes = java.util.Arrays.copyOf(buf, len);
+            dict = "<< /Length " + streamBytes.length + " /Filter /FlateDecode >>";
+        } else {
+            streamBytes = content.getBytes(StandardCharsets.US_ASCII);
+            dict = "<< /Length " + streamBytes.length + " >>";
+        }
+        java.io.ByteArrayOutputStream pdf = new java.io.ByteArrayOutputStream();
+        pdf.writeBytes("%PDF-1.4\n".getBytes(StandardCharsets.US_ASCII));
+        String[] bodies = {
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792]"
+                    + " /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        };
+        int[] offsets = new int[6];
+        for (int i = 0; i < bodies.length; i++) {
+            offsets[i + 1] = pdf.size();
+            pdf.writeBytes(((i + 1) + " 0 obj\n" + bodies[i] + "\nendobj\n")
+                    .getBytes(StandardCharsets.US_ASCII));
+        }
+        offsets[5] = pdf.size();
+        pdf.writeBytes(("5 0 obj\n" + dict + "\nstream\n").getBytes(StandardCharsets.US_ASCII));
+        pdf.writeBytes(streamBytes);
+        pdf.writeBytes("\nendstream\nendobj\n".getBytes(StandardCharsets.US_ASCII));
+        int xref = pdf.size();
+        pdf.writeBytes("xref\n0 6\n0000000000 65535 f \n".getBytes(StandardCharsets.US_ASCII));
+        for (int obj = 1; obj <= 5; obj++) {
+            pdf.writeBytes(String.format("%010d 00000 n \n", offsets[obj])
+                    .getBytes(StandardCharsets.US_ASCII));
+        }
+        pdf.writeBytes(("trailer\n<< /Root 1 0 R /Size 6 >>\nstartxref\n" + xref + "\n%%EOF\n")
+                .getBytes(StandardCharsets.US_ASCII));
+        return pdf.toByteArray();
+    }
+
+    @Test
     void inspectHandlesEmptyInput() {
         assertEquals("{\"error\":\"empty input\"}", PdfRepair.inspect(EMPTY_BYTES));
     }
