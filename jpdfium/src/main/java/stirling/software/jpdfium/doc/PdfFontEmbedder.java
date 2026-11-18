@@ -307,7 +307,7 @@ public final class PdfFontEmbedder {
         }
         List<String> missing = List.copyOf(names);
         if (missing.isEmpty()) return new Result(pdf, List.of(), List.of(), List.of());
-        Set<String> visibleFonts = Set.of();
+        Set<String> visibleFonts = null;
         Map<String, Set<Integer>> usedCodepoints = Map.of();
         try (PdfDocument doc = PdfDocument.open(pdf)) {
             visibleFonts = PdfFontAuditor.visibleFontKeys(doc);
@@ -322,7 +322,7 @@ public final class PdfFontEmbedder {
         Map<Face, byte[]> operationPrograms = new HashMap<>();
         List<FontStatus> statuses = new ArrayList<>(missing.size());
         for (String name : missing) {
-            if (!visibleFonts.isEmpty() && !visibleFonts.contains(key(name))
+            if (visibleFonts != null && !visibleFonts.isEmpty() && !visibleFonts.contains(key(name))
                     && !resourceOnly.contains(name)) {
                 statuses.add(new FontStatus(name, "", -1, false,
                         "font is only used in invisible text (Tr 3)"));
