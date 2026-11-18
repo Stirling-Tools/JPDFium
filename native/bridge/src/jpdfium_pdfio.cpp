@@ -4,6 +4,7 @@
 // PDFio has its own independent XRef repair implementation (repair_xref),
 // giving a third parse opinion after PDFium and qpdf.
 
+#include <algorithm>
 #include <climits>
 #include <cstdio>
 #include <cstdlib>
@@ -54,6 +55,20 @@ JPDFIUM_EXPORT int32_t jpdfium_pdfio_try_repair(const uint8_t* input, int64_t in
             return JPDFIUM_REPAIR_FAILED;
 
         *pagesRecovered = 0;
+
+        // Defense in depth: pdfio rebuilds the document object by object and
+        // would silently invalidate any /ByteRange signature. The Java repair
+        // pipeline refuses marker inputs before reaching this fallback; this
+        // raw scan protects direct native callers. (Signature dictionaries
+        // compressed inside object streams can only be detected after a
+        // tolerant qpdf parse, which is unavailable on the route where pdfio
+        // is the rescuer of last resort.)
+        static constexpr char kByteRange[] = "/ByteRange";
+        if (inputLen >= static_cast<int64_t>(sizeof(kByteRange) - 1) &&
+            std::search(input, input + inputLen, kByteRange, kByteRange + sizeof(kByteRange) - 1) !=
+                input + inputLen) {
+            return JPDFIUM_REPAIR_FAILED;
+        }
 
         // PDFio requires file paths. Both temp files hold untrusted input, so
         // each name is owned the moment it exists and released on every exit,
