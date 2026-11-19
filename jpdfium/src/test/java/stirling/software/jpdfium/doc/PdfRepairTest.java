@@ -99,6 +99,7 @@ class PdfRepairTest {
     @Test
     void inspectDetectsZeroAreaClipPath() {
         Assumptions.assumeTrue(PdfRepair.isSupported(), "zero-area clip scan needs qpdf");
+        Assumptions.assumeTrue(NativeRuntime.isFull(), "zero-area clip scan needs real native qpdf");
         String json = PdfRepair.inspect(singlePagePdf(
                 "q 0 0 0 0 re W n BT /F1 24 Tf 72 700 Td (Hidden) Tj ET Q", false));
         assertTrue(json.contains("\"zero_area_clip_pages\":[1]"),
@@ -110,6 +111,7 @@ class PdfRepairTest {
     @Test
     void inspectDetectsZeroAreaClipInCompressedContent() throws Exception {
         Assumptions.assumeTrue(PdfRepair.isSupported(), "zero-area clip scan needs qpdf");
+        Assumptions.assumeTrue(NativeRuntime.isFull(), "zero-area clip scan needs real native qpdf");
         String json = PdfRepair.inspect(singlePagePdf(
                 "q 0 0 0 0 re W n BT /F1 24 Tf 72 700 Td (Hidden) Tj ET Q", true));
         assertTrue(json.contains("\"zero_area_clip_pages\":[1]"),
@@ -119,6 +121,7 @@ class PdfRepairTest {
     @Test
     void inspectReportsNoClipIssueForCleanContent() {
         Assumptions.assumeTrue(PdfRepair.isSupported(), "zero-area clip scan needs qpdf");
+        Assumptions.assumeTrue(NativeRuntime.isFull(), "zero-area clip scan needs real native qpdf");
         String json = PdfRepair.inspect(singlePagePdf(
                 "BT /F1 24 Tf 72 700 Td (Hello) Tj ET", false));
         assertTrue(json.contains("\"zero_area_clip_pages\":[]"),
