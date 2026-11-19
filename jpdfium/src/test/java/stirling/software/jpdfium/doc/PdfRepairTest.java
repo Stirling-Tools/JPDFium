@@ -1,5 +1,7 @@
 package stirling.software.jpdfium.doc;
 
+import stirling.software.jpdfium.panama.NativeRuntime;
+
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -471,6 +473,7 @@ class PdfRepairTest {
 
     @Test
     void executeFailsClosedOnUnboundedDictionaryNesting() {
+        Assumptions.assumeTrue(NativeRuntime.isFull(), "needs real native qpdf");
         // Regression: inputs nesting more dictionaries than the repair tracking
         // window used to throw ArrayIndexOutOfBoundsException out of execute().
         // They must fail closed instead.

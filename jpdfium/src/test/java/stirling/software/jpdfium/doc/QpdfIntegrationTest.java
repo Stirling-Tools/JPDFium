@@ -1,5 +1,7 @@
 package stirling.software.jpdfium.doc;
 
+import stirling.software.jpdfium.panama.NativeRuntime;
+
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import stirling.software.jpdfium.PdfDocument;
@@ -257,6 +259,7 @@ class QpdfIntegrationTest {
     @Test
     void testStreamOptimizerWritesEolBeforeEndstream(@TempDir Path tempDir) throws Exception {
         assumeTrue(PdfStreamOptimizer.isSupported(), "native qpdf optimize unavailable");
+        assumeTrue(NativeRuntime.isFull(), "needs real native qpdf");
         Path in = tempDir.resolve("flush.pdf");
         Path out = tempDir.resolve("flush_opt.pdf");
         Files.write(in, pdfWithFlushEndstream());
