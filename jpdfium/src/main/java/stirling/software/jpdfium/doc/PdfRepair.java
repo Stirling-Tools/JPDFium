@@ -523,7 +523,7 @@ public final class PdfRepair {
                 guarded[i] = true;
                 hex = true;
             } else if (matchesAscii(pdf, i, "stream") && isTokenStart(pdf, i)
-                    && (i + 6 == pdf.length || pdf[i + 6] == '\n' || pdf[i + 6] == '\r')) {
+                    && (i + 6 >= pdf.length || pdf[i + 6] == '\n' || pdf[i + 6] == '\r')) {
                 guarded[i] = true;
                 stream = true;
                 endstreamAt = resolveStreamEnd(pdf, i);
