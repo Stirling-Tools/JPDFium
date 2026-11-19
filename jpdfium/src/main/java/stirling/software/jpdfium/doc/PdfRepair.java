@@ -354,7 +354,8 @@ public final class PdfRepair {
                             : null);
         }
 
-        if (coreResult.isUsable() && coreResult.status() != RepairResult.Status.CLEAN) {
+        if (coreResult.isUsable() && coreResult.status() != RepairResult.Status.CLEAN
+                && (flags & (FLAG_NORMALIZE_XREF | FLAG_FORCE_V14)) == 0) {
             coreResult = new RepairResult(coreResult.status(),
                     compact(coreResult.repairedPdf()), coreResult.diagnosticJson());
         }

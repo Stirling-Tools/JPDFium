@@ -1194,7 +1194,17 @@ static void repairSimpleTrueTypeCmap(QPDF& pdf, QPDFObjectHandle& font,
     if (unicodeByGid.empty()) return;
     std::string updated = bytes;
     if (!ensureSfntCmapSubtable(updated, 3, 1, unicodeByGid)) return;
-    descriptor.replaceKey(programKey, QPDFObjectHandle::newStream(&pdf, updated));
+    QPDFObjectHandle oldStream = descriptor.getKey(programKey);
+    QPDFObjectHandle newStream = QPDFObjectHandle::newStream(&pdf, updated);
+    QPDFObjectHandle newDict = newStream.getDict();
+    if (std::string_view(programKey) == "/FontFile2") {
+        newDict.replaceKey("/Length1",
+                           QPDFObjectHandle::newInteger(static_cast<long long>(updated.size())));
+    } else if (std::string_view(programKey) == "/FontFile3" && oldStream.isStream()) {
+        QPDFObjectHandle subtype = oldStream.getDict().getKey("/Subtype");
+        if (subtype.isName()) newDict.replaceKey("/Subtype", subtype);
+    }
+    descriptor.replaceKey(programKey, newStream);
     state.changed = true;
 }
 
