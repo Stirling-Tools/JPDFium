@@ -191,6 +191,8 @@ bool parseToUnicode(const std::shared_ptr<Buffer>& buf, std::vector<CmapEntry>& 
     constexpr uint64_t kMaxRangeSpan = 65536;
     // Overall ceiling so a multi-megabyte hostile CMap cannot exhaust memory.
     constexpr size_t kMaxEntries = 1U << 20;
+    constexpr size_t kMaxTotalDestBytes = 16U * 1024U * 1024U;
+    size_t totalDestBytes = 0;
 
     auto codeFromBytes = [](std::string const& bytes, uint64_t& code) -> bool {
         if (bytes.empty() || bytes.size() > 4) return false;
@@ -213,13 +215,15 @@ bool parseToUnicode(const std::shared_ptr<Buffer>& buf, std::vector<CmapEntry>& 
     };
 
     auto flushBfChar = [&]() {
-        while (pendingHex.size() >= 2) {
+        for (size_t i = 0; i + 1 < pendingHex.size(); i += 2) {
             uint64_t code = 0;
-            if (codeFromBytes(pendingHex[0], code) && out.size() < kMaxEntries) {
+            const size_t dlen = pendingHex[i + 1].size();
+            if (codeFromBytes(pendingHex[i], code) && out.size() < kMaxEntries &&
+                dlen <= kMaxTotalDestBytes - totalDestBytes) {
+                totalDestBytes += dlen;
                 out.push_back(CmapEntry{static_cast<int>(code),
-                                        static_cast<int>(pendingHex[0].size()), pendingHex[1]});
+                                        static_cast<int>(pendingHex[i].size()), pendingHex[i + 1]});
             }
-            pendingHex.erase(pendingHex.begin(), pendingHex.begin() + 2);
         }
         pendingHex.clear();
     };
@@ -241,6 +245,9 @@ bool parseToUnicode(const std::shared_ptr<Buffer>& buf, std::vector<CmapEntry>& 
             size_t k = 2;
             for (uint64_t code = lo;
                  code <= hi && k < pendingHex.size() && out.size() < kMaxEntries; code++, k++) {
+                const size_t dlen = pendingHex[k].size();
+                if (dlen > kMaxTotalDestBytes - totalDestBytes) break;
+                totalDestBytes += dlen;
                 out.push_back(CmapEntry{static_cast<int>(code), loBytes, pendingHex[k]});
             }
         } else {
@@ -248,8 +255,14 @@ bool parseToUnicode(const std::shared_ptr<Buffer>& buf, std::vector<CmapEntry>& 
             // UTF-16 byte string in place so multi-unit values (including
             // surrogate pairs) never truncate.
             std::string ub = pendingHex[2];
+            const uint64_t span = hi - lo + 1;
+            if (ub.size() > 0 && span > (kMaxTotalDestBytes - totalDestBytes) / ub.size()) {
+                pendingHex.clear();
+                return;
+            }
             for (uint64_t code = lo; code <= hi && out.size() < kMaxEntries; code++) {
                 if (hasSurrogateUnit(ub)) break;
+                totalDestBytes += ub.size();
                 out.push_back(CmapEntry{static_cast<int>(code), loBytes, ub});
                 for (size_t idx = ub.size(); idx-- > 0;) {
                     auto v = static_cast<unsigned char>(ub[idx]);
@@ -317,8 +330,13 @@ bool parseToUnicode(const std::shared_ptr<Buffer>& buf, std::vector<CmapEntry>& 
             flushBfRange();
         }
     }
-    flushBfChar();
-    flushBfRange();
+    if (section == CmapSection::BfChar) {
+        flushBfChar();
+    } else if (section == CmapSection::BfRange && !inArray) {
+        flushBfRange();
+    } else {
+        pendingHex.clear();
+    }
     return !out.empty();
 }
 
