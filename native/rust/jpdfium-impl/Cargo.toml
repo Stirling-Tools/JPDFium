@@ -21,8 +21,8 @@ flate2 = "1.1.10"
 fast_image_resize = "6.1"
 # SVG rasterizer (Apache-2.0 OR MIT stack: resvg/usvg/tiny-skia/fontdb).
 # Replaces librsvg in the vips stack: no cairo/gdk-pixbuf/X11, no GPL.
-resvg = { version = "0.49", default-features = false, features = ["text", "system-fonts", "memmap-fonts", "raster-images"] }
-usvg = { version = "0.49", default-features = false, features = ["text", "system-fonts", "memmap-fonts"] }
+resvg = { version = "0.50", default-features = false, features = ["text", "system-fonts", "memmap-fonts", "raster-images"] }
+usvg = { version = "0.50", default-features = false, features = ["text", "system-fonts", "memmap-fonts"] }
 tiny-skia = { version = "0.12", default-features = false, features = ["std", "simd"] }
 # CMYK JPEG encoder for DeviceCMYK image conversion. `ColorType::Cmyk` writes
 # an Adobe APP14 (transform=0) JPEG with the samples inverted, which is exactly
