@@ -435,7 +435,8 @@ public final class PdfCompressor {
             // PDF/A-1 forbids object streams and cross-reference streams, so a
             // generated-xref result would break the conformance it claims.
             byte[] opt = pdfA1
-                    ? PdfOptimizer.optimize(resultBytes, PdfOptimizer.DEFAULT, 9,
+                    ? PdfOptimizer.optimize(resultBytes,
+                            PdfOptimizer.RECOMPRESS_FLATE | PdfOptimizer.COMPRESS_STREAMS, 9,
                             PdfOptimizer.OBJECT_STREAMS_DISABLE,
                             PdfOptimizer.STREAM_DATA_COMPRESS,
                             PdfOptimizer.DECODE_LEVEL_GENERALIZED)
