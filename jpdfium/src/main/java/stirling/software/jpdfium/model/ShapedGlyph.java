@@ -21,4 +21,18 @@ public record ShapedGlyph(
         float offsetX,
         float offsetY,
         int cluster,
-        int flags) {}
+        int flags) {
+
+    /**
+     * Backwards-compatible constructor with {@code flags = 0}.
+     */
+    public ShapedGlyph(
+            int glyphId,
+            float advanceX,
+            float advanceY,
+            float offsetX,
+            float offsetY,
+            int cluster) {
+        this(glyphId, advanceX, advanceY, offsetX, offsetY, cluster, 0);
+    }
+}
