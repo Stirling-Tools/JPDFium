@@ -221,7 +221,6 @@ class ImageOptimizer final : public QPDFObjectHandle::StreamDataProvider {
     std::unique_ptr<Pl_DCT::CompressConfig> config_;
 };
 
-
 // Hash a stream's dictionary and raw bytes so only bit-identical image
 // XObjects are candidates for deduplication. The dictionary check catches
 // images with identical pixels but different color spaces or decode arrays.
