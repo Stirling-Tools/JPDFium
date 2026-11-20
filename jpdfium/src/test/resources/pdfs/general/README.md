@@ -13,6 +13,7 @@ From [mozilla/pdf.js](https://github.com/mozilla/pdf.js), Apache License 2.0,
 | `90ms_rksj_h_sample.pdf` | Adobe-Japan1 text through the predefined `90ms-RKSJ-H` CMap (`HeiseiMin-W3`); embedding must fall back to a bundled font instead of substituting the CID program |
 | `issue11915.pdf` | Regression of [pdf.js #11915](https://github.com/mozilla/pdf.js/issues/11915), garbled display of fonts |
 | `issue13916.pdf` | Regression of [pdf.js #13916](https://github.com/mozilla/pdf.js/issues/13916), embedded font displayed with wrong (Czech) characters |
+| `issue20065.pdf` | Byte-identical to `test/pdfs/issue20065.pdf` in mozilla/pdf.js (git blob `f13b4a4c1d838e69560c04e9d0e609913cc5e314`); an Adobe Acrobat 25.1-produced PDF 1.6 document exercising CID-keyed font handling |
 
 ## From pdfcpu
 
