@@ -66,14 +66,17 @@ public final class PdfCompressor {
     private static final byte[][] PDFA_MARKERS = {
             "pdfaid:part>".getBytes(StandardCharsets.US_ASCII),
             "pdfaid:part=\"".getBytes(StandardCharsets.US_ASCII),
+            "pdfaid:part='".getBytes(StandardCharsets.US_ASCII),
             "pdfaid:conformance>".getBytes(StandardCharsets.US_ASCII),
             "pdfaid:conformance=\"".getBytes(StandardCharsets.US_ASCII),
+            "pdfaid:conformance='".getBytes(StandardCharsets.US_ASCII),
             "GTS_PDFA1".getBytes(StandardCharsets.US_ASCII),
     };
     // PDF/A-1 forbids object streams and cross-reference streams; later parts allow them.
     private static final byte[][] PDFA_PART1_MARKERS = {
             "pdfaid:part>1<".getBytes(StandardCharsets.US_ASCII),
             "pdfaid:part=\"1\"".getBytes(StandardCharsets.US_ASCII),
+            "pdfaid:part='1'".getBytes(StandardCharsets.US_ASCII),
             "GTS_PDFA1".getBytes(StandardCharsets.US_ASCII),
     };
     // Catalog /Metadata reference. XMP streams are often Flate-compressed, so a
@@ -112,18 +115,21 @@ public final class PdfCompressor {
     // instead of a full pass per marker.
     private static final int N_PDFA_PART = 0;
     private static final int N_PDFA_PART_ATTR = 1;
-    private static final int N_PDFA_CONF = 2;
-    private static final int N_PDFA_CONF_ATTR = 3;
-    private static final int N_GTS_PDFA1 = 4;
-    private static final int N_PDFA1_PART = 5;
-    private static final int N_PDFA1_PART_ATTR = 6;
-    private static final int N_METADATA = 7;
-    private static final int N_BYTE_RANGE = 8;
-    private static final int N_TYPE_SIG = 9;
-    private static final int N_TYPE_SPACE_SIG = 10;
-    private static final int N_SUBFILTER = 11;
-    private static final int N_OBJSTM = 12;
-    private static final int N_NEEDLES = 13;
+    private static final int N_PDFA_PART_SQ = 2;
+    private static final int N_PDFA_CONF = 3;
+    private static final int N_PDFA_CONF_ATTR = 4;
+    private static final int N_PDFA_CONF_SQ = 5;
+    private static final int N_GTS_PDFA1 = 6;
+    private static final int N_PDFA1_PART = 7;
+    private static final int N_PDFA1_PART_ATTR = 8;
+    private static final int N_PDFA1_PART_SQ = 9;
+    private static final int N_METADATA = 10;
+    private static final int N_BYTE_RANGE = 11;
+    private static final int N_TYPE_SIG = 12;
+    private static final int N_TYPE_SPACE_SIG = 13;
+    private static final int N_SUBFILTER = 14;
+    private static final int N_OBJSTM = 15;
+    private static final int N_NEEDLES = 16;
 
     // The /ID key is matched byte-by-byte and its range is packed into a long, so the
     // signed fast path performs no allocation of its own.
@@ -140,8 +146,11 @@ public final class PdfCompressor {
             PDFA_MARKERS[2],
             PDFA_MARKERS[3],
             PDFA_MARKERS[4],
+            PDFA_MARKERS[5],
+            PDFA_MARKERS[6],
             PDFA_PART1_MARKERS[0],
             PDFA_PART1_MARKERS[1],
+            PDFA_PART1_MARKERS[2],
             METADATA_MARKER,
             BYTE_RANGE,
             SIG_MARKERS[0],
@@ -426,8 +435,9 @@ public final class PdfCompressor {
             // PDF/A-1 forbids object streams and cross-reference streams, so a
             // generated-xref result would break the conformance it claims.
             byte[] opt = pdfA1
-                    ? PdfOptimizer.optimize(resultBytes, PdfOptimizer.DEFAULT, 9,
-                            PdfOptimizer.OBJECT_STREAMS_PRESERVE,
+                    ? PdfOptimizer.optimize(resultBytes,
+                            PdfOptimizer.RECOMPRESS_FLATE | PdfOptimizer.COMPRESS_STREAMS, 9,
+                            PdfOptimizer.OBJECT_STREAMS_DISABLE,
                             PdfOptimizer.STREAM_DATA_COMPRESS,
                             PdfOptimizer.DECODE_LEVEL_GENERALIZED)
                     : PdfOptimizer.optimize(resultBytes,
@@ -443,21 +453,22 @@ public final class PdfCompressor {
                 resultBytes = opt;
                 streamsOptimized = true;
                 actions.add(pdfA1
-                        ? "qpdf: recompressed streams (object streams preserved for PDF/A-1)"
+                        ? "qpdf: recompressed streams (object streams disabled for PDF/A-1)"
                         : "qpdf: recompressed streams and generated object streams");
             } else {
                 warnings.add("qpdf stream pass did not reduce size; kept original bytes");
             }
         } else if (!signed && opts.removeUnusedObjects()) {
-            // Compact without restructuring object streams. Explicit flags are
-            // required: the all-DEFAULT form measured worse than the source on
-            // some inputs (inflating streams instead of recompressing them).
+            // Compact without restructuring object streams (disable for PDF/A-1).
+            // Explicit flags are required: the all-DEFAULT form measured worse than the
+            // source on some inputs (inflating streams instead of recompressing them).
             byte[] opt = PdfOptimizer.optimize(resultBytes,
                     PdfOptimizer.RECOMPRESS_FLATE | PdfOptimizer.COMPRESS_STREAMS
                             | PdfOptimizer.DEDUPLICATE_IMAGES
                             | (jbig2 ? PdfOptimizer.JBIG2 : 0)
                             | (opts.ccittG4() ? PdfOptimizer.CCITT_G4 : 0), 9,
-                    PdfOptimizer.OBJECT_STREAMS_PRESERVE,
+                    pdfA1 ? PdfOptimizer.OBJECT_STREAMS_DISABLE
+                            : PdfOptimizer.OBJECT_STREAMS_PRESERVE,
                     PdfOptimizer.STREAM_DATA_COMPRESS,
                     PdfOptimizer.DECODE_LEVEL_GENERALIZED);
             if (opt != null && opt.length < resultBytes.length) {
@@ -646,7 +657,8 @@ public final class PdfCompressor {
             return -1;
         }
         boolean rawPdfa = m.first[N_PDFA_PART] >= 0 || m.first[N_PDFA_PART_ATTR] >= 0
-                || m.first[N_PDFA_CONF] >= 0 || m.first[N_PDFA_CONF_ATTR] >= 0
+                || m.first[N_PDFA_PART_SQ] >= 0 || m.first[N_PDFA_CONF] >= 0
+                || m.first[N_PDFA_CONF_ATTR] >= 0 || m.first[N_PDFA_CONF_SQ] >= 0
                 || m.first[N_GTS_PDFA1] >= 0;
         byte[] xmp = null;
         if (!rawPdfa) {
@@ -656,7 +668,7 @@ public final class PdfCompressor {
             }
         }
         boolean part1 = m.first[N_PDFA1_PART] >= 0 || m.first[N_PDFA1_PART_ATTR] >= 0
-                || m.first[N_GTS_PDFA1] >= 0
+                || m.first[N_PDFA1_PART_SQ] >= 0 || m.first[N_GTS_PDFA1] >= 0
                 || (xmp != null && containsAny(xmp, PDFA_PART1_MARKERS));
         return part1 ? 1 : 2;
     }

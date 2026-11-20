@@ -773,7 +773,7 @@ int32_t prepare_replacement_page(DocWrapper* dw, int32_t insertAt, UniquePage& p
         FPDFPageObj_SetMatrix(imgObj.get(), &matrix);
 
         FPDFPage_InsertObject(newPage.get(), imgObj.get());
-        imgObj.release();  // the page owns it now
+        (void)imgObj.release();  // the page owns it now
         if (!FPDFPage_GenerateContent(newPage.get())) return JPDFIUM_ERR_NATIVE;
         // A generated replacement page must carry the image object; PDFium drops
         // an image it cannot stream, so never import a content-less page.

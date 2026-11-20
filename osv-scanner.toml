@@ -1,0 +1,3 @@
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0543"
+reason = "chrono 0.4.45 advisory has no fixed release yet; tracked upstream."

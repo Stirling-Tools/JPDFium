@@ -26,29 +26,10 @@ using jpdfium_qpdf_internal::WriterLock;
 void updateCidSet(QPDF& qpdf, QPDFObjectHandle descriptor, std::set<uint32_t> const& activeCids) {
     if (!descriptor.isDictionary()) return;
     std::string bits = jpdfium::font::buildCidSetBits(activeCids);
-    if (!bits.empty()) descriptor.replaceKey("/CIDSet", QPDFObjectHandle::newStream(&qpdf, bits));
-}
-
-std::set<uint32_t> cidsForRetainedGlyphs(QPDFObjectHandle const& target,
-                                         std::string const& mapBytes,
-                                         std::set<FT_UInt> const& glyphs) {
-    std::set<uint32_t> cids{0};
-    auto map = target.getKey("/CIDToGIDMap");
-    if (map.isStream() && !mapBytes.empty()) {
-        const auto* bytes = reinterpret_cast<const uint8_t*>(mapBytes.data());
-        const size_t entries = mapBytes.size() / 2;
-        for (size_t c = 0; c < entries && c <= jpdfium::font::kMaxCid; ++c) {
-            const uint32_t gid = (static_cast<uint32_t>(bytes[2 * c]) << 8) | bytes[2 * c + 1];
-            if (glyphs.contains(static_cast<FT_UInt>(gid))) cids.insert(static_cast<uint32_t>(c));
-        }
-        return cids;
-    }
-    if (map.isNull() || map.isNameAndEquals("/Identity")) {
-        for (FT_UInt gid : glyphs) {
-            if (gid <= jpdfium::font::kMaxCid) cids.insert(static_cast<uint32_t>(gid));
-        }
-    }
-    return cids;
+    if (!bits.empty())
+        descriptor.replaceKey("/CIDSet", QPDFObjectHandle::newStream(&qpdf, bits));
+    else
+        descriptor.removeKey("/CIDSet");
 }
 
 std::set<uint32_t> cidsPresentInProgram(QPDFObjectHandle const& target, FT_Face face) {
@@ -337,21 +318,23 @@ bool subsetEmbeddedCidFont(QPDF& qpdf, FT_Library lib, QPDFObjectHandle& font,
     descriptor.replaceKey(program.kind == ProgramKind::TrueType ? "/FontFile2" : "/FontFile3",
                           makeProgramStream(qpdf, program, program.kind, true, chosenSubset));
 
-    // Recompute /CIDSet when present so every bit matches the subset's retained CIDs.
+    // Recompute /CIDSet when present so every bit matches all CIDs present in the embedded
+    // subset program (ISO 19005-2 §6.2.11.4.2).
     if (descriptor.hasKey("/CIDSet")) {
-        if (useCompactedMap) {
-            std::set<uint32_t> mappedCids;
-            for (uint32_t c = 0; c <= maxUsedCid; ++c) mappedCids.insert(c);
-            updateCidSet(qpdf, descriptor, mappedCids);
+        FT_Face subFace = nullptr;
+        jpdfium::font::FtFaceGuard subGuard;
+        std::set<uint32_t> presentCids;
+        if (!chosenSubset.empty() &&
+            FT_New_Memory_Face(lib, reinterpret_cast<const FT_Byte*>(chosenSubset.data()),
+                               FT_Long(chosenSubset.size()), 0, &subFace) == 0 &&
+            subFace) {
+            subGuard.reset(subFace);
+            presentCids = cidsPresentInProgram(target, subFace);
+        }
+        if (!presentCids.empty()) {
+            updateCidSet(qpdf, descriptor, presentCids);
         } else {
-            std::string mapView;
-            if (!identity && mapBytes) {
-                size_t mapSize = std::min<size_t>(
-                    mapBytes->getSize(), 2 * (static_cast<size_t>(jpdfium::font::kMaxCid) + 1));
-                mapView.assign(reinterpret_cast<const char*>(mapBytes->getBuffer()), mapSize);
-            }
-            auto retainedCids = cidsForRetainedGlyphs(target, mapView, targetGlyphs);
-            if (!retainedCids.empty()) updateCidSet(qpdf, descriptor, retainedCids);
+            descriptor.removeKey("/CIDSet");
         }
     }
     return true;
@@ -948,17 +931,36 @@ void appendFontInventoryEntryJson(FontInventoryEntry const& entry, std::string& 
             return nullptr;
         }
     };
-    auto readableProgram = [&](QPDFObjectHandle const& desc) {
-        if (!desc.isDictionary()) return false;
+    auto validProgram = [](std::shared_ptr<Buffer> const& data) {
+        if (!data || data->getSize() < 4) return false;
+        auto const* b = reinterpret_cast<uint8_t const*>(data->getBuffer());
+        if (b[0] == 0x00 && b[1] == 0x01 && b[2] == 0x00 && b[3] == 0x00) return true;
+        if (b[0] == 0x01 && b[1] == 0x00 && b[2] == 0x04 && b[3] == 0x04) return true;
+        if ((b[0] == 'O' && b[1] == 'T' && b[2] == 'T' && b[3] == 'O') ||
+            (b[0] == 't' && b[1] == 'r' && b[2] == 'u' && b[3] == 'e') ||
+            (b[0] == 't' && b[1] == 't' && b[2] == 'c' && b[3] == 'f'))
+            return true;
+        if (b[0] == '%' && b[1] == '!') return true;
+        return (b[0] & 0xFF) == 0x80 && b[1] == 0x01;
+    };
+    auto programState = [&](QPDFObjectHandle const& desc) {
+        bool present = false;
+        bool valid = false;
+        if (!desc.isDictionary()) return std::pair<bool, bool>{false, false};
         for (char const* key : {"/FontFile", "/FontFile2", "/FontFile3"}) {
             auto data = tryReadStream(desc.getKey(key));
-            if (data && data->getSize() > 0) return true;
+            if (!data || data->getSize() == 0) continue;
+            present = true;
+            if (validProgram(data)) valid = true;
         }
-        return false;
+        return std::pair<bool, bool>{present, valid};
     };
     // Inspect both wrapper and descendant descriptors for embedded /FontFile* and /ToUnicode
     // streams.
-    bool hasProgram = readableProgram(descriptor) || readableProgram(targetDescriptor);
+    auto wrapperProgram = programState(descriptor);
+    auto descendantProgram = programState(targetDescriptor);
+    bool hasProgram = wrapperProgram.first || descendantProgram.first;
+    bool programValid = wrapperProgram.second || descendantProgram.second;
     auto toUnicodeData = tryReadStream(font.getKey("/ToUnicode"));
     bool hasToUnicode = toUnicodeData && toUnicodeData->getSize() > 0;
 
@@ -997,6 +999,8 @@ void appendFontInventoryEntryJson(FontInventoryEntry const& entry, std::string& 
     json += boolJson(descriptor.isDictionary() || targetDescriptor.isDictionary());
     json += ",\"program\":";
     json += boolJson(hasProgram);
+    json += ",\"programValid\":";
+    json += boolJson(programValid);
     json += ",\"cid\":";
     json += boolJson(cid);
     json += ",\"toUnicode\":";

@@ -175,9 +175,6 @@ bool subsetKeepsCidGlyphs(FT_Library lib, std::string const& subset,
 bool subsetKeepsSimpleGlyphs(FT_Library lib, std::string const& subsetBytes, FT_Face original,
                              bool symbolic, jpdfium::font::SimpleEncoding const& enc,
                              std::set<uint32_t> const& codes, bool retainGids);
-std::set<uint32_t> cidsForRetainedGlyphs(QPDFObjectHandle const& target,
-                                         std::string const& mapBytes,
-                                         std::set<FT_UInt> const& glyphs);
 std::set<uint32_t> cidsPresentInProgram(QPDFObjectHandle const& target, FT_Face face);
 void updateCidSet(QPDF& qpdf, QPDFObjectHandle descriptor, std::set<uint32_t> const& activeCids);
 #endif

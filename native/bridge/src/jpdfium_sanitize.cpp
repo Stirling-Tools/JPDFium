@@ -178,68 +178,103 @@ bool parseToUnicode(const std::shared_ptr<Buffer>& buf, std::vector<CmapEntry>& 
     QPDFTokenizer tok;
     auto is = std::make_shared<BufferInputSource>("tounicode", data);
 
-    // Line-number index: bfchar/bfrange entries are one per LINE, so an entry
-    // is flushed when the token stream crosses a newline.
-    std::vector<size_t> lineStarts;
-    lineStarts.push_back(0);
-    for (size_t i = 0; i < data.size(); i++)
-        if (data[i] == '\n') lineStarts.push_back(i + 1);
-    auto lineOf = [&](qpdf_offset_t pos) -> size_t {
-        auto it = std::upper_bound(lineStarts.begin(), lineStarts.end(), static_cast<size_t>(pos));
-        return static_cast<size_t>(it - lineStarts.begin()) - 1;
-    };
-
+    // Entries are operand-counted, not line-counted: real-world CMaps put
+    // several bfchar/bfrange entries on one line, and a line-index flush
+    // silently drops every entry after the first of such a line.
     enum class CmapSection { None, BfChar, BfRange };
     CmapSection section = CmapSection::None;
     std::vector<std::string> pendingHex;
-    size_t pendingLine = 0;
-    bool havePending = false;
+    bool inArray = false;
+
+    // A hostile bfrange can claim a 4-byte code space; without a span cap one
+    // "entry" amplifies into billions of CmapEntry pushes.
+    constexpr uint64_t kMaxRangeSpan = 65536;
+    // Overall ceiling so a multi-megabyte hostile CMap cannot exhaust memory.
+    constexpr size_t kMaxEntries = 1U << 20;
+    constexpr size_t kMaxTotalDestBytes = 16U * 1024U * 1024U;
+    size_t totalDestBytes = 0;
+
+    auto codeFromBytes = [](std::string const& bytes, uint64_t& code) -> bool {
+        if (bytes.empty() || bytes.size() > 4) return false;
+        uint64_t value = 0;
+        for (unsigned char c : bytes) value = (value << 8) | c;
+        if (value > 0x7FFFFFFFULL) return false;  // CmapEntry::code is int
+        code = value;
+        return true;
+    };
+    // UTF-16 surrogate units are not valid mapping targets: consecutive-form
+    // ranges that walk into the surrogate block stop at the first bad unit.
+    auto hasSurrogateUnit = [](std::string const& uni) {
+        if (uni.size() % 2 != 0) return false;
+        for (size_t i = 0; i + 1 < uni.size(); i += 2) {
+            const unsigned unit =
+                (static_cast<unsigned char>(uni[i]) << 8) | static_cast<unsigned char>(uni[i + 1]);
+            if (unit >= 0xD800U && unit <= 0xDFFFU) return true;
+        }
+        return false;
+    };
 
     auto flushBfChar = [&]() {
-        if (pendingHex.size() >= 2) {
-            const std::string& codeBytes = pendingHex[0];
-            const std::string& uniBytes = pendingHex[1];
-            if (!codeBytes.empty()) {
-                int code = 0;
-                for (unsigned char c : codeBytes) code = (code << 8) | c;
-                out.push_back(CmapEntry{code, static_cast<int>(codeBytes.size()), uniBytes});
+        for (size_t i = 0; i + 1 < pendingHex.size(); i += 2) {
+            uint64_t code = 0;
+            const size_t dlen = pendingHex[i + 1].size();
+            if (codeFromBytes(pendingHex[i], code) && out.size() < kMaxEntries &&
+                dlen <= kMaxTotalDestBytes - totalDestBytes) {
+                totalDestBytes += dlen;
+                out.push_back(CmapEntry{static_cast<int>(code),
+                                        static_cast<int>(pendingHex[i].size()), pendingHex[i + 1]});
             }
         }
         pendingHex.clear();
-        havePending = false;
     };
     auto flushBfRange = [&]() {
-        if (pendingHex.size() >= 3) {
-            const std::string& loBytes = pendingHex[0];
-            const std::string& hiBytes = pendingHex[1];
-            const std::string& uniBytes = pendingHex[2];
-            if (!loBytes.empty() && loBytes.size() == hiBytes.size() && !uniBytes.empty()) {
-                int lo = 0, hi = 0;
-                for (unsigned char c : loBytes) lo = (lo << 8) | c;
-                for (unsigned char c : hiBytes) hi = (hi << 8) | c;
-                if (pendingHex.size() == 3) {
-                    // consecutive form: lo..hi -> u..u+n
-                    int unicode = 0;
-                    for (unsigned char c : uniBytes) unicode = (unicode << 8) | c;
-                    for (int code = lo; code <= hi; code++) {
-                        std::string ub(2, '\0');
-                        ub[0] = static_cast<char>((unicode >> 8) & 0xFF);
-                        ub[1] = static_cast<char>(unicode & 0xFF);
-                        out.push_back(CmapEntry{code, static_cast<int>(loBytes.size()), ub});
-                        unicode++;
+        if (pendingHex.size() < 3) {
+            pendingHex.clear();
+            return;
+        }
+        uint64_t lo = 0;
+        uint64_t hi = 0;
+        if (!codeFromBytes(pendingHex[0], lo) || !codeFromBytes(pendingHex[1], hi) || lo > hi ||
+            hi - lo + 1 > kMaxRangeSpan) {
+            pendingHex.clear();
+            return;
+        }
+        const int loBytes = static_cast<int>(pendingHex[0].size());
+        if (inArray) {
+            // list form: pendingHex[2..] are the per-code unicodes
+            size_t k = 2;
+            for (uint64_t code = lo;
+                 code <= hi && k < pendingHex.size() && out.size() < kMaxEntries; code++, k++) {
+                const size_t dlen = pendingHex[k].size();
+                if (dlen > kMaxTotalDestBytes - totalDestBytes) break;
+                totalDestBytes += dlen;
+                out.push_back(CmapEntry{static_cast<int>(code), loBytes, pendingHex[k]});
+            }
+        } else {
+            // consecutive form: lo..hi -> u..u+n; advance the full big-endian
+            // UTF-16 byte string in place so multi-unit values (including
+            // surrogate pairs) never truncate.
+            std::string ub = pendingHex[2];
+            const uint64_t span = hi - lo + 1;
+            if (ub.size() > 0 && span > (kMaxTotalDestBytes - totalDestBytes) / ub.size()) {
+                pendingHex.clear();
+                return;
+            }
+            for (uint64_t code = lo; code <= hi && out.size() < kMaxEntries; code++) {
+                if (hasSurrogateUnit(ub)) break;
+                totalDestBytes += ub.size();
+                out.push_back(CmapEntry{static_cast<int>(code), loBytes, ub});
+                for (size_t idx = ub.size(); idx-- > 0;) {
+                    auto v = static_cast<unsigned char>(ub[idx]);
+                    if (v < 0xFF) {
+                        ub[idx] = static_cast<char>(v + 1);
+                        break;
                     }
-                } else {
-                    // list form: pendingHex[2..] are the unicodes
-                    for (int code = lo, k = 2;
-                         code <= hi && k < static_cast<int>(pendingHex.size()); code++, k++) {
-                        out.push_back(
-                            CmapEntry{code, static_cast<int>(loBytes.size()), pendingHex[k]});
-                    }
+                    ub[idx] = '\0';
                 }
             }
         }
         pendingHex.clear();
-        havePending = false;
     };
 
     while (true) {
@@ -247,48 +282,61 @@ bool parseToUnicode(const std::shared_ptr<Buffer>& buf, std::vector<CmapEntry>& 
         QPDFTokenizer::token_type_e tt = t.getType();
         if (tt == QPDFTokenizer::tt_eof || tt == QPDFTokenizer::tt_bad) break;
         if (tt == QPDFTokenizer::tt_space || tt == QPDFTokenizer::tt_comment) continue;
-        // InputSource::getLastOffset() points at the beginning of the last
-        // token read (QPDFTokenizer::readToken contract).
-        size_t line = lineOf(is->getLastOffset());
-        // A newline inside an entry group terminates the current entry.
-        if (havePending && line != pendingLine) {
-            if (section == CmapSection::BfChar)
-                flushBfChar();
-            else if (section == CmapSection::BfRange)
-                flushBfRange();
-        }
         if (tt == QPDFTokenizer::tt_word) {
             std::string w = t.getValue();
             if (w == "beginbfchar") {
                 flushBfRange();
+                inArray = false;
                 section = CmapSection::BfChar;
             } else if (w == "beginbfrange") {
                 flushBfChar();
+                inArray = false;
                 section = CmapSection::BfRange;
             } else if (w == "endbfchar") {
                 flushBfChar();
                 section = CmapSection::None;
             } else if (w == "endbfrange") {
                 flushBfRange();
+                inArray = false;
                 section = CmapSection::None;
             } else if (w.starts_with("begin")) {
                 // unrelated section: flush what we have and ignore it
                 flushBfChar();
                 flushBfRange();
+                inArray = false;
                 section = CmapSection::None;
             }
-        } else if (tt == QPDFTokenizer::tt_string) {
-            if (section != CmapSection::None) {
-                pendingHex.push_back(t.getValue());
-                pendingLine = line;
-                havePending = true;
-            }
+            continue;
+        }
+        if (tt == QPDFTokenizer::tt_array_close) {
+            if (section == CmapSection::BfRange && inArray) flushBfRange();
+            inArray = false;
+            continue;
+        }
+        if (tt == QPDFTokenizer::tt_array_open) {
+            // bfrange's third operand is either a string (consecutive form,
+            // flushed when it arrives) or an array of strings.
+            if (section == CmapSection::BfRange && !inArray && pendingHex.size() == 2)
+                inArray = true;
+            continue;
+        }
+        if (tt != QPDFTokenizer::tt_string) continue;
+        if (section == CmapSection::None) continue;
+        pendingHex.push_back(t.getValue());
+        if (section == CmapSection::BfChar) {
+            if (pendingHex.size() == 2) flushBfChar();
+        } else if (section == CmapSection::BfRange && !inArray && pendingHex.size() == 3) {
+            // consecutive form is complete
+            flushBfRange();
         }
     }
-    if (section == CmapSection::BfChar)
+    if (section == CmapSection::BfChar) {
         flushBfChar();
-    else if (section == CmapSection::BfRange)
+    } else if (section == CmapSection::BfRange && !inArray) {
         flushBfRange();
+    } else {
+        pendingHex.clear();
+    }
     return !out.empty();
 }
 
@@ -301,25 +349,40 @@ std::string rebuildCmap(const std::vector<CmapEntry>& entries, const std::set<in
         if (a->codeBytes != b->codeBytes) return a->codeBytes < b->codeBytes;
         return a->code < b->code;
     });
+    bool twoByte = false;
+    for (const auto* e : kept) {
+        if (e->codeBytes != 1) {
+            twoByte = true;
+            break;
+        }
+    }
     std::ostringstream os;
     os << "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n"
           "/CIDSystemInfo << /Registry (JPDFium) /Ordering (Redact) /Supplement 0 >> def\n"
-          "/CMapName /JPDFium-Redact def\n/CMapType 2 def\n";
+          "/CMapName /JPDFium-Redact def\n/CMapType 2 def\n"
+          "1 begincodespacerange\n"
+       << (twoByte ? "<0000> <FFFF>\n" : "<00> <FF>\n") << "endcodespacerange\n";
     static const char* hexd = "0123456789ABCDEF";
-    os << kept.size() << " beginbfchar\n";
-    for (const auto* e : kept) {
-        os << '<';
-        if (e->codeBytes == 1) {
-            os << hexd[(e->code >> 4) & 0xF] << hexd[e->code & 0xF];
-        } else {
-            os << hexd[(e->code >> 12) & 0xF] << hexd[(e->code >> 8) & 0xF]
-               << hexd[(e->code >> 4) & 0xF] << hexd[e->code & 0xF];
+    // ISO 32000-1 §9.10.3 caps each beginbfchar section at 100 entries.
+    for (size_t start = 0; start < kept.size(); start += 100) {
+        size_t end = std::min(start + 100, kept.size());
+        os << (end - start) << " beginbfchar\n";
+        for (size_t idx = start; idx < end; idx++) {
+            const auto* e = kept[idx];
+            os << '<';
+            if (e->codeBytes == 1) {
+                os << hexd[(e->code >> 4) & 0xF] << hexd[e->code & 0xF];
+            } else {
+                os << hexd[(e->code >> 12) & 0xF] << hexd[(e->code >> 8) & 0xF]
+                   << hexd[(e->code >> 4) & 0xF] << hexd[e->code & 0xF];
+            }
+            os << "> <";
+            for (unsigned char c : e->utf16be) os << hexd[(c >> 4) & 0xF] << hexd[c & 0xF];
+            os << ">\n";
         }
-        os << "> <";
-        for (unsigned char c : e->utf16be) os << hexd[(c >> 4) & 0xF] << hexd[c & 0xF];
-        os << ">\n";
+        os << "endbfchar\n";
     }
-    os << "endbfchar\nendcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n";
+    os << "endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n";
     return os.str();
 }
 
@@ -517,11 +580,21 @@ int sanitizeRedactedPdf(const uint8_t* input, size_t inputLen, const DocCore& co
         }
 
         // 7. Structure tree strip (ActualText is a verbatim text copy).
+        // StructTreeRoot and MarkInfo live in the Catalog (/Root), though
+        // defensive cleanup on trailer handles non-standard inputs as well.
         if (trailer.hasKey("/StructTreeRoot")) {
             trailer.removeKey("/StructTreeRoot");
             st.structTreeRemoved = true;
         }
         if (trailer.hasKey("/MarkInfo")) trailer.removeKey("/MarkInfo");
+        if (trailer.hasKey("/Root") && trailer.getKey("/Root").isDictionary()) {
+            QPDFObjectHandle catalog = trailer.getKey("/Root");
+            if (catalog.hasKey("/StructTreeRoot")) {
+                catalog.removeKey("/StructTreeRoot");
+                st.structTreeRemoved = true;
+            }
+            if (catalog.hasKey("/MarkInfo")) catalog.removeKey("/MarkInfo");
+        }
 
         // XMP surgery via pugixml; wholesale removal when unavailable.
         // The /Metadata entry can sit on the trailer OR the catalog.
@@ -543,6 +616,7 @@ int sanitizeRedactedPdf(const uint8_t* input, size_t inputLen, const DocCore& co
                 memcpy(newBuf->getBuffer(), xml.data(), xml.size());
                 meta.replaceStreamData(newBuf, QPDFObjectHandle::newNull(),
                                        QPDFObjectHandle::newNull());
+                meta.setFilterOnWrite(false);
                 st.xmpScrubbed = true;
             }
 #else
@@ -591,12 +665,14 @@ int sanitizeRedactedPdf(const uint8_t* input, size_t inputLen, const DocCore& co
                     QPDFObjectHandle a = annots.getArrayItem(ai);
                     if (!a.isDictionary()) continue;
                     bool drop = false;
-                    if (a.hasKey("/Rect") && a.getKey("/Rect").isArray() &&
-                        a.getKey("/Rect").getArrayNItems() == 4) {
-                        double llx = a.getKey("/Rect").getArrayItem(0).getNumericValue();
-                        double lly = a.getKey("/Rect").getArrayItem(1).getNumericValue();
-                        double urx = a.getKey("/Rect").getArrayItem(2).getNumericValue();
-                        double ury = a.getKey("/Rect").getArrayItem(3).getNumericValue();
+                    QPDFObjectHandle rect = a.getKey("/Rect");
+                    if (rect.isArray() && rect.getArrayNItems() == 4 &&
+                        rect.getArrayItem(0).isNumber() && rect.getArrayItem(1).isNumber() &&
+                        rect.getArrayItem(2).isNumber() && rect.getArrayItem(3).isNumber()) {
+                        double llx = rect.getArrayItem(0).getNumericValue();
+                        double lly = rect.getArrayItem(1).getNumericValue();
+                        double urx = rect.getArrayItem(2).getNumericValue();
+                        double ury = rect.getArrayItem(3).getNumericValue();
                         for (const auto& z : zones) {
                             if (z.pageIndex != static_cast<int32_t>(pi)) continue;
                             if (llx <= z.right && urx >= z.left && lly <= z.top &&
@@ -684,8 +760,9 @@ int sanitizeRedactedPdf(const uint8_t* input, size_t inputLen, const DocCore& co
         }
 
         for (auto& [id, font] : fontDicts) {
-            std::string baseFont =
-                font.hasKey("/BaseFont") ? font.getKey("/BaseFont").getName() : std::string();
+            std::string baseFont = font.hasKey("/BaseFont") && font.getKey("/BaseFont").isName()
+                                       ? font.getKey("/BaseFont").getName()
+                                       : std::string();
             // Code width: from the ToUnicode CMap when parseable; otherwise
             // /Subtype /Type0 fonts are 2-byte, everything else 1-byte.
             int codeBytes = 1;
@@ -747,6 +824,10 @@ int sanitizeRedactedPdf(const uint8_t* input, size_t inputLen, const DocCore& co
         jpdfium_qpdf_internal::WriterLock lock{-1};
         w.write();
         std::shared_ptr<Buffer> buf = w.getBufferSharedPointer();
+        if (!buf) {
+            reportJson = "{\"error\":\"qpdf produced null output buffer\"}";
+            return -1;
+        }
         out.assign(buf->getBuffer(), buf->getBuffer() + buf->getSize());
         reportJson = statsToJson(st);
         return 0;

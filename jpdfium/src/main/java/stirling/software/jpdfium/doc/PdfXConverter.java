@@ -314,15 +314,74 @@ public final class PdfXConverter {
         }
     }
 
+    private static Rect clampToMediaBox(Rect box, Rect media) {
+        float mx0 = Math.min(media.x(), media.x() + media.width());
+        float my0 = Math.min(media.y(), media.y() + media.height());
+        float mx1 = Math.max(media.x(), media.x() + media.width());
+        float my1 = Math.max(media.y(), media.y() + media.height());
+        float bx0 = Math.min(box.x(), box.x() + box.width());
+        float by0 = Math.min(box.y(), box.y() + box.height());
+        float bx1 = Math.max(box.x(), box.x() + box.width());
+        float by1 = Math.max(box.y(), box.y() + box.height());
+        float nx0 = Math.max(mx0, Math.min(mx1, bx0));
+        float ny0 = Math.max(my0, Math.min(my1, by0));
+        float nx1 = Math.max(mx0, Math.min(mx1, bx1));
+        float ny1 = Math.max(my0, Math.min(my1, by1));
+        if (nx1 <= nx0 || ny1 <= ny0) {
+            return new Rect(mx0, my0, mx1 - mx0, my1 - my0);
+        }
+        return new Rect(nx0, ny0, nx1 - nx0, ny1 - ny0);
+    }
+
+    private static boolean rectDiffers(Rect a, Rect b) {
+        return Math.abs(a.x() - b.x()) > 1e-4f
+                || Math.abs(a.y() - b.y()) > 1e-4f
+                || Math.abs(a.width() - b.width()) > 1e-4f
+                || Math.abs(a.height() - b.height()) > 1e-4f;
+    }
+
     private static void applyPageBoxes(PdfDocument document) {
         for (int i = 0; i < document.pageCount(); i++) {
             try (PdfPage page = document.page(i)) {
+                Rect media = page.getMediaBox();
+                page.getCropBox()
+                        .ifPresent(
+                                box -> {
+                                    Rect clamped = clampToMediaBox(box, media);
+                                    if (rectDiffers(box, clamped)) {
+                                        page.setCropBox(clamped);
+                                    }
+                                });
+                page.getBleedBox()
+                        .ifPresent(
+                                box -> {
+                                    Rect clamped = clampToMediaBox(box, media);
+                                    if (rectDiffers(box, clamped)) {
+                                        page.setBleedBox(clamped);
+                                    }
+                                });
+                page.getTrimBox()
+                        .ifPresent(
+                                box -> {
+                                    Rect clamped = clampToMediaBox(box, media);
+                                    if (rectDiffers(box, clamped)) {
+                                        page.setTrimBox(clamped);
+                                    }
+                                });
+                page.getArtBox()
+                        .ifPresent(
+                                box -> {
+                                    Rect clamped = clampToMediaBox(box, media);
+                                    if (rectDiffers(box, clamped)) {
+                                        page.setArtBox(clamped);
+                                    }
+                                });
                 // ISO 15930 forbids having both TrimBox and ArtBox.
                 if (page.getTrimBox().isPresent() || page.getArtBox().isPresent()) {
                     continue;
                 }
-                Rect fallback = page.getCropBox().orElseGet(page::getMediaBox);
-                page.setTrimBox(fallback);
+                Rect fallback = page.getCropBox().orElse(media);
+                page.setTrimBox(clampToMediaBox(fallback, media));
             }
         }
     }

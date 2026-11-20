@@ -166,32 +166,29 @@ static int sanitizeFile(const char* in_path, const char* out_path, int32_t flags
 
         // Java-created staging: truncate is correct, but refuse a symlink
         // swapped in after creation (see createOutputFile in jpdfium_qpdf.cpp).
-        FILE* out = nullptr;
+        FILE* rawOut = nullptr;
 #ifdef _WIN32
-        out = std::fopen(out_path, "wb");
+        rawOut = std::fopen(out_path, "wb");
 #else
         int fd = ::open(out_path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
         if (fd >= 0) {
-            out = ::fdopen(fd, "wb");
-            if (!out) ::close(fd);
+            rawOut = ::fdopen(fd, "wb");
+            if (!rawOut) ::close(fd);
         }
 #endif
+        std::unique_ptr<FILE, int (*)(FILE*)> out(rawOut, &std::fclose);
         if (!out) return -1;
-        bool writerOwnsFile = false;
         try {
             QPDFWriter w(*qpdf);
-            w.setOutputFile("jpdfium-out", out, true);
-            writerOwnsFile = true;
+            w.setOutputFile("jpdfium-out", out.get(), false);
             WriterLock lock{-1};
             w.write();
             return 0;
         } catch (const std::exception& e) {
             std::fprintf(stderr, "jpdfium qpdf sanitize file: %s\n", e.what());
-            if (!writerOwnsFile) std::fclose(out);
             return -1;
         } catch (...) {
             std::fprintf(stderr, "jpdfium qpdf sanitize file: unknown error\n");
-            if (!writerOwnsFile) std::fclose(out);
             return -1;
         }
     } catch (const std::exception& e) {
