@@ -425,6 +425,25 @@ inline uint32_t unicodeForGlyphName(std::string const& raw_name) {
     return 0;
 }
 
+inline bool isAdobeGlyphListMember(std::string const& raw_name) {
+    if (raw_name == ".notdef") return true;
+    std::string name = detail::stripGlyphVariant(raw_name);
+    auto const* first = std::begin(kAdobeGlyphNames);
+    auto const* last = std::end(kAdobeGlyphNames);
+    auto it = std::lower_bound(first, last, name,
+                               [](AdobeGlyphName const& entry, std::string const& value) {
+                                   return std::strcmp(entry.name, value.c_str()) < 0;
+                               });
+    if (it != last && name == it->name) return true;
+    auto const* seq_first = std::begin(kAdobeGlyphSequences);
+    auto const* seq_last = std::end(kAdobeGlyphSequences);
+    auto seq_it = std::lower_bound(seq_first, seq_last, name,
+                                   [](AdobeGlyphSequence const& entry, std::string const& value) {
+                                       return std::strcmp(entry.name, value.c_str()) < 0;
+                                   });
+    return seq_it != seq_last && name == seq_it->name;
+}
+
 // Resolve a glyph name to the sequence of Unicode scalars it represents.
 // Supports single names, '_'-separated ligature components (f_i, f_f_i) and
 // multi-scalar uniXXXXYYYY... names.

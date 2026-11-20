@@ -136,6 +136,10 @@ public final class QpdfLib {
                     "jpdfium_qpdf_inspect_fonts_file",
                     FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
 
+    private static final MethodHandle PDFA_PART_HANDLE = Symbols.downcallOptionalUnguarded(
+            "jpdfium_qpdf_pdfa_part",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS));
+
     private static final MethodHandle SUBSET_FONTS_HANDLE = Symbols.downcallOptionalUnguarded(
             "jpdfium_qpdf_subset_fonts",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
@@ -257,6 +261,35 @@ public final class QpdfLib {
         }
     }
 
+    /** True when this native build can inspect the PDF/A conformance part. */
+    public static boolean isPdfaPartSupported() {
+        return PDFA_PART_HANDLE != null;
+    }
+
+    /**
+     * PDF/A conformance part through the parsed catalog: -1 no claim, 1 PDF/A-1, 2 PDF/A-2 or
+     * later. Object-stream and Flate aware, unlike the JVM's raw-byte sweep: a catalog
+     * compressed into an object stream still reports its claim.
+     *
+     * @return the part, or -1 when the input cannot be parsed or no claim is present
+     */
+    public static int pdfaPart(byte[] input) {
+        if (PDFA_PART_HANDLE == null || input == null || input.length == 0) return -1;
+        Semaphore held = acquireSlotOrThrow("qpdf pdfa part");
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment partPtr = arena.allocate(JAVA_INT);
+            int rc = (int) PDFA_PART_HANDLE.invokeExact(
+                    arena.allocateFrom(JAVA_BYTE, input), (long) input.length, partPtr);
+            if (rc != 0) return -1;
+            return partPtr.get(JAVA_INT, 0);
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            return -1;
+        } finally {
+            releaseSlot(held);
+        }
+    }
+
     /** Replace the embedded program of every font named {@code baseFont}; programless fonts stay unchanged. */
     public static byte[] replaceFontStream(byte[] input, String baseFont, byte[] fontData) {
         if (input == null || input.length == 0 || baseFont == null || baseFont.isBlank()
@@ -292,6 +325,11 @@ public final class QpdfLib {
     }
 
     public static byte[] embedFonts(byte[] input, Map<String, byte[]> fonts, boolean onlyMissing) {
+        return embedFonts(input, fonts, onlyMissing, false);
+    }
+
+    public static byte[] embedFonts(
+            byte[] input, Map<String, byte[]> fonts, boolean onlyMissing, boolean stripSignatures) {
         if (EMBED_FONTS_HANDLE == null) throw new JPDFiumException("font embedding requires native qpdf support");
         Semaphore held = acquireSlotOrThrow("font embedding");
         try (QpdfCall call = new QpdfCall()) {
@@ -303,8 +341,9 @@ public final class QpdfLib {
                 data.setAtIndex(ADDRESS, i, call.copyBytes(e.getValue()));
                 lens.setAtIndex(JAVA_LONG, i++, e.getValue().length);
             }
+            int flags = (onlyMissing ? 1 : 0) | (stripSignatures ? 2 : 0);
             int rc = (int) EMBED_FONTS_HANDLE.invokeExact(call.copyBytes(input), (long) input.length, n,
-                    names, data, lens, onlyMissing ? 1 : 0, call.outPtr, call.outLen);
+                    names, data, lens, flags, call.outPtr, call.outLen);
             if (rc == 0) return call.copyAndFree("qpdfEmbedFonts");
             if (rc == 1) return null;
             throw new JPDFiumException(switch (rc) {
@@ -331,6 +370,12 @@ public final class QpdfLib {
     public static boolean embedFontsToFile(
             Path input, Path output, Map<String, byte[]> fonts, boolean onlyMissing)
             throws IOException {
+        return embedFontsToFile(input, output, fonts, onlyMissing, false);
+    }
+
+    public static boolean embedFontsToFile(
+            Path input, Path output, Map<String, byte[]> fonts, boolean onlyMissing, boolean stripSignatures)
+            throws IOException {
         if (EMBED_FONTS_FILE_HANDLE == null) {
             throw new JPDFiumException("font embedding requires native qpdf support");
         }
@@ -350,6 +395,7 @@ public final class QpdfLib {
                 lens.setAtIndex(JAVA_LONG, i++, e.getValue().length);
             }
             staging = tx.staging();
+            int flags = (onlyMissing ? 1 : 0) | (stripSignatures ? 2 : 0);
             int rc =
                     (int)
                             EMBED_FONTS_FILE_HANDLE.invokeExact(
@@ -359,7 +405,7 @@ public final class QpdfLib {
                                     names,
                                     data,
                                     lens,
-                                    onlyMissing ? 1 : 0);
+                                    flags);
             if (rc == 1) return false;
             if (rc != 0) {
                 throw new JPDFiumException(

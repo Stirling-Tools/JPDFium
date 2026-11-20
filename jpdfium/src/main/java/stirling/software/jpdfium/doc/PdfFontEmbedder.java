@@ -203,6 +203,17 @@ public final class PdfFontEmbedder {
      *                          is signed or password protected
      */
     public static byte[] embed(byte[] pdf, Map<String, byte[]> fonts) {
+        return embed(pdf, fonts, false);
+    }
+
+    /**
+     * Embed font programs keyed by exact {@code /BaseFont}, optionally stripping digital
+     * signatures so that the output remains valid and unsigned.
+     *
+     * @param stripSignatures when true, digital signature fields, {@code /ByteRange}, and
+     *                        permissions dictionaries are stripped before embedding
+     */
+    public static byte[] embed(byte[] pdf, Map<String, byte[]> fonts, boolean stripSignatures) {
         if (pdf == null || pdf.length == 0) throw new IllegalArgumentException("pdf must not be empty");
         if (fonts == null || fonts.isEmpty()) return pdf;
         Map<String, byte[]> normalized = new LinkedHashMap<>();
@@ -224,24 +235,39 @@ public final class PdfFontEmbedder {
             }
             normalized.put(name, singleFace(data, name));
         }
-        byte[] out = QpdfLib.embedFonts(pdf, normalized, false);
+        byte[] out = QpdfLib.embedFonts(pdf, normalized, false, stripSignatures);
         if (out == null) throw new JPDFiumException("no font matching /BaseFont " + normalized.keySet());
         return out;
     }
 
     /** File-backed variant of {@link #embed(byte[], Map)}. */
     public static byte[] embed(Path input, Map<String, byte[]> fonts) throws IOException {
-        return embed(Files.readAllBytes(input), fonts);
+        return embed(input, fonts, false);
+    }
+
+    /** File-backed variant of {@link #embed(byte[], Map, boolean)}. */
+    public static byte[] embed(Path input, Map<String, byte[]> fonts, boolean stripSignatures) throws IOException {
+        return embed(Files.readAllBytes(input), fonts, stripSignatures);
     }
 
     /** Alias of {@link #embed(byte[], Map)}. */
     public static byte[] replace(byte[] pdf, Map<String, byte[]> fonts) {
-        return embed(pdf, fonts);
+        return embed(pdf, fonts, false);
+    }
+
+    /** Alias of {@link #embed(byte[], Map, boolean)}. */
+    public static byte[] replace(byte[] pdf, Map<String, byte[]> fonts, boolean stripSignatures) {
+        return embed(pdf, fonts, stripSignatures);
     }
 
     /** Alias of {@link #embed(Path, Map)}. */
     public static byte[] replace(Path input, Map<String, byte[]> fonts) throws IOException {
-        return embed(input, fonts);
+        return embed(input, fonts, false);
+    }
+
+    /** Alias of {@link #embed(Path, Map, boolean)}. */
+    public static byte[] replace(Path input, Map<String, byte[]> fonts, boolean stripSignatures) throws IOException {
+        return embed(input, fonts, stripSignatures);
     }
 
     /**
@@ -250,6 +276,14 @@ public final class PdfFontEmbedder {
      * directories when none are given.
      */
     public static Result embedMissing(byte[] pdf, Path... fontDirs) throws IOException {
+        return embedMissing(pdf, false, fontDirs);
+    }
+
+    /**
+     * Embed every non-embedded font resource, optionally stripping digital signatures so
+     * signed documents can have missing fonts embedded.
+     */
+    public static Result embedMissing(byte[] pdf, boolean stripSignatures, Path... fontDirs) throws IOException {
         if (pdf == null || pdf.length == 0) {
             return new Result(pdf == null ? new byte[0] : pdf, List.of(), List.of(), List.of());
         }
@@ -311,7 +345,7 @@ public final class PdfFontEmbedder {
             found.put(name, singleFace(data, name));
             statuses.add(new FontStatus(name, source(face), fsType, true, "embedded"));
         }
-        byte[] out = found.isEmpty() ? null : QpdfLib.embedFonts(pdf, found, true);
+        byte[] out = found.isEmpty() ? null : QpdfLib.embedFonts(pdf, found, true, stripSignatures);
         if (out == null) {
             List<FontStatus> failed = new ArrayList<>(statuses.size());
             for (FontStatus status : statuses) {
@@ -341,11 +375,19 @@ public final class PdfFontEmbedder {
      *     predefined CMap whose code-to-glyph mapping cannot be preserved
      */
     public static Result embedMissingStrict(byte[] pdf, Path... fontDirs) throws IOException {
+        return embedMissingStrict(pdf, false, fontDirs);
+    }
+
+    /**
+     * Embed missing fonts, optionally stripping signatures, and reject any result that still has
+     * an unembedded font.
+     */
+    public static Result embedMissingStrict(byte[] pdf, boolean stripSignatures, Path... fontDirs) throws IOException {
         if (!QpdfLib.isFontInventorySupported()) {
             throw new JPDFiumException(
                     "strict font embedding requires the native font inventory");
         }
-        return embedMissing(pdf, fontDirs).requireAllEmbedded();
+        return embedMissing(pdf, stripSignatures, fontDirs).requireAllEmbedded();
     }
 
     /**
@@ -475,6 +517,12 @@ public final class PdfFontEmbedder {
     /** File-backed variant that lets native qpdf read the input and write the output. */
     public static FileResult embedMissingTo(Path input, Path output, Path... fontDirs)
             throws IOException {
+        return embedMissingTo(input, output, false, fontDirs);
+    }
+
+    /** File-backed variant that lets native qpdf read the input and write the output, optionally stripping signatures. */
+    public static FileResult embedMissingTo(
+            Path input, Path output, boolean stripSignatures, Path... fontDirs) throws IOException {
         List<PdfFontAuditor.FontResource> resources =
                 PdfFontAuditor.unembeddedResources(input);
         Set<String> names = new LinkedHashSet<>();
@@ -490,7 +538,7 @@ public final class PdfFontEmbedder {
             return new FileResult(List.of(), List.of());
         }
         Map<String, byte[]> found = programsFor(missing, blockers, fontDirs);
-        if (found.isEmpty() || !QpdfLib.embedFontsToFile(input, output, found, true)) {
+        if (found.isEmpty() || !QpdfLib.embedFontsToFile(input, output, found, true, stripSignatures)) {
             Files.copy(input, output, StandardCopyOption.REPLACE_EXISTING);
             return new FileResult(List.of(), missing);
         }
@@ -523,7 +571,12 @@ public final class PdfFontEmbedder {
 
     /** File-backed variant of {@link #embedMissing(byte[], Path...)}. */
     public static Result embedMissing(Path input, Path... fontDirs) throws IOException {
-        return embedMissing(Files.readAllBytes(input), fontDirs);
+        return embedMissing(input, false, fontDirs);
+    }
+
+    /** File-backed variant of {@link #embedMissing(byte[], boolean, Path...)}. */
+    public static Result embedMissing(Path input, boolean stripSignatures, Path... fontDirs) throws IOException {
+        return embedMissing(Files.readAllBytes(input), stripSignatures, fontDirs);
     }
 
     private static Face resolveName(Map<String, Face> index, String name) {

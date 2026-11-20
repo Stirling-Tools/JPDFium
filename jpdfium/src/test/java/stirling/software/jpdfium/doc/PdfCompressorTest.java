@@ -250,6 +250,66 @@ class PdfCompressorTest {
         }
     }
 
+    private static long presetBytes(PdfDocument doc, CompressPreset preset, boolean subset)
+            throws Exception {
+        return PdfCompressor.compress(doc, CompressOptions.builder().preset(preset)
+                .subsetFonts(subset).build()).bytes().length;
+    }
+
+    @Test
+    void compressToTargetSizeStopsAtTheFirstPresetThatFits(@TempDir Path temp) throws Exception {
+        assumeTrue(QpdfLib.isSubsetFontsSupported(), "native font subsetting unavailable");
+        Path src = fullFontPdf(temp);
+
+        try (PdfDocument doc = PdfDocument.open(src)) {
+            long lossless = presetBytes(doc, CompressPreset.LOSSLESS, false);
+            byte[] out = PdfCompressor.compressToTargetSize(doc, lossless);
+            assertEquals(lossless, out.length,
+                    "a target the first rung already meets must return exactly that rung's "
+                            + "result instead of walking the whole ladder");
+        }
+    }
+
+    @Test
+    void compressToTargetSizeReturnsTheBestAttemptWhenTargetIsUnreachable(
+            @TempDir Path temp) throws Exception {
+        assumeTrue(QpdfLib.isSubsetFontsSupported(), "native font subsetting unavailable");
+        Path src = fullFontPdf(temp);
+
+        try (PdfDocument doc = PdfDocument.open(src)) {
+            long maximum = presetBytes(doc, CompressPreset.MAXIMUM, true);
+            byte[] out = PdfCompressor.compressToTargetSize(doc, 1L);
+            assertEquals(maximum, out.length,
+                    "an unreachable target must return the smallest result the ladder "
+                            + "achieves, not null or the largest");
+            try (PDDocument reopened = Loader.loadPDF(out)) {
+                assertEquals(1, reopened.getNumberOfPages(),
+                        "the best attempt must still be a valid one-page PDF");
+            }
+        }
+    }
+
+    @Test
+    void compressToTargetSizeHonorsAMidLadderTarget(@TempDir Path temp) throws Exception {
+        assumeTrue(QpdfLib.isSubsetFontsSupported(), "native font subsetting unavailable");
+        Path src = fullFontPdf(temp);
+
+        try (PdfDocument doc = PdfDocument.open(src)) {
+            long lossless = presetBytes(doc, CompressPreset.LOSSLESS, false);
+            long maximum = presetBytes(doc, CompressPreset.MAXIMUM, true);
+            assertTrue(maximum < lossless,
+                    "fixture must shrink across the ladder: " + maximum + " vs " + lossless);
+            long mid = maximum + (lossless - maximum) / 2;
+            byte[] out = PdfCompressor.compressToTargetSize(doc, mid);
+            assertTrue(out.length <= mid || out.length == maximum,
+                    "a mid-ladder target must be met or fall back to the best attempt: "
+                            + out.length + " vs target " + mid);
+            try (PdfDocument check = PdfDocument.open(out)) {
+                assertEquals(1, check.pageCount(), "result must stay a valid document");
+            }
+        }
+    }
+
     @Test
     void taggedFontSubsettingIsStrictlyOptIn(@TempDir Path temp) throws Exception {
         assumeTrue(QpdfLib.isSubsetFontsSupported(), "native font subsetting unavailable");
