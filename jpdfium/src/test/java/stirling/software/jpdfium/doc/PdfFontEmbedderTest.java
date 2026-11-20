@@ -48,6 +48,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -1364,8 +1365,9 @@ class PdfFontEmbedderTest {
             assertEquals(256, widths.size(), "/Widths must cover the simple-font code range");
             assertTrue(widths.getInt(0x48) > 0, "code H must have a positive advance");
         }
-        try (PdfDocument pdf = PdfDocument.open(result.pdf())) {
-            assertEquals("Hello", pdf.page(0).extractText().strip(),
+        try (PdfDocument pdf = PdfDocument.open(result.pdf());
+                PdfPage page = pdf.page(0)) {
+            assertEquals("Hello", page.extractText().strip(),
                     "built-in code mapping must preserve the text");
         }
     }
@@ -1557,7 +1559,12 @@ class PdfFontEmbedderTest {
                 assertNotNull(page.renderImage());
             }
         }
+    }
 
+    @Test
+    @EnabledIfSystemProperty(named = "jpdfium.safedocs.dir", matches = ".+")
+    void stripsSignaturesFromSafeDocsCorpus() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
         List<String> safeDocPaths = List.of(
                 "pdfs/1000/1000005.pdf",
                 "pdfs/2200/2200006.pdf",
@@ -1567,24 +1574,27 @@ class PdfFontEmbedderTest {
                 "pdfs/6600/6600009.pdf",
                 "pdfs/7800/7800004.pdf",
                 "pdfs/0000/0000020.pdf");
-        Path safeBase = Path.of("/private/var/folders/10/4hn925296yx_fqxp5g2z__v40000gn/T/safedocs");
+        Path safeBase = Path.of(System.getProperty("jpdfium.safedocs.dir"));
+        assumeTrue(Files.isDirectory(safeBase), "SafeDocs directory not found: " + safeBase);
+        int tested = 0;
         for (String rel : safeDocPaths) {
             Path safeDoc = safeBase.resolve(rel);
-            if (Files.isRegularFile(safeDoc)) {
-                byte[] safeBytes = Files.readAllBytes(safeDoc);
-                assertThrows(JPDFiumException.class, () -> PdfFontEmbedder.embedMissing(safeBytes, false));
-                var res = PdfFontEmbedder.embedMissing(safeBytes, true);
-                assertNotNull(res.pdf());
-                assertFalse(res.embedded().isEmpty());
-                assertFalse(new String(res.pdf(), StandardCharsets.ISO_8859_1).contains("/ByteRange"));
-                try (PdfDocument doc = PdfDocument.open(res.pdf())) {
-                    assertTrue(doc.pageCount() > 0);
-                    try (PdfPage page = doc.page(0)) {
-                        assertNotNull(page.renderImage());
-                    }
+            if (!Files.isRegularFile(safeDoc)) continue;
+            tested++;
+            byte[] safeBytes = Files.readAllBytes(safeDoc);
+            assertThrows(JPDFiumException.class, () -> PdfFontEmbedder.embedMissing(safeBytes, false));
+            var res = PdfFontEmbedder.embedMissing(safeBytes, true);
+            assertNotNull(res.pdf());
+            assertFalse(res.embedded().isEmpty());
+            assertFalse(new String(res.pdf(), StandardCharsets.ISO_8859_1).contains("/ByteRange"));
+            try (PdfDocument doc = PdfDocument.open(res.pdf())) {
+                assertTrue(doc.pageCount() > 0);
+                try (PdfPage page = doc.page(0)) {
+                    assertNotNull(page.renderImage());
                 }
             }
         }
+        assertTrue(tested > 0, "No SafeDocs test PDFs found under " + safeBase);
     }
 
     @Test
@@ -1706,8 +1716,9 @@ class PdfFontEmbedderTest {
         assertTrue(result.statuses().stream().allMatch(PdfFontEmbedder.FontStatus::resolved),
                 "statuses: " + result.statuses());
         assertTrue(result.embedded().contains("ArialMT"), "Arial alias must resolve: " + result);
-        try (PdfDocument after = PdfDocument.open(result.pdf())) {
-            assertFalse(after.page(0).extractText().isBlank(),
+        try (PdfDocument after = PdfDocument.open(result.pdf());
+                PdfPage page = after.page(0)) {
+            assertFalse(page.extractText().isBlank(),
                     "safe CID embedding must keep extractable text");
         }
     }
@@ -2134,8 +2145,9 @@ class PdfFontEmbedderTest {
 
         assertTrue(result.embedded().contains(source.baseName()),
                 "a commented CMap must still embed: " + result.unresolved());
-        try (PdfDocument doc = PdfDocument.open(result.pdf())) {
-            assertTrue(doc.page(0).extractText().contains("A"),
+        try (PdfDocument doc = PdfDocument.open(result.pdf());
+                PdfPage page = doc.page(0)) {
+            assertTrue(page.extractText().contains("A"),
                     "the commented CMap must keep extraction working");
         }
     }
@@ -2324,6 +2336,197 @@ class PdfFontEmbedderTest {
             }
         }
         return null;
+    }
+
+    @Test
+    void prefersExactUtf8DecodedNameOverSuffixFallback(@TempDir Path fontDir) throws Exception {
+        byte[] baseTtf;
+        try (InputStream in = PDDocument.class.getResourceAsStream(
+                "/org/apache/pdfbox/resources/ttf/LiberationSans-Regular.ttf")) {
+            assertNotNull(in);
+            baseTtf = in.readAllBytes();
+        }
+        Files.write(fontDir.resolve("exact.ttf"), renameTtf(baseTtf, "Caf\u00E9-Bold"));
+        Files.write(fontDir.resolve("fallback.ttf"), renameTtf(baseTtf, "Caf\u00C3\u00A9"));
+
+        PdfFontEmbedder.FontStatus status = PdfFontEmbedder.diagnose("Caf\u00C3\u00A9-Bold", fontDir);
+        assertTrue(status.resolved(), "UTF-8 decoded mojibake name should resolve: " + status);
+        assertTrue(status.source().endsWith("exact.ttf"),
+                "Exact UTF-8 decoded candidate must win over prefix/suffix fallback, got: " + status.source());
+    }
+
+    @Test
+    void stripsSignaturesAcrossCyclicKidsAndSplitWidgets() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
+        byte[] signedPdf;
+        try (PDDocument pdf = new PDDocument()) {
+            PDPage page = new PDPage(PDRectangle.LETTER);
+            pdf.addPage(page);
+            try (PDPageContentStream cs = new PDPageContentStream(pdf, page)) {
+                cs.beginText();
+                cs.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 12);
+                cs.newLineAtOffset(72, 720);
+                cs.showText("Split widget test");
+                cs.endText();
+            }
+
+            COSDictionary sigValue = new COSDictionary();
+            sigValue.setItem(COSName.TYPE, COSName.SIG);
+            sigValue.setItem(COSName.FILTER, COSName.ADOBE_PPKLITE);
+            COSArray byteRange = new COSArray();
+            for (int v : new int[]{0, 1, 2, 3}) byteRange.add(COSInteger.get(v));
+            sigValue.setItem(COSName.BYTERANGE, byteRange);
+
+            COSDictionary sigField = new COSDictionary();
+            sigField.setItem(COSName.FT, COSName.SIG);
+            sigField.setName(COSName.T, "Signature1");
+            sigField.setItem(COSName.V, sigValue);
+
+            // Split widget holds no /FT or /V itself, only /Subtype /Widget + /Parent -> sigField.
+            COSDictionary splitWidget = new COSDictionary();
+            splitWidget.setItem(COSName.TYPE, COSName.ANNOT);
+            splitWidget.setItem(COSName.SUBTYPE, COSName.WIDGET);
+            splitWidget.setItem(COSName.RECT, new PDRectangle(72, 600, 140, 40).getCOSObject());
+            splitWidget.setItem(COSName.PARENT, sigField);
+
+            COSArray sigKids = new COSArray();
+            sigKids.add(splitWidget);
+            sigKids.add(sigField);  // self-cycle to verify bounded cycle-safe traversal
+            sigField.setItem(COSName.KIDS, sigKids);
+
+            // Non-signature cyclic branch must also terminate without stack overflow.
+            COSDictionary cyclicNonSig = new COSDictionary();
+            cyclicNonSig.setName(COSName.T, "NonSigBranch");
+            COSArray selfKids = new COSArray();
+            selfKids.add(cyclicNonSig);
+            cyclicNonSig.setItem(COSName.KIDS, selfKids);
+
+            COSDictionary acroForm = new COSDictionary();
+            COSArray fields = new COSArray();
+            fields.add(sigField);
+            fields.add(cyclicNonSig);
+            acroForm.setItem(COSName.FIELDS, fields);
+            acroForm.setInt(COSName.getPDFName("SigFlags"), 3);
+            pdf.getDocumentCatalog().getCOSObject().setItem(COSName.ACRO_FORM, acroForm);
+
+            COSArray annots = new COSArray();
+            annots.add(splitWidget);
+            page.getCOSObject().setItem(COSName.ANNOTS, annots);
+
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            pdf.save(out);
+            signedPdf = out.toByteArray();
+        }
+
+        PdfFontEmbedder.Result result = PdfFontEmbedder.embedMissing(signedPdf, true);
+        assertFalse(result.embedded().isEmpty());
+        assertFalse(new String(result.pdf(), StandardCharsets.ISO_8859_1).contains("/ByteRange"));
+
+        try (PDDocument reopened = Loader.loadPDF(result.pdf())) {
+            assertEquals(1, reopened.getNumberOfPages());
+            assertTrue(reopened.getPage(0).getAnnotations().isEmpty(),
+                    "Split signature widget must be removed from page /Annots");
+            COSDictionary form = reopened.getDocumentCatalog().getCOSObject()
+                    .getCOSDictionary(COSName.ACRO_FORM);
+            if (form != null) {
+                assertNull(form.getDictionaryObject(COSName.getPDFName("SigFlags")),
+                        "/SigFlags must be stripped");
+                COSArray remainingFields = form.getCOSArray(COSName.FIELDS);
+                if (remainingFields != null) {
+                    for (COSBase item : remainingFields) {
+                        COSBase resolved = item instanceof org.apache.pdfbox.cos.COSObject obj
+                                ? obj.getObject() : item;
+                        if (resolved instanceof COSDictionary dict) {
+                            assertNotEquals(COSName.SIG, dict.getDictionaryObject(COSName.FT),
+                                    "Signature field must be removed from /AcroForm /Fields");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    void embedsVertical90msRksjVUsingVerticalCidOverride() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
+        byte[] base = Files.readAllBytes(Path.of(PdfFontEmbedderTest.class
+                .getResource("/pdfs/general/90ms_rksj_h_sample.pdf").toURI()));
+        byte[] verticalInput = new String(base, StandardCharsets.ISO_8859_1)
+                .replace("/90ms-RKSJ-H", "/90ms-RKSJ-V")
+                .replace("<93FA967B8CEA836583588367>", "<8141>                   ")
+                .getBytes(StandardCharsets.ISO_8859_1);
+
+        PdfFontEmbedder.Result result = PdfFontEmbedder.embedMissing(verticalInput);
+        assertTrue(result.embedded().contains("HeiseiMin-W3"),
+                "90ms-RKSJ-V sample should embed with vertical CMap support: " + result);
+        try (PDDocument pdf = Loader.loadPDF(result.pdf())) {
+            COSDictionary descendant = null;
+            for (COSName name : pdf.getPage(0).getResources().getFontNames()) {
+                COSDictionary fd = pdf.getPage(0).getResources().getFont(name).getCOSObject();
+                String baseFont = fd.getNameAsString(COSName.BASE_FONT);
+                if (baseFont != null && (baseFont.equals("HeiseiMin-W3")
+                        || baseFont.endsWith("+HeiseiMin-W3"))) {
+                    COSArray arr = fd.getCOSArray(COSName.DESCENDANT_FONTS);
+                    descendant = (COSDictionary) arr.getObject(0);
+                    break;
+                }
+            }
+            assertNotNull(descendant, "Expected descendant CIDFont for HeiseiMin-W3");
+            COSArray widths = descendant.getCOSArray(COSName.W);
+            assertNotNull(widths, "Expected /W widths array");
+            boolean hasVerticalCid7887 = false;
+            boolean hasHorizontalCid633 = false;
+            for (int i = 0; i < widths.size(); i++) {
+                COSBase item = widths.get(i);
+                if (item instanceof COSInteger cidInt) {
+                    if (cidInt.intValue() == 7887) hasVerticalCid7887 = true;
+                    if (cidInt.intValue() == 633) hasHorizontalCid633 = true;
+                }
+            }
+            assertTrue(hasVerticalCid7887,
+                    "90ms-RKSJ-V code 0x8141 must resolve to vertical CID 7887, /W=" + widths);
+            assertFalse(hasHorizontalCid633,
+                    "90ms-RKSJ-V code 0x8141 must not fall back to horizontal CID 633");
+        }
+        try (PdfDocument doc = PdfDocument.open(result.pdf());
+                PdfPage page = doc.page(0)) {
+            String extracted = page.extractText();
+            assertTrue(extracted.contains("\u3001"),
+                    "Extracted text must contain ideographic comma U+3001, got: " + extracted);
+        }
+    }
+
+    private static byte[] renameTtf(byte[] ttf, String name) {
+        byte[] utf16 = name.getBytes(StandardCharsets.UTF_16BE);
+        int nameTableLen = ((6 + 2 * 12 + utf16.length) + 3) & ~3;
+        int alignedBase = (ttf.length + 3) & ~3;
+        byte[] out = new byte[alignedBase + nameTableLen];
+        System.arraycopy(ttf, 0, out, 0, ttf.length);
+
+        ByteBuffer buf = ByteBuffer.wrap(out).order(ByteOrder.BIG_ENDIAN);
+        int numTables = buf.getShort(4) & 0xFFFF;
+        for (int i = 0; i < numTables; i++) {
+            int rec = 12 + 16 * i;
+            if (buf.getInt(rec) == 0x6E616D65) { // 'name'
+                buf.putInt(rec + 8, alignedBase);
+                buf.putInt(rec + 12, 6 + 2 * 12 + utf16.length);
+                break;
+            }
+        }
+        buf.position(alignedBase);
+        buf.putShort((short) 0); // format
+        buf.putShort((short) 2); // count
+        buf.putShort((short) (6 + 2 * 12)); // stringOffset
+        for (int nameId : new int[]{4, 6}) {
+            buf.putShort((short) 3); // platformID = Windows
+            buf.putShort((short) 1); // encodingID = Unicode BMP
+            buf.putShort((short) 0x0409); // languageID = en-US
+            buf.putShort((short) nameId);
+            buf.putShort((short) utf16.length);
+            buf.putShort((short) 0);
+        }
+        buf.put(utf16);
+        return out;
     }
 
     private record FontProgram(String baseName, byte[] data) {
