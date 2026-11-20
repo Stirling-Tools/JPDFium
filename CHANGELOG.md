@@ -160,6 +160,10 @@ publishing workflows, not library releases, so they are not listed here.
   rewritten once per group rather than once per match. A 200-page document with
   99,000 matches redacts in about 4 s instead of 16 s; output text is unchanged.
 
+- Font directories are indexed case-insensitively, so `FONT.TTF` is picked up
+  exactly like `font.ttf`, and the scan no longer allocates a regex per file
+  name.
+
 ### Fixed
 
 - The bundled `JPDFiumCompactCmyk.icc` fallback is now generated only from the

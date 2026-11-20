@@ -23,6 +23,7 @@ import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.transform.PdfPageGeometry;
 
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.util.List;
 import java.util.Set;
 
@@ -205,6 +206,78 @@ class ObjectPreservationTest {
                 }
                 if (bookmark.title().contains("Chapter 2")) {
                     assertEquals(4, bookmark.pageIndex(), "Old page 2 must map to 2*2 = 4 in 2-up");
+                }
+            }
+        }
+    }
+
+    /** Builds a three-page letter-size PDF with a distinct text marker per page. */
+    private static byte[] createThreePageMarkerPdf() throws IOException {
+        try (PDDocument doc = new PDDocument();
+                ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            for (int i = 1; i <= 3; i++) {
+                PDPage page = new PDPage(PDRectangle.LETTER);
+                doc.addPage(page);
+                try (PDPageContentStream content = new PDPageContentStream(doc, page)) {
+                    content.beginText();
+                    content.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 12);
+                    content.newLineAtOffset(72, 700);
+                    content.showText("SOURCE-PAGE-" + i);
+                    content.endText();
+                }
+            }
+            doc.save(out);
+            return out.toByteArray();
+        }
+    }
+
+    /**
+     * Behavioral contract of {@code split2Up}: the page count doubles, each half
+     * keeps the source page's content, and the half order follows the reading
+     * direction. Pins the one-import-per-page rewrite so index bookkeeping
+     * cannot silently regress.
+     */
+    @Test
+    @DisplayName("2-Up split doubles pages and orders halves by reading direction")
+    void split2UpDoublesPagesAndOrdersHalves() throws Exception {
+        float letterWidth = PDRectangle.LETTER.getWidth();
+        float halfWidth = letterWidth / 2f;
+        byte[] sourceBytes = createThreePageMarkerPdf();
+
+        try (PdfDocument doc = PdfDocument.open(sourceBytes)) {
+            int split = PdfPageSplitter.split2Up(doc, false, true);
+            assertEquals(3, split, "every source page must be reported as split");
+            assertEquals(6, doc.pageCount(), "three source pages must double to six");
+
+            for (int source = 0; source < 3; source++) {
+                try (PdfPage left = doc.page(2 * source); PdfPage right = doc.page(2 * source + 1)) {
+                    Rect leftBox = left.getMediaBox();
+                    Rect rightBox = right.getMediaBox();
+                    assertEquals(0f, leftBox.x(), 1e-4f,
+                            "left half of source page " + source + " must start at x=0");
+                    assertEquals(halfWidth, leftBox.width(), 1e-4f,
+                            "left half of source page " + source + " must be half width");
+                    assertEquals(halfWidth, rightBox.x(), 1e-4f,
+                            "right half of source page " + source + " must start at the split line");
+                    assertEquals(halfWidth, rightBox.width(), 1e-4f,
+                            "right half of source page " + source + " must be half width");
+                    assertTrue(left.extractText().contains("SOURCE-PAGE-" + (source + 1)),
+                            "left half must keep the source page's text");
+                    assertTrue(right.extractText().contains("SOURCE-PAGE-" + (source + 1)),
+                            "right half must keep the source page's text");
+                }
+            }
+        }
+
+        try (PdfDocument doc = PdfDocument.open(sourceBytes)) {
+            PdfPageSplitter.split2Up(doc, false, false);
+            assertEquals(6, doc.pageCount(), "right-to-left split must also double the page count");
+            for (int source = 0; source < 3; source++) {
+                try (PdfPage first = doc.page(2 * source); PdfPage second = doc.page(2 * source + 1)) {
+                    assertEquals(halfWidth, first.getMediaBox().x(), 1e-4f,
+                            "right-to-left reading must put the right half of page " + source + " first");
+                    assertEquals(0f, second.getMediaBox().x(), 1e-4f,
+                            "right-to-left reading must put the left half of page " + source + " second");
                 }
             }
         }
