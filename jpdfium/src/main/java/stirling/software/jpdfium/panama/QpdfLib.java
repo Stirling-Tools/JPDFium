@@ -257,7 +257,7 @@ public final class QpdfLib {
         }
     }
 
-    /** Single-font form of {@link #embedFonts}, embedding into every font named {@code baseFont}. */
+    /** Replace the embedded program of every font named {@code baseFont}; programless fonts stay unchanged. */
     public static byte[] replaceFontStream(byte[] input, String baseFont, byte[] fontData) {
         if (input == null || input.length == 0 || baseFont == null || baseFont.isBlank()
                 || fontData == null || fontData.length == 0) {
