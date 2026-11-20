@@ -149,6 +149,7 @@ public final class PdfPageBoxes {
             float top = box.y() + box.height();
             setter.invokeExact(rawPage, left, bottom, right, top);
         } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
             throw new JPDFiumException("Failed to set page box", t);
         }
     }
