@@ -185,7 +185,7 @@ int subsetEmbeddedFonts(QPDF& qpdf, bool subsetTagged = false);
 std::string inspectFonts(QPDF& qpdf);
 
 // Page assembly & document-level helpers (jpdfium_qpdf_pages.cpp)
-void applyDocumentOptions(QPDF& pdf, OptimizeOptions const& options);
+int32_t applyDocumentOptions(QPDF& pdf, OptimizeOptions const& options);
 
 // PDFium-QPDF Reload & Font Normalizer (jpdfium_advanced.cpp / jpdfium_font_normalizer.cpp)
 bool qpdfSaveFpdf(DocWrapper* w, std::vector<uint8_t>& out);

@@ -209,6 +209,10 @@ if(JPDFIUM_USE_PDFIUM)
         bridge/src/jpdfium_repair.cpp
         bridge/src/jpdfium_qpdf.cpp
         bridge/src/jpdfium_qpdf_cmap.cpp
+        bridge/src/jpdfium_qpdf_dedupe.cpp
+        bridge/src/jpdfium_qpdf_fonts_embed.cpp
+        bridge/src/jpdfium_qpdf_fonts_subset.cpp
+        bridge/src/jpdfium_qpdf_pages.cpp
         bridge/src/jpdfium_qpdf_sanitize.cpp
         bridge/src/jpdfium_sanitize.cpp
         bridge/src/jpdfium_brotli.cpp
