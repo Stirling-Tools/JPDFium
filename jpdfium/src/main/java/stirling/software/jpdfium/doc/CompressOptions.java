@@ -36,6 +36,7 @@ public final class CompressOptions {
     private final boolean useZopfliDeflate;  // Rust: zopfli post-processing pass
     private final int zopfliIterations;      // Rust: zopfli iteration count
     private final int zopfliMaxInputBytes;   // Rust: skip zopfli above this size, 0 = unlimited
+    private final boolean subsetFonts;       // Subset already-embedded TrueType/OpenType fonts
 
     private CompressOptions(Builder b) {
         this.imageQuality = b.imageQuality;
@@ -54,6 +55,7 @@ public final class CompressOptions {
         this.useZopfliDeflate = b.useZopfliDeflate;
         this.zopfliIterations = b.zopfliIterations;
         this.zopfliMaxInputBytes = b.zopfliMaxInputBytes;
+        this.subsetFonts = b.subsetFonts;
     }
 
     public int imageQuality() { return imageQuality; }
@@ -135,6 +137,11 @@ public final class CompressOptions {
      * files. Only used when {@link #useZopfliDeflate()} is {@code true}.
      */
     public int zopfliMaxInputBytes() { return zopfliMaxInputBytes; }
+    /**
+     * Whether to subset already-embedded TrueType/OpenType fonts in-place.
+     * Default: {@code true}.
+     */
+    public boolean subsetFonts() { return subsetFonts; }
 
     /**
      * @deprecated the option was removed; the lossless path no longer recompresses
@@ -169,6 +176,7 @@ public final class CompressOptions {
         private boolean useZopfliDeflate = false;
         private int zopfliIterations = 15;
         private int zopfliMaxInputBytes = 0;
+        private boolean subsetFonts = true;
 
         private Builder() {}
 
@@ -231,6 +239,7 @@ public final class CompressOptions {
             this.removeMetadata = preset.removeMetadata();
             this.preservationMode = preset.preservationMode();
             this.useZopfliDeflate = preset.useZopfliDeflate();
+            this.subsetFonts = preset.subsetFonts();
             return this;
         }
 
@@ -273,6 +282,12 @@ public final class CompressOptions {
          */
         public Builder zopfliMaxInputBytes(int bytes) {
             this.zopfliMaxInputBytes = Math.max(0, bytes);
+            return this;
+        }
+
+        /** Subset already-embedded TrueType/OpenType fonts. Default {@code true}. */
+        public Builder subsetFonts(boolean v) {
+            this.subsetFonts = v;
             return this;
         }
 
