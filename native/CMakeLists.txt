@@ -202,6 +202,7 @@ if(JPDFIUM_USE_PDFIUM)
         bridge/src/jpdfium_redact.cpp bridge/src/jpdfium_redact_audit.cpp bridge/src/jpdfium_redact_fission.cpp bridge/src/jpdfium_redact_fonts.cpp bridge/src/jpdfium_redact_image.cpp bridge/src/jpdfium_redact_pattern.cpp bridge/src/jpdfium_redact_text.cpp
         bridge/src/jpdfium_advanced.cpp
         bridge/src/jpdfium_pattern.cpp
+        bridge/src/jpdfium_font_shared.cpp
         bridge/src/jpdfium_image.cpp
         bridge/src/jpdfium_color.cpp
         bridge/src/jpdfium_pdfx.cpp
