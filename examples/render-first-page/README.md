@@ -1,6 +1,6 @@
 # Render the first page
 
-A minimal JPDFium consumer project. It resolves `com.stirling:jpdfium` from Maven Central and renders `sample.pdf` (the JPDFium logo) to a PNG at 150 DPI.
+A minimal JPDFium consumer project. It resolves `com.stirling:jpdfium` from https://maven.stirlingpdf.com and renders `sample.pdf` (the JPDFium logo) to a PNG at 150 DPI.
 
 From the repository root:
 

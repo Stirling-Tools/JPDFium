@@ -114,6 +114,12 @@ class NativeDownloaderTest {
     }
 
     @Test
+    void repoBaseDefaultsToTheStirlingRepository() {
+        System.clearProperty(NativeDownloader.REPO_PROPERTY);
+        assertEquals("https://maven.stirlingpdf.com", NativeDownloader.repoBase());
+    }
+
+    @Test
     void repoBaseTrimsSlashesAndRejectsPlainHttp() {
         System.setProperty(NativeDownloader.REPO_PROPERTY, "https://repo1.maven.org/maven2///");
         assertEquals("https://repo1.maven.org/maven2", NativeDownloader.repoBase());

@@ -53,7 +53,7 @@ These bound concurrent admission, not memory. Two operations admitted together m
 | `jpdfium.native.sweep` | `true` | Set to `false` to disable cleanup of stale cache entries. |
 | `jpdfium.native.download` | `false` | Set to `true` to download a missing native module at runtime. |
 | `jpdfium.native.version` | Version stamped in the JAR | Version to download at runtime. |
-| `jpdfium.native.repo` | Maven Central | Repository URL for runtime downloads. |
+| `jpdfium.native.repo` | `https://maven.stirlingpdf.com` | Repository URL for runtime downloads. |
 
 `jpdfium.native.verify=marker` weakens cache-integrity verification. See [native-loading.md](native-loading.md) for the trust model before using it.
 
