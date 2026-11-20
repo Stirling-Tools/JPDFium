@@ -1,5 +1,7 @@
 package stirling.software.jpdfium.doc;
 
+import java.nio.file.Path;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -26,6 +28,9 @@ public final class PdfXOptions {
     private final boolean strictImages;
     private final boolean convertLosslessImages;
     private final boolean requireEmbeddedFonts;
+    private final boolean neutralsToBlack;
+    private final boolean embedMissingFonts;
+    private final List<Path> fontDirectories;
     private final String title;
 
     private PdfXOptions(Builder b) {
@@ -45,6 +50,9 @@ public final class PdfXOptions {
         this.strictImages = b.strictImages;
         this.convertLosslessImages = b.convertLosslessImages;
         this.requireEmbeddedFonts = b.requireEmbeddedFonts;
+        this.neutralsToBlack = b.neutralsToBlack;
+        this.embedMissingFonts = b.embedMissingFonts;
+        this.fontDirectories = List.copyOf(b.fontDirectories);
         this.title = b.title;
     }
 
@@ -115,6 +123,18 @@ public final class PdfXOptions {
         return requireEmbeddedFonts;
     }
 
+    public boolean neutralsToBlack() {
+        return neutralsToBlack;
+    }
+
+    public boolean embedMissingFonts() {
+        return embedMissingFonts;
+    }
+
+    public List<Path> fontDirectories() {
+        return fontDirectories;
+    }
+
     /** Optional document title written to the information dictionary. */
     public String title() {
         return title;
@@ -158,6 +178,9 @@ public final class PdfXOptions {
         private boolean strictImages;
         private boolean convertLosslessImages;
         private boolean requireEmbeddedFonts;
+        private boolean neutralsToBlack = true;
+        private boolean embedMissingFonts = true;
+        private List<Path> fontDirectories = List.of();
         private String title;
 
         private Builder() {}
@@ -249,6 +272,21 @@ public final class PdfXOptions {
         /** Fail when the audit finds a non-embedded font in page text or form XObjects. */
         public Builder requireEmbeddedFonts(boolean value) {
             this.requireEmbeddedFonts = value;
+            return this;
+        }
+
+        public Builder neutralsToBlack(boolean value) {
+            this.neutralsToBlack = value;
+            return this;
+        }
+
+        public Builder embedMissingFonts(boolean value) {
+            this.embedMissingFonts = value;
+            return this;
+        }
+
+        public Builder fontDirectories(Path... value) {
+            this.fontDirectories = value == null ? List.of() : List.of(value);
             return this;
         }
 

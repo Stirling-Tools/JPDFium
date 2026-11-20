@@ -64,6 +64,7 @@ public final class JpdfiumLib {
     public static final int ERR_REDACT_UNVERIFIABLE =  -8;
     /** The native call modified content and then failed; the document no longer matches disk. */
     public static final int ERR_CONTENT_MUTATED    = -10;
+    public static final int ERR_ALLOC              = -12;
 
     // Image placement positions (match JPDFIUM_POSITION_* constants and Position enum ordinals)
     public static final int POSITION_TOP_LEFT      = 0;
@@ -346,6 +347,8 @@ public final class JpdfiumLib {
                     "Redaction could not run or could not be verified; no silent fallback was applied - " + ctx);
             case ERR_CONTENT_MUTATED   -> new JPDFiumException(
                     "Content was modified before the operation failed - " + ctx, ERR_CONTENT_MUTATED);
+            case ERR_ALLOC             -> new JPDFiumException(
+                    "Native output allocation failed - " + ctx, ERR_ALLOC);
             default                    -> new JPDFiumException("Native error " + rc + " - " + ctx);
         };
     }
@@ -1398,8 +1401,10 @@ public final class JpdfiumLib {
      * content remains in the file; both are clipped only by the page boxes.
      * Straddling words and objects are kept whole, straddling images are
      * pixel-erased outside (soft masks kept when the image can be rendered,
-     * nested images promoted), fully outside objects are removed. A post-pass
-     * audit returns {@code JPDFIUM_ERR_REDACT_INCOMPLETE} or
+     * nested images promoted), fully outside objects are removed. A
+     * straddling image that cannot be erased safely or promoted without
+     * reordering form content is kept whole and clipped by the page boxes.
+     * A post-pass audit returns {@code JPDFIUM_ERR_REDACT_INCOMPLETE} or
      * {@code JPDFIUM_ERR_REDACT_UNVERIFIABLE} when content survives or the
      * audit cannot run.
      *
@@ -1583,6 +1588,24 @@ public final class JpdfiumLib {
         });
     }
 
+    /**
+     * Bakes the annotations a viewer draws into page content, leaving no-view markup out. Used
+     * before rasterizing a page.
+     */
+    public static void pageFlattenDisplay(long page) {
+        PdfiumRuntime.execute(() -> {
+            try {
+                check(
+                        (int) FlattenBindings.jpdfium_page_flatten_display.invokeExact(page),
+                        "pageFlattenDisplay");
+            } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
+                if (t instanceof JPDFiumException jpdfiumException) throw jpdfiumException;
+                throw new JPDFiumException("pageFlattenDisplay failed", t);
+            }
+        });
+    }
+
     public static String textGetCharPositions(long page) {
         return PdfiumRuntime.execute(() -> {
             check(JpdfiumH.jpdfium_text_get_char_positions(page, ADDR_SCRATCH), "textGetCharPositions");
@@ -1607,6 +1630,26 @@ public final class JpdfiumLib {
     public static void docFlattenAnnotations(long doc) {
         PdfiumRuntime.execute(() -> {
             check(JpdfiumH.jpdfium_doc_flatten_annotations(doc), "docFlattenAnnotations");
+        });
+    }
+
+    /**
+     * Bakes the annotations a viewer draws on every page, leaving no-view markup out. Used before
+     * rasterizing the document.
+     */
+    public static void docFlattenAnnotationsDisplay(long doc) {
+        PdfiumRuntime.execute(() -> {
+            try {
+                check(
+                        (int)
+                                FlattenBindings.jpdfium_doc_flatten_annotations_display.invokeExact(
+                                        doc),
+                        "docFlattenAnnotationsDisplay");
+            } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
+                if (t instanceof JPDFiumException jpdfiumException) throw jpdfiumException;
+                throw new JPDFiumException("docFlattenAnnotationsDisplay failed", t);
+            }
         });
     }
 

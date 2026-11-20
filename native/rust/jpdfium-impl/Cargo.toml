@@ -2,6 +2,11 @@
 name = "jpdfium-impl"
 version = "0.1.0"
 edition = "2021"
+# `mozjpeg-rs` 0.9 requires Rust >= 1.89 (and `jbig2enc-rust` 0.6 uses edition
+# 2024), so the workspace toolchain floor is 1.89. Pinned here so an older
+# toolchain fails with a clear message instead of a confusing dependency error.
+# Build scripts stay offline-friendly: nothing is fetched at build time.
+rust-version = "1.89"
 
 [lib]
 name = "jpdfium_rust"
@@ -9,15 +14,15 @@ crate-type = ["staticlib"]
 
 [dependencies]
 libc = "0.2.189"
-lopdf = { version = "0.46.0", default-features = false, features = ["chrono"] }
+lopdf = { version = "0.47.0", default-features = false, features = ["chrono"] }
 oxipng = { version = "10.2", default-features = false, features = ["zopfli"] }
 zopfli = "0.8.3"
 flate2 = "1.1.10"
 fast_image_resize = "6.1"
 # SVG rasterizer (Apache-2.0 OR MIT stack: resvg/usvg/tiny-skia/fontdb).
 # Replaces librsvg in the vips stack: no cairo/gdk-pixbuf/X11, no GPL.
-resvg = { version = "0.49", default-features = false, features = ["text", "system-fonts", "memmap-fonts", "raster-images"] }
-usvg = { version = "0.49", default-features = false, features = ["text", "system-fonts", "memmap-fonts"] }
+resvg = { version = "0.50", default-features = false, features = ["text", "system-fonts", "memmap-fonts", "raster-images"] }
+usvg = { version = "0.50", default-features = false, features = ["text", "system-fonts", "memmap-fonts"] }
 tiny-skia = { version = "0.12", default-features = false, features = ["std", "simd"] }
 # CMYK JPEG encoder for DeviceCMYK image conversion. `ColorType::Cmyk` writes
 # an Adobe APP14 (transform=0) JPEG with the samples inverted, which is exactly
@@ -25,3 +30,15 @@ tiny-skia = { version = "0.12", default-features = false, features = ["std", "si
 # `simd` enables runtime-detected AVX2 DCT/color paths on x86_64. It is a
 # no-op on other architectures and falls back to the scalar path.
 jpeg-encoder = { version = "0.7", features = ["simd"] }
+# Pure-Rust mozjpeg port: trellis quantization and deringing give ~15-20%
+# smaller baseline JPEGs than jpeg-encoder at the same quality setting.
+mozjpeg-rs = "0.9.2"
+# CCITT Group 4 encoder for bilevel images (MIT).
+fax = "0.3"
+# Pure-Rust JBIG2 encoder with PDF fragment support (MIT/Apache-2.0).
+jbig2enc-rust = { version = "0.6.0", default-features = false, features = ["encode", "symboldict"] }
+
+[dev-dependencies]
+# The decoder is only needed by the round-trip test; release builds keep it out
+# of the staticlib. Feature unification applies to the test profile only.
+jbig2enc-rust = { version = "0.6.0", default-features = false, features = ["encode", "symboldict", "decode"] }

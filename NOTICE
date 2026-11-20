@@ -14,6 +14,15 @@ Native bridge deps (linked at build time):
 - QPDF - Apache-2.0 (native/licenses/QPDF-APACHE-2.0.txt)
 - pugixml - MIT
 - libunibreak - zlib
+- mozjpeg-rs - BSD-3-Clause (pure-Rust mozjpeg port used for JPEG encoding);
+  native/licenses/MOZJPEG-RS-BSD-3.txt
+- fax - MIT (pure-Rust CCITT Group 4 encoder for bilevel images);
+  native/licenses/FAX-MIT.txt
+- jbig2enc-rust - MIT AND Apache-2.0 (pure-Rust JBIG2 encoder with PDF
+  fragments). Both licences apply and both notices are reproduced:
+  native/licenses/JBIG2ENC-RUST-MIT.txt and
+  native/licenses/JBIG2ENC-RUST-APACHE-2.0.txt (the Apache-2.0 text is the same
+  as native/licenses/QPDF-APACHE-2.0.txt)
 
 Bundled ICC profile (jpdfium main jar):
 - JPDFiumCompactCmyk.icc - generated generic CMYK fallback, MIT; see

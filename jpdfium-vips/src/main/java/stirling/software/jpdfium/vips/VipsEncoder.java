@@ -346,11 +346,18 @@ public final class VipsEncoder {
     }
 
     private static VipsOption[] buildJpegOptions(VipsEncodeOptions opts) {
-        return new VipsOption[]{
-            VipsOption.Int("Q", opts.quality()),
-            VipsOption.Boolean("strip", true),
-            VipsOption.Boolean("optimize_coding", true)
-        };
+        // Optimized Huffman tables are always safe. Trellis quantisation and
+        // deringing only exist in libvips builds linked against mozjpeg;
+        // opt in explicitly so libjpeg-turbo builds do not warn on every save.
+        List<VipsOption> options = new ArrayList<>();
+        options.add(VipsOption.Int("Q", opts.quality()));
+        options.add(VipsOption.Boolean("strip", true));
+        options.add(VipsOption.Boolean("optimize_coding", true));
+        if (Boolean.getBoolean("jpdfium.vips.trellis")) {
+            options.add(VipsOption.Boolean("trellis_quant", true));
+            options.add(VipsOption.Boolean("overshoot_deringing", true));
+        }
+        return options.toArray(VipsOption[]::new);
     }
 
     private static VipsOption[] buildTiffOptions(VipsEncodeOptions opts) {

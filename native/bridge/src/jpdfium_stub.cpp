@@ -942,11 +942,17 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t word_c
 int32_t jpdfium_page_flatten(int64_t page) noexcept {
     return g_page_doc.find(page) == g_page_doc.end() ? JPDFIUM_ERR_INVALID : JPDFIUM_OK;
 }
+int32_t jpdfium_page_flatten_display(int64_t page) noexcept {
+    return g_page_doc.find(page) == g_page_doc.end() ? JPDFIUM_ERR_INVALID : JPDFIUM_OK;
+}
 int32_t jpdfium_page_to_image(int64_t, int32_t, int32_t) {
     return JPDFIUM_OK;
 }
 
 int32_t jpdfium_doc_flatten_annotations(int64_t) noexcept {
+    return JPDFIUM_OK;
+}
+int32_t jpdfium_doc_flatten_annotations_display(int64_t) noexcept {
     return JPDFIUM_OK;
 }
 
@@ -1403,6 +1409,31 @@ int32_t jpdfium_rust_encode_cmyk_jpeg(const uint8_t*, int64_t, int32_t, int32_t,
     return fail_native_bytes(out_ptr, out_len);
 }
 
+int32_t jpdfium_rust_encode_jpeg(const uint8_t*, int64_t, int32_t, int32_t, int32_t, int32_t,
+                                 uint8_t** out_ptr, int64_t* out_len) {
+    return fail_native_bytes(out_ptr, out_len);
+}
+
+int32_t jpdfium_rust_encode_jpeg_ex(const uint8_t*, int64_t, int32_t, int32_t, int32_t, int32_t,
+                                    int32_t, uint8_t** out_ptr, int64_t* out_len) {
+    return fail_native_bytes(out_ptr, out_len);
+}
+
+int32_t jpdfium_rust_encode_ccitt_g4(const uint8_t*, int64_t, int32_t, int32_t, int32_t,
+                                     uint8_t** out_ptr, int64_t* out_len) {
+    return fail_native_bytes(out_ptr, out_len);
+}
+
+int32_t jpdfium_rust_encode_jbig2(const uint8_t*, int64_t, int32_t, int32_t, int32_t,
+                                  uint8_t** page_out, int64_t* page_len, uint8_t** globals_out,
+                                  int64_t* globals_len) {
+    if (page_out) *page_out = nullptr;
+    if (page_len) *page_len = 0;
+    if (globals_out) *globals_out = nullptr;
+    if (globals_len) *globals_len = 0;
+    return JPDFIUM_ERR_NATIVE;
+}
+
 void jpdfium_rust_free(uint8_t* p) {
     std::free(p);
 }
@@ -1716,6 +1747,12 @@ int32_t jpdfium_qpdf_merge_files(const char* const* paths, int32_t count, const 
     return 0;
 }
 
+int32_t jpdfium_qpdf_extract_ranges_files(const char* /*in_path*/, const int32_t* /*firstPages*/,
+                                          const int32_t* /*lastPages*/, int32_t /*rangeCount*/,
+                                          const char* const* /*out_paths*/) {
+    return -1;
+}
+
 int32_t jpdfium_qpdf_extract_pages_file(const char* in_path, const int32_t* /*pageIndices*/,
                                         int32_t pageCount, const char* out_path) {
     if (!in_path || !*in_path || !out_path || !*out_path || pageCount <= 0) return -1;
@@ -1855,6 +1892,18 @@ int32_t jpdfium_color_pdfx_bytes(const uint8_t*, int64_t, const uint8_t*, int64_
 
 int32_t jpdfium_color_pdfx_file(const char*, const char*, const uint8_t*, int64_t, const char*,
                                 const char*, const char*, const char*) {
+    return JPDFIUM_ERR_NOT_FOUND;
+}
+
+int32_t jpdfium_pdfx_prepare_bytes(const uint8_t*, int64_t, int32_t, const uint8_t*, int32_t,
+                                   int32_t, int32_t, uint8_t** output, int64_t* output_len, char*,
+                                   int32_t) {
+    (void)fail_native_bytes(output, output_len);
+    return JPDFIUM_ERR_NOT_FOUND;
+}
+
+int32_t jpdfium_pdfx_prepare_file(const char*, const char*, int32_t, const uint8_t*, int32_t,
+                                  int32_t, int32_t, char*, int32_t) {
     return JPDFIUM_ERR_NOT_FOUND;
 }
 

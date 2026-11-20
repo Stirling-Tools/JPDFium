@@ -36,7 +36,7 @@ jobs:
 
       - name: Setup Java 25
         if: matrix.language == 'java-kotlin'
-        uses: actions/setup-java@816722acf8fd27c9d1e9ae6ee6085da07e0d44c1 # v5.7.0
+        uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v5.7.0
         with:
           distribution: temurin
           java-version: '25'

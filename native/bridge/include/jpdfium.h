@@ -45,6 +45,8 @@ extern "C" {
 #define JPDFIUM_ERR_REDACT_UNVERIFIABLE (-8)  // redaction could not run/verify (no silent degrade)
 #define JPDFIUM_ERR_TOO_LARGE (-9)            // save aborted: output exceeded the byte budget
 #define JPDFIUM_ERR_CONTENT_MUTATED (-10)     // operation modified content, then failed
+#define JPDFIUM_ERR_PDFX_NONCONFORMANT (-11)  // PDF/X preparation failed
+#define JPDFIUM_ERR_ALLOC (-12)               // native output allocation failed
 #define JPDFIUM_ERR_NATIVE (-99)
 
 // Bridge ABI version and layout probe surface. Packaged Java/native
@@ -213,7 +215,9 @@ JPDFIUM_EXPORT int32_t jpdfium_redact_region(int64_t page, float x, float y, flo
                                              uint32_t argb,
                                              int32_t remove_content) JPDFIUM_NOEXCEPT;
 // Hard crop: removes page objects lying outside the crop rectangle [x,y,x+w,y+h] (PDF coordinates).
-// A text word or object that only partly falls outside the crop is preserved whole.
+// A text word or object that only partly falls outside the crop is preserved whole. An image that
+// cannot be erased without changing another surviving placement is also preserved whole; the page
+// boxes set by the caller clip the outside part.
 JPDFIUM_EXPORT int32_t jpdfium_crop_remove_content(int64_t page, float x, float y, float w,
                                                    float h) JPDFIUM_NOEXCEPT;
 // Hard crop with a content-removal margin in PDF points. A non-negative margin
@@ -252,14 +256,20 @@ JPDFIUM_EXPORT int32_t jpdfium_redact_words_ex(int64_t page, const char** words,
                                                int32_t caseSensitive,
                                                int32_t* matchCount) JPDFIUM_NOEXCEPT;
 JPDFIUM_EXPORT int32_t jpdfium_page_flatten(int64_t page) JPDFIUM_NOEXCEPT;
+// Same bake, but skips annotations with the no-view flag so the result matches
+// what a viewer draws on screen. Used before rasterizing a page.
+JPDFIUM_EXPORT int32_t jpdfium_page_flatten_display(int64_t page) JPDFIUM_NOEXCEPT;
 JPDFIUM_EXPORT int32_t jpdfium_page_to_image(int64_t doc, int32_t pageIndex, int32_t dpi);
 
 // Document-wide flatten over a file-backed document handle.
 //
-// jpdfium_doc_flatten_annotations: bakes annotations/form fields into page content on every page
-// (FPDFPage_Flatten). Returns JPDFIUM_OK when every page flattened or had nothing to do. Flattening
-// rewrites page content in place: the FPDF_PAGE handles stay valid, so this does not bump the
-// structural generation.
+// jpdfium_doc_flatten_annotations: bakes every drawable annotation/form field into page content
+// on every page (FPDFPage_Flatten). Returns JPDFIUM_OK when every page flattened or had nothing to
+// do. Flattening rewrites page content in place: the FPDF_PAGE handles stay valid, so this does
+// not bump the structural generation.
+//
+// jpdfium_doc_flatten_annotations_display: same pass, but hides annotations with the no-view flag
+// for the bake so the content matches the on-screen view. Used before rasterizing every page.
 //
 // jpdfium_doc_flatten_to_images: rasterizes every page at `dpi` and replaces its content with the
 // resulting image, borrowing one scratch frame from the document. It returns
@@ -267,6 +277,7 @@ JPDFIUM_EXPORT int32_t jpdfium_page_to_image(int64_t doc, int32_t pageIndex, int
 // (the document no longer matches the one that was opened); a failure before any page was replaced
 // reports its own code.
 JPDFIUM_EXPORT int32_t jpdfium_doc_flatten_annotations(int64_t doc) JPDFIUM_NOEXCEPT;
+JPDFIUM_EXPORT int32_t jpdfium_doc_flatten_annotations_display(int64_t doc) JPDFIUM_NOEXCEPT;
 JPDFIUM_EXPORT int32_t jpdfium_doc_flatten_to_images(int64_t doc, int32_t dpi) JPDFIUM_NOEXCEPT;
 
 // Returns JSON: [{"i":0,"ox":10.1,"oy":20.2,"l":10.0,"r":18.0,"b":15.0,"t":27.0}, ...]
@@ -566,6 +577,12 @@ JPDFIUM_EXPORT int32_t jpdfium_repair_inspect(const uint8_t* input, int64_t inpu
 #define JPDFIUM_QPDF_REMOVE_UNREFERENCED_RESOURCES 0x40
 // Image pass, equivalent to --optimize-images; jpegQuality < 0 keeps DCT data.
 #define JPDFIUM_QPDF_OPTIMIZE_IMAGES 0x80
+// Replace image XObjects whose dictionary and raw stream bytes are identical.
+#define JPDFIUM_QPDF_DEDUPLICATE_IMAGES 0x100
+// Re-encode 1-bit DeviceGray images as CCITT Group 4 when smaller.
+#define JPDFIUM_QPDF_CCITT_G4 0x200
+// Re-encode 1-bit DeviceGray images as JBIG2 when smaller.
+#define JPDFIUM_QPDF_JBIG2 0x400
 // objectStreamMode: 0=disable,1=preserve,2=generate,-1=default
 // streamDataMode:   0=uncompress,1=preserve,2=compress,-1=default
 // decodeLevel:      0=none,1=generalized,2=specialized,3=all,-1=default
@@ -626,11 +643,28 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_force_version(const uint8_t* input, int64_t 
                                                   int64_t* outputLen);
 
 // Replace the stream behind a matching /BaseFont font descriptor.
+// Retained for ABI compatibility; new code should use jpdfium_qpdf_embed_fonts.
 // Caller frees *output with jpdfium_free_buffer.
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_replace_font_stream(const uint8_t* input, int64_t inputLen,
                                                         const char* baseFont,
                                                         const uint8_t* fontData, int64_t fontLen,
                                                         uint8_t** output, int64_t* outputLen);
+
+// Embed font programs into fonts whose /BaseFont matches names[i] exactly, in one pass.
+// onlyMissing leaves fonts that already carry a program untouched.
+// Caller frees *output with jpdfium_free_buffer.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_embed_fonts(const uint8_t* input, int64_t inputLen,
+                                                int32_t count, const char* const* names,
+                                                const uint8_t* const* fonts,
+                                                const int64_t* fontLens, int32_t onlyMissing,
+                                                uint8_t** output, int64_t* outputLen);
+
+// File-backed form of jpdfium_qpdf_embed_fonts: reads in_path and writes out_path,
+// so callers do not materialize the PDF bytes in the Java heap.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_embed_fonts_file(const char* in_path, const char* out_path,
+                                                     int32_t count, const char* const* names,
+                                                     const uint8_t* const* fonts,
+                                                     const int64_t* fontLens, int32_t onlyMissing);
 
 // In-process qpdf structural sanitization (FFM, no CLI).
 // Scrubs metadata/info/structure, JavaScript actions, embedded files, AcroForm
@@ -683,6 +717,12 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_pages(const uint8_t* input, int64_t 
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_pages_file(const char* in_path,
                                                        const int32_t* pageIndices,
                                                        int32_t pageCount, const char* out_path);
+
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_ranges_files(const char* in_path,
+                                                         const int32_t* firstPages,
+                                                         const int32_t* lastPages,
+                                                         int32_t rangeCount,
+                                                         const char* const* out_paths);
 
 // QPDF In-Process Encryption & Decryption
 #define JPDFIUM_PERM_PRINT_LOW 0x0004
@@ -892,6 +932,23 @@ JPDFIUM_EXPORT int32_t jpdfium_color_pdfx_file(const char* in_path, const char* 
                                                const uint8_t* icc, int64_t icc_len,
                                                const char* version, const char* conformance,
                                                const char* condition_identifier, const char* info);
+
+#define JPDFIUM_PDFX_CONVERT_COLOURS (0x01)
+#define JPDFIUM_PDFX_CONVERT_IMAGES (0x02)
+#define JPDFIUM_PDFX_NEUTRALS_TO_BLACK (0x04)
+#define JPDFIUM_PDFX_CONVERT_SPECIAL (0x08)
+#define JPDFIUM_PDFX_STRICT_IMAGES (0x10)
+
+JPDFIUM_EXPORT int32_t jpdfium_pdfx_prepare_bytes(const uint8_t* input, int64_t input_len,
+                                                  int32_t level, const uint8_t* lut,
+                                                  int32_t lut_grid, int32_t flags, int32_t quality,
+                                                  uint8_t** output, int64_t* output_len,
+                                                  char* message, int32_t message_cap);
+
+JPDFIUM_EXPORT int32_t jpdfium_pdfx_prepare_file(const char* in_path, const char* out_path,
+                                                 int32_t level, const uint8_t* lut,
+                                                 int32_t lut_grid, int32_t flags, int32_t quality,
+                                                 char* message, int32_t message_cap);
 
 // N-Up Layout
 //

@@ -1,5 +1,6 @@
 package stirling.software.jpdfium;
 
+import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -10,11 +11,14 @@ import java.util.stream.Collectors;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.cos.COSDictionary;
 import org.apache.pdfbox.cos.COSName;
+import org.apache.pdfbox.cos.COSObject;
+import org.apache.pdfbox.cos.COSString;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDDocumentCatalog;
 import org.apache.pdfbox.pdmodel.PDDestinationNameTreeNode;
 import org.apache.pdfbox.pdmodel.PDDocumentNameDictionary;
 import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.PDPageContentStream;
 import org.apache.pdfbox.pdmodel.PDResources;
 import org.apache.pdfbox.pdmodel.common.PDPageLabelRange;
 import org.apache.pdfbox.pdmodel.common.PDPageLabels;
@@ -28,6 +32,8 @@ import org.apache.pdfbox.pdmodel.interactive.form.PDAcroForm;
 import org.apache.pdfbox.pdmodel.interactive.form.PDField;
 import org.apache.pdfbox.pdmodel.interactive.form.PDTextField;
 import org.apache.pdfbox.pdmodel.interactive.viewerpreferences.PDViewerPreferences;
+import org.apache.pdfbox.rendering.PDFRenderer;
+import org.apache.pdfbox.text.PDFTextStripper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -37,6 +43,9 @@ import stirling.software.jpdfium.panama.QpdfLib;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -200,6 +209,128 @@ class PdfMergeSplitPreservationTest {
         }
     }
 
+    @Test
+    void extractingManyRangesInOnePassMatchesOneRangeAtATime(@TempDir Path tmp) throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real PDFium native library");
+        assumeTrue(QpdfLib.isExtractRangesFilesSupported(), "needs the multi-range qpdf extract symbol");
+        Path source = tmp.resolve("source.pdf");
+        try (PDDocument doc = Loader.loadPDF(catalogRichPdf(4, "A"))) {
+            doc.getDocumentCatalog().getPageLabels().getPageLabelRange(2).getCOSObject()
+                    .setItem(COSName.P, new COSObject(new COSString("A-")));
+            doc.save(source.toFile());
+        }
+        try (PDDocument saved = Loader.loadPDF(source.toFile())) {
+            assertInstanceOf(COSObject.class, saved.getDocumentCatalog().getPageLabels()
+                    .getPageLabelRange(2).getCOSObject().getItem(COSName.P));
+        }
+        List<int[]> ranges = List.of(new int[] {0, 0}, new int[] {1, 2}, new int[] {3, 3});
+        List<Path> together = List.of(tmp.resolve("t0.pdf"), tmp.resolve("t1.pdf"), tmp.resolve("t2.pdf"));
+
+        int[] firsts = ranges.stream().mapToInt(r -> r[0]).toArray();
+        int[] lasts = ranges.stream().mapToInt(r -> r[1]).toArray();
+        assertEquals(ranges.size(), QpdfLib.extractRangesToFiles(source, firsts, lasts, together, false));
+
+        for (int i = 0; i < ranges.size(); i++) {
+            Path single = tmp.resolve("s" + i + ".pdf");
+            PdfSplit.extractPageRangeToFile(source, ranges.get(i)[0], ranges.get(i)[1], single, FILE_ONLY);
+            try (PDDocument expected = Loader.loadPDF(single.toFile());
+                 PDDocument actual = Loader.loadPDF(together.get(i).toFile())) {
+                PDDocumentCatalog e = expected.getDocumentCatalog();
+                PDDocumentCatalog a = actual.getDocumentCatalog();
+                assertEquals(expected.getNumberOfPages(), actual.getNumberOfPages());
+                assertEquals(fieldValues(e.getAcroForm()), fieldValues(a.getAcroForm()));
+                assertArrayEquals(e.getPageLabels().getLabelsByPageIndices(),
+                        a.getPageLabels().getLabelsByPageIndices());
+                assertEquals(e.getLanguage(), a.getLanguage());
+                assertEquals(e.getViewerPreferences().displayDocTitle(),
+                        a.getViewerPreferences().displayDocTitle());
+                assertEquals(e.getNames().getDests().getNames().keySet(),
+                        a.getNames().getDests().getNames().keySet());
+                assertEquals(new PDFTextStripper().getText(expected), new PDFTextStripper().getText(actual));
+                PDFRenderer expectedPages = new PDFRenderer(expected);
+                PDFRenderer actualPages = new PDFRenderer(actual);
+                for (int page = 0; page < expected.getNumberOfPages(); page++) {
+                    assertArrayEquals(pixels(expectedPages.renderImage(page, 0.5f)),
+                            pixels(actualPages.renderImage(page, 0.5f)));
+                }
+            }
+        }
+        try (PDDocument last = Loader.loadPDF(together.get(2).toFile())) {
+            PDPageDestination target = last.getDocumentCatalog().getNames().getDests().getValue("A-last");
+            assertEquals(0, target.retrievePageNumber());
+            assertTrue(new PDFTextStripper().getText(last).contains("A page 4"));
+            assertArrayEquals(new String[] {"A-2"},
+                    last.getDocumentCatalog().getPageLabels().getLabelsByPageIndices());
+        }
+    }
+
+    @Test
+    void manyRangesRejectSharedOrSourceOutputs(@TempDir Path tmp) throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real PDFium native library");
+        Path source = tmp.resolve("source.pdf");
+        byte[] original = catalogRichPdf(2, "A");
+        Files.write(source, original);
+        List<int[]> ranges = List.of(new int[] {0, 0}, new int[] {1, 1});
+        Path out = tmp.resolve("out.pdf");
+
+        assertThrows(IllegalArgumentException.class,
+                () -> PdfSplit.extractPageRangesToFiles(source, ranges, List.of(out, out), FILE_ONLY));
+        assertThrows(IllegalArgumentException.class, () -> PdfSplit.extractPageRangesToFiles(
+                source, ranges, List.of(source, out), StorageOptions.builder().memory().build()));
+        assertFalse(Files.exists(out));
+        assertArrayEquals(original, Files.readAllBytes(source));
+    }
+
+    @Test
+    void manyRangesRejectOutputsThatMeetThroughSymlinks(@TempDir Path tmp) throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real PDFium native library");
+        Path source = tmp.resolve("source.pdf");
+        Files.write(source, catalogRichPdf(2, "A"));
+        Path real = Files.createDirectory(tmp.resolve("real"));
+        Path alias = Files.createSymbolicLink(tmp.resolve("alias"), real);
+        Path dangling = Files.createSymbolicLink(tmp.resolve("dangling.pdf"), real.resolve("out.pdf"));
+        List<int[]> ranges = List.of(new int[] {0, 0}, new int[] {1, 1});
+
+        for (StorageOptions options : List.of(FILE_ONLY, StorageOptions.builder().memory().build())) {
+            assertThrows(IllegalArgumentException.class, () -> PdfSplit.extractPageRangesToFiles(
+                    source, ranges, List.of(alias.resolve("out.pdf"), real.resolve("out.pdf")), options));
+            assertThrows(IllegalArgumentException.class, () -> PdfSplit.extractPageRangesToFiles(
+                    source, ranges, List.of(dangling, real.resolve("out.pdf")), options));
+        }
+        assertFalse(Files.exists(real.resolve("out.pdf")));
+    }
+
+    @Test
+    void manyRangesRejectAnOutputSymlinkLoop(@TempDir Path tmp) throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real PDFium native library");
+        Path source = tmp.resolve("source.pdf");
+        Files.write(source, catalogRichPdf(2, "A"));
+        Path a = tmp.resolve("a.pdf");
+        Path b = tmp.resolve("b.pdf");
+        Files.createSymbolicLink(a, b);
+        Files.createSymbolicLink(b, a);
+
+        assertThrows(IllegalArgumentException.class, () -> PdfSplit.extractPageRangesToFiles(source,
+                List.of(new int[] {0, 0}, new int[] {1, 1}), List.of(a, tmp.resolve("c.pdf")), FILE_ONLY));
+        assertFalse(Files.exists(tmp.resolve("c.pdf")));
+    }
+
+    private static int[] pixels(BufferedImage image) {
+        return image.getRGB(0, 0, image.getWidth(), image.getHeight(), null, 0, image.getWidth());
+    }
+
+    @Test
+    void manyRangesRejectARangePastTheLastPage(@TempDir Path tmp) throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real PDFium native library");
+        Path source = tmp.resolve("source.pdf");
+        Files.write(source, catalogRichPdf(2, "A"));
+        Path out = tmp.resolve("out.pdf");
+
+        assertThrows(IllegalArgumentException.class, () -> PdfSplit.extractPageRangesToFiles(
+                source, List.of(new int[] {1, 2}), List.of(out), FILE_ONLY));
+        assertFalse(Files.exists(out));
+    }
+
     private static Map<String, String> fieldValues(PDAcroForm form) {
         return form == null ? Map.of() : form.getFields().stream()
                 .collect(Collectors.toMap(PDField::getFullyQualifiedName, PDField::getValueAsString));
@@ -212,8 +343,19 @@ class PdfMergeSplitPreservationTest {
      */
     private static byte[] catalogRichPdf(int pages, String tag) throws Exception {
         try (PDDocument doc = new PDDocument()) {
+            PDType1Font body = new PDType1Font(Standard14Fonts.FontName.HELVETICA);
             for (int i = 0; i < pages; i++) {
-                doc.addPage(new PDPage(PDRectangle.A4));
+                PDPage page = new PDPage(PDRectangle.A4);
+                doc.addPage(page);
+                try (PDPageContentStream content = new PDPageContentStream(doc, page)) {
+                    content.beginText();
+                    content.setFont(body, 24);
+                    content.newLineAtOffset(72, 720);
+                    content.showText(tag + " page " + (i + 1));
+                    content.endText();
+                    content.addRect(72, 300 + 40 * i, 100, 30);
+                    content.fill();
+                }
             }
             PDDocumentCatalog catalog = doc.getDocumentCatalog();
             catalog.setLanguage("en-GB");

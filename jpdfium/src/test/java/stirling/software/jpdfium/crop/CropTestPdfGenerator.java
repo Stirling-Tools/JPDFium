@@ -304,6 +304,24 @@ public final class CropTestPdfGenerator {
         }
     }
 
+    /**
+     * One page with a two-tone image drawn fully inside the left half and again
+     * straddling its edge. Both placements share the same bitmap, so erasing
+     * the outside pixels of one would damage the other.
+     */
+    public static byte[] sharedStraddlingImagePdf() throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(LETTER);
+            doc.addPage(page);
+            PDImageXObject img = PDImageXObject.createFromByteArray(doc, twoTonePng(), "sharedEdge");
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.drawImage(img, 100, 100, 100, 100);  // fully inside the left half
+                cs.drawImage(img, 280, 400, 40, 100);   // straddles x=306
+            }
+            return save(doc);
+        }
+    }
+
     /** One Form XObject, holding the two-tone image at (100,100)-(300,300), drawn on two pages. */
     public static byte[] sharedFormAcrossPagesPdf() throws IOException {
         try (PDDocument doc = new PDDocument()) {

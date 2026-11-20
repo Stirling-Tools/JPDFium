@@ -5,7 +5,9 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
@@ -460,6 +462,72 @@ public final class PdfSplit {
                 part.saveTo(tx.staging(), SaveOptions.ephemeral());
                 tx.publish(SaveOptions.ephemeral());
             }
+        }
+    }
+
+    public static void extractPageRangesToFiles(Path input, List<int[]> ranges, List<Path> outputs,
+                                                StorageOptions options) throws IOException {
+        if (input == null) throw new IllegalArgumentException("input must not be null");
+        if (ranges == null || outputs == null || ranges.size() != outputs.size()) {
+            throw new IllegalArgumentException("ranges and outputs must be the same length");
+        }
+        if (ranges.isEmpty()) return;
+        int totalPages;
+        try (PdfDocument probe = PdfDocument.open(input)) {
+            totalPages = probe.pageCount();
+        }
+        int[] firstPages = new int[ranges.size()];
+        int[] lastPages = new int[ranges.size()];
+        for (int i = 0; i < ranges.size(); i++) {
+            int[] range = ranges.get(i);
+            if (range == null || range.length != 2 || range[0] < 0 || range[1] < range[0]
+                    || range[1] >= totalPages) {
+                throw new IllegalArgumentException("Invalid range %s for document with %d pages"
+                        .formatted(range == null ? "null" : Arrays.toString(range), totalPages));
+            }
+            if (outputs.get(i) == null) throw new IllegalArgumentException("output must not be null");
+            firstPages[i] = range[0];
+            lastPages[i] = range[1];
+        }
+        rejectSharedOutputs(input, outputs);
+        int written = 0;
+        if (options.mode() != StorageOptions.Mode.MEMORY && QpdfLib.isExtractRangesFilesSupported()) {
+            written = Math.max(0, QpdfLib.extractRangesToFiles(
+                    input, firstPages, lastPages, outputs, options.durable()));
+        }
+        for (int i = written; i < ranges.size(); i++) {
+            extractPageRangeToFile(input, firstPages[i], lastPages[i], outputs.get(i), options);
+        }
+    }
+
+    private static void rejectSharedOutputs(Path input, List<Path> outputs) throws IOException {
+        Path source = canonical(input);
+        Set<Path> seen = new HashSet<>();
+        for (Path output : outputs) {
+            Path target = canonical(output);
+            if (target.equals(source)) {
+                throw new IllegalArgumentException("output must not be the input: " + output);
+            }
+            if (!seen.add(target)) {
+                throw new IllegalArgumentException("each range needs its own output: " + output);
+            }
+        }
+    }
+
+    private static Path canonical(Path path) throws IOException {
+        Set<Path> followed = new HashSet<>();
+        Path current = path.toAbsolutePath().normalize();
+        while (true) {
+            if (Files.exists(current)) return current.toRealPath();
+            Path parent = current.getParent();
+            if (parent != null && Files.exists(parent)) {
+                current = parent.toRealPath().resolve(current.getFileName());
+            }
+            if (!Files.isSymbolicLink(current)) return current;
+            if (!followed.add(current)) {
+                throw new IllegalArgumentException("output is a symlink loop: " + path);
+            }
+            current = current.resolveSibling(Files.readSymbolicLink(current)).normalize();
         }
     }
 

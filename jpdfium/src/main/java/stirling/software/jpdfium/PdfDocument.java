@@ -5,6 +5,7 @@ import stirling.software.jpdfium.doc.Attachment;
 import stirling.software.jpdfium.doc.Bookmark;
 import stirling.software.jpdfium.doc.MetadataTag;
 import stirling.software.jpdfium.doc.PageBoxes;
+import stirling.software.jpdfium.doc.PdfAnnotations;
 import stirling.software.jpdfium.doc.PdfAttachments;
 import stirling.software.jpdfium.doc.PdfBookmarks;
 import stirling.software.jpdfium.doc.PdfMerger;
@@ -1035,11 +1036,13 @@ public final class PdfDocument implements AutoCloseable {
      * Flatten all pages using the specified mode.
      *
      * <ul>
-     *   <li>{@link FlattenMode#ANNOTATIONS}: bakes annotations and form fields into
-     *       the content stream. Text remains selectable. Runs {@code
-     *       jpdfium_doc_flatten_annotations}.</li>
+     *   <li>{@link FlattenMode#ANNOTATIONS}: bakes every drawable annotation, including
+     *       no-view markup, and form fields into the content stream. Text remains
+     *       selectable. Runs {@code jpdfium_doc_flatten_annotations}.</li>
      *   <li>{@link FlattenMode#FULL}: rasterizes each page at the given DPI,
-     *       replacing all content with an image. Nothing is selectable. Runs {@code
+     *       replacing all content with an image. Nothing is selectable. Follows the
+     *       on-screen view: screen-only markup is baked, while no-view, hidden and
+     *       invisible annotations are left out. Runs {@code
      *       jpdfium_doc_flatten_to_images}.</li>
      * </ul>
      *
@@ -1070,6 +1073,19 @@ public final class PdfDocument implements AutoCloseable {
                 // below would otherwise mark pages stale for an untouched
                 // document.
                 if (dpi <= 0) throw new IllegalArgumentException("dpi must be > 0");
+                // Widget values often exist only as annotation appearances.
+                // PDFium's raster pass does not initialize a form-fill
+                // environment, so bake widgets into page content first; the
+                // raster then contains the same values a viewer shows.
+                boolean hadAnnotations = hasAnnotations();
+                try {
+                    JpdfiumLib.docFlattenAnnotationsDisplay(handle);
+                } finally {
+                    // The bake rewrites page content and keeps open pages valid.
+                    // A later raster failure only rolls back the raster pass, so
+                    // the annotation edit must stay visible as a modified document.
+                    if (hadAnnotations) markContentModified();
+                }
                 // The native pass rolls back any failure it can still undo and reports
                 // CONTENT_MUTATED only once the replaced pages can no longer be restored.
                 boolean replacedPages = false;
@@ -1088,6 +1104,17 @@ public final class PdfDocument implements AutoCloseable {
                 }
             }
         }
+    }
+
+    /** True when any page still carries an annotation for the bake pass to consume. */
+    private boolean hasAnnotations() {
+        int pages = pageCount();
+        for (int i = 0; i < pages; i++) {
+            try (PdfPage open = page(i)) {
+                if (PdfAnnotations.count(open.rawHandleForRead()) > 0) return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -1398,6 +1425,12 @@ public final class PdfDocument implements AutoCloseable {
     public void convertPageToImage(int pageIndex, int dpi) {
         ensureOpen();
         if (dpi <= 0) throw new IllegalArgumentException("dpi must be > 0");
+        // Page rasterization has no form environment; bake widget appearances
+        // into the page before rasterizing so field values are not dropped.
+        // The bake follows the on-screen view, so no-view markup stays out.
+        try (PdfPage page = page(pageIndex)) {
+            page.flattenForDisplay();
+        }
         JpdfiumLib.pageToImage(handle, pageIndex, dpi);
         // The page is replaced by an image, so the document no longer matches
         // the bytes it was opened with.

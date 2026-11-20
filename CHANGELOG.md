@@ -20,10 +20,57 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Added
 
+- `PdfXOptions.neutralsToBlack(boolean)`, on by default, maps neutral RGB
+  vector colours to K only instead of four-colour black.
+
+- `PdfXOptions.embedMissingFonts(boolean)`, on by default, and
+  `fontDirectories(Path...)`: PDF/X conversion embeds fonts used without a
+  program through `PdfFontEmbedder.embedMissing`.
+
+- Ebook/comic compression: `CompressOptions.maxImageEdgePx` downsamples images
+  by their longest pixel edge, which is the only size signal that works for
+  CBZ/CBR pages laid out as 1 image pixel = 1 PDF point (they report 72 DPI and
+  escaped the DPI threshold). The image pass now honours `convertPngToJpeg`,
+  downsamples with the Rust Lanczos3 kernel, and encodes JPEG through the
+  pure-Rust mozjpeg port (trellis quantisation, deringing, optimized Huffman
+  tables). On a 24-page 2550x3301 comic scan, 150 DPI / 1600 px / quality 65
+  reduced 14.8 MB to 1.8 MB; Ghostscript `/ebook` left the same file at
+  14.7 MB.
+- Optional libvips integration in the compressor: when `jpdfium-vips` is on
+  the classpath, `PdfImageOptimizer` compares its JPEG output with the Rust
+  encoder and keeps the smaller stream. `jpdfium.vips.trellis=true` enables
+  libvips trellis/deringing on builds linked against mozjpeg.
+- `PdfCompressor` now deduplicates image XObjects with identical dictionaries
+  and raw stream bytes before writing. This collapses repeated covers, logos
+  and page backgrounds: a 10-page PDF repeating one 1600x2400 image went from
+  3.7 MB to 95 KB after the normal image pass, versus 938 KB without dedup.
+- `CompressOptions.jpegProgressive` writes rewritten images as progressive
+  JPEG. Saves 2-11% more depending on image content while remaining a standard
+  PDF DCT stream; baseline stays the default for maximum reader compatibility.
+- `CompressOptions.jbig2` (disabled by default, opt-in) encodes qualifying 1-bit DeviceGray
+  images as JBIG2 with a `/JBIG2Globals` stream and adopts it only when the
+  combined streams are smaller. A synthetic 2480x3508 bilevel bar scan went
+  from 3,109 B to 1,017 B; a 3-page 300 DPI text scan went from 93,672 B to
+  21,762 B.
+- `CompressOptions.ccittG4` (disabled by default, opt-in) re-encodes qualifying 1-bit
+  DeviceGray images as CCITT Group 4 and adopts the stream only when smaller.
+  A synthetic 2480x3508 bilevel bar scan went from 3,109 B to 1,690 B.
+- `PdfSplit.extractPageRangesToFiles` writes many page ranges of one file from a single qpdf
+  parse instead of one parse per range. Ranges qpdf cannot write, and `MEMORY` storage, go
+  through `extractPageRangeToFile` one at a time. 400 single-page parts of a 4.3 MB PDF take 0.12 s instead of
+  7.3 s, and 400 parts of a 28.7 MB PDF 0.5 s instead of 45 s. Parts match
+  `extractPageRangeToFile` page for page, form fields and page labels included.
 - Native qpdf font-stream replacement. `PdfFontEmbedder.embed(...)` replaces
   `/FontFile2` or `/FontFile3` streams by exact `/BaseFont`, updating
   `/Length1`; Type 1 `/FontFile` streams are rejected. `PdfXOptions.fontData(...)`
   applies the same replacement before PDF/X validation.
+- Font embedding. `PdfFontEmbedder.embed(...)` embeds TrueType, OpenType, CFF
+  and Type 1 programs by exact `/BaseFont` in one qpdf rewrite, into fonts that
+  have no program as well as ones that do, building a missing descriptor and
+  widths from the program. `PdfFontEmbedder.embedMissing(...)` embeds every
+  non-embedded font from the system (or given) font directories, with
+  metric-compatible substitutes for the standard 14. `PdfXOptions.fontData(...)`
+  applies `embed(...)` before PDF/X validation.
 - PDF/X-1a, PDF/X-3, PDF/X-4, and PDF/X-6 metadata bootstrap. `PdfXConverter`
   now sets the standard base version, writes a missing `/TrimBox`, and
   optionally fails on non-embedded fonts. `PdfXOptions` gains
@@ -47,6 +94,32 @@ publishing workflows, not library releases, so they are not listed here.
   repositories to get a release as soon as it is out; earlier releases are there
   too. Runtime native downloads (`jpdfium.native.download`) now default to this
   repository.
+- Compression no longer degrades an image that is already below the resize
+  threshold unless the caller opts in. `CompressPreset.WEB`, `SCREEN`, `PRINT`
+  and `CompressOptions.builder().maxImageDpi(...)` keep their historic
+  downsampling-only behaviour: a below-threshold JPEG is not re-encoded and a
+  non-resized PNG/Flate image is not converted to JPEG. Opt in with the new
+  `CompressOptions.reencodeWithoutResize(true)`, or by asking for a JPEG quality
+  with no resize threshold at all (`maxImageDpi <= 0 && maxImageEdgePx <= 0`).
+  This restores the pre-1.4 behaviour for existing callers; the lossy options
+  stay available and are documented as explicit choices.
+- The preview fidelity check that gates the image pass renders at 150 DPI (up
+  from 96) with a 2400 px long-edge cap (up from 1200). The lower preview hid
+  JPEG ringing around text on pages that were re-encoded without downsampling,
+  so the verify-and-rollback pass accepted visibly degraded output.
+- JBIG2 re-encoding is skipped on PDF/X-1a and PDF/X-3 documents, which are
+  PDF 1.3 profiles and forbid it; PDF/X-4 and later still allow it. CCITT G4 is
+  permitted by every PDF/X part and is unaffected.
+- The qpdf writer only raises the minimum PDF version to 1.4 when a JBIG2
+  stream was actually written, so requesting JBIG2 on a document with no
+  qualifying image no longer bumps the version.
+- `PdfXConverter` converts colours through a QPDF content-stream rewrite instead
+  of PDFium page regeneration. Conversion time is now linear in page count (a
+  6,269-page spreadsheet went from 582 s to 2 s), text runs and marked content
+  are kept, and `applyMetadata(PdfDocument, ...)` no longer modifies its input.
+  Form XObjects, patterns, Type 3 glyphs and annotation appearances are always
+  converted, so `convertForms` and `convertLosslessImages` no longer affect
+  PDF/X output.
 - `PdfMerge.mergeFilesToFile` and `PdfSplit.extractPageRangeToFile` write their
   staging file without fsync and flush once when they publish the output, which
   now gets the destination's permissions as other saves do. They previously
@@ -73,6 +146,37 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Fixed
 
+- The bundled `JPDFiumCompactCmyk.icc` fallback is now generated only from the
+  CC0 `CGATS001Compat-v2-micro.icc` measurements. Its B2A table inverts the same
+  CMYK -> Lab data with a strong black-generation preference and a 245% total
+  area coverage cap, neutrals print with single-channel K, and the
+  Ghostscript-derived calibration table is gone. The profile stays under 24 KB.
+
+- PDF/X-1a and PDF/X-3 no longer accept images with soft masks, which the page
+  transparency probe missed, and drop transparency groups from pages that have
+  no transparent content.
+
+- PDF/X no longer leaves soft-masked or lossless RGB images, Indexed RGB
+  lookups or RGB Separation alternates unconverted.
+
+- PDF/X-4 and PDF/X-6 XMP now carries `xmp:CreateDate`, `xmp:MetadataDate`,
+  `xmpMM:DocumentID`, `xmpMM:InstanceID`, `xmpMM:VersionID` and
+  `xmpMM:RenditionClass`; an existing document ID is kept.
+
+- PDF/X output removes JavaScript, flattens printable annotations, drops an
+  `/ArtBox` that sits beside a `/TrimBox`, replaces PostScript XObjects, and is
+  never encrypted.
+
+- PDF/X conversion fails instead of writing a document with fewer pages when
+  the source page tree cannot be rewritten, and refuses signed documents
+  instead of silently invalidating the signature.
+
+- Full flatten rasterizes populated AcroForm widgets instead of dropping their
+  values: widget appearances are baked into page content before the page image
+  is generated, and the resulting document has no AcroForm left. The bake
+  follows the on-screen view, so no-view markup stays out of the image.
+- Cropping with content removal paints erased image pixels white instead of
+  black, so a full-bleed image no longer shows a dark fringe at the crop edge.
 - Word and regex redaction finds words PDFium reports hyphenated across a line
   break (`Trace-` / `Monkey`), and removes the hyphen with them; it previously
   missed them, and with eight or more words the keyword prefilter skipped such
@@ -147,8 +251,9 @@ publishing workflows, not library releases, so they are not listed here.
   pixels are now erased and the image is moved to the page, as crop already did.
 - Redacting or cropping part of an image that is drawn more than once on a page
   also erased the same pixels in the other placements, which nothing covered.
-  Such a request now fails with `RedactIncompleteException` before the page
-  changes, and the document can still be saved.
+  Cropping now keeps such straddling placements whole and clips them with the
+  page boxes instead of failing; redaction still fails with
+  `RedactIncompleteException` before the page changes.
 - Redacting part of a JPEG XL, HEIF or AVIF image (encodings PDFium cannot
   decode) dropped the whole picture. With an image codec registered (the
   `jpdfium-vips` module) the image is now decoded, only the covered pixels are

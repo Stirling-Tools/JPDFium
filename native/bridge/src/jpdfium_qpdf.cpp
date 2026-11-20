@@ -3,11 +3,15 @@
 // jpdfium_qpdf_optimize drives the bundled qpdf library entirely in memory via
 // its QPDF/QPDFWriter C++ API.
 
+#include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <functional>
+#include <limits>
 #include <map>
 #include <memory>
 #include <set>
@@ -16,6 +20,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -28,10 +33,12 @@
 
 #ifdef JPDFIUM_HAS_QPDF
 
+#include <ft2build.h>
 #include <qpdf/Constants.h>
 #include <qpdf/DLL.h>
 
 #include <qpdf/Buffer.hh>
+#include <qpdf/Pl_Buffer.hh>
 #include <qpdf/Pl_Count.hh>
 #include <qpdf/Pl_DCT.hh>
 #include <qpdf/Pl_Discard.hh>
@@ -43,6 +50,7 @@
 #include <qpdf/QPDFFormFieldObjectHelper.hh>
 #include <qpdf/QPDFLogger.hh>
 #include <qpdf/QPDFObjectHandle.hh>
+#include <qpdf/QPDFOutlineDocumentHelper.hh>
 #include <qpdf/QPDFPageDocumentHelper.hh>
 #include <qpdf/QPDFPageLabelDocumentHelper.hh>
 #include <qpdf/QPDFPageObjectHelper.hh>
@@ -50,6 +58,12 @@
 #include <qpdf/QUtil.hh>
 
 #include "jpdfium_qpdf_writer_lock.h"
+#include FT_FREETYPE_H
+#include FT_ADVANCES_H
+#include FT_FONT_FORMATS_H
+#include FT_TRUETYPE_TABLES_H
+#include <hb-subset.h>
+#include <hb.h>
 
 namespace {
 
@@ -199,7 +213,309 @@ void optimizeImages(QPDF& pdf, int32_t jpegQuality) {
     }
 }
 
-void applyDocumentOptions(QPDF& pdf, const OptimizeOptions& options) {
+// Hash a stream's dictionary and raw bytes so only bit-identical image
+// XObjects are candidates for deduplication. The dictionary check catches
+// images with identical pixels but different color spaces or decode arrays.
+size_t imageFingerprint(QPDFObjectHandle& image, std::string& dict) {
+    dict = image.getDict().unparse();
+    size_t hash = std::hash<std::string>{}(dict);
+    auto data = image.getRawStreamData();
+    if (data && data->getSize() > 0) {
+        const auto* bytes = data->getBuffer();
+        uint64_t fnv = 1469598103934665603ULL;
+        for (size_t i = 0; i < data->getSize(); ++i) {
+            fnv ^= bytes[i];
+            fnv *= 1099511628211ULL;
+        }
+        hash ^= std::hash<uint64_t>{}(fnv) + 0x9e3779b97f4a7c15ULL + (hash << 6) + (hash >> 2);
+    }
+    return hash;
+}
+
+bool sameImage(QPDFObjectHandle& left, QPDFObjectHandle& right, std::string const& dict) {
+    if (right.getDict().unparse() != dict) return false;
+    auto a = left.getRawStreamData();
+    auto b = right.getRawStreamData();
+    if (!a || !b || a->getSize() != b->getSize()) return false;
+    return std::memcmp(a->getBuffer(), b->getBuffer(), a->getSize()) == 0;
+}
+
+constexpr int64_t kBilevelMaxPixels = 64LL * 1024 * 1024;
+constexpr int64_t kDedupeMaxStreamBytes = 32LL * 1024 * 1024;
+
+bool hasFilter(QPDFObjectHandle& dict, std::string const& filter) {
+    if (!dict.hasKey("/Filter")) return false;
+    auto value = dict.getKey("/Filter");
+    if (value.isName()) return value.getName() == filter;
+    if (!value.isArray()) return false;
+    for (int i = 0; i < value.getArrayNItems(); ++i) {
+        auto item = value.getArrayItem(i);
+        if (item.isName() && item.getName() == filter) return true;
+    }
+    return false;
+}
+
+// qpdf recompresses an unreferenced Flate stream on write, so a bilevel
+// re-encode must beat the smaller of the current stream and a fresh Flate
+// encode of the same decoded pixels.
+size_t recompressedFlateSize(Buffer const* decoded) {
+    if (decoded == nullptr || decoded->getSize() == 0) return 0;
+    Pl_Buffer buffer("bilevel-flate");
+    Pl_Flate flate("bilevel-flate", &buffer, Pl_Flate::a_deflate);
+    flate.write(decoded->getBuffer(), decoded->getSize());
+    flate.finish();
+    std::unique_ptr<Buffer> compressed(buffer.getBuffer());
+    return compressed ? compressed->getSize() : 0;
+}
+
+bool bilevelSmallEnough(int64_t encoded, size_t raw) {
+    // Leave a 5% margin: qpdf may recompress an existing Flate stream below
+    // the same size, so a codec that barely wins would not justify replacing it.
+    return raw > 0 && encoded > 0 && encoded * 100 < static_cast<int64_t>(raw) * 95;
+}
+
+// Point every duplicate image resource at the first identical stream. The
+// writer then drops the now-unreferenced copies. Duplicate images are common
+// in generated documents that repeat a cover, logo, or page background.
+void deduplicateImages(QPDF& pdf) {
+    QPDFPageDocumentHelper helper{pdf};
+    std::unordered_map<size_t, std::vector<QPDFObjectHandle>> seen;
+    // A page can reference one indirect image many times. Hashing the same
+    // 32 MiB stream for every reference is quadratic work; remember the
+    // canonical replacement for each indirect image object instead.
+    std::map<QPDFObjGen, QPDFObjectHandle> canonical;
+    for (auto& page : helper.getAllPages()) {
+        page.forEachImage(true,
+                          [&seen, &canonical](QPDFObjectHandle& image, QPDFObjectHandle& xobjDict,
+                                              std::string const& key) {
+                              QPDFObjGen identity = image.getObjGen();
+                              if (identity.isIndirect()) {
+                                  auto known = canonical.find(identity);
+                                  if (known != canonical.end()) {
+                                      if (!image.isSameObjectAs(known->second)) {
+                                          xobjDict.replaceKey(key, known->second);
+                                      }
+                                      return;
+                                  }
+                              }
+                              if (!image.getDict().hasKey("/Length")) return;
+                              auto declaredLength = image.getDict().getKey("/Length");
+                              if (!declaredLength.isInteger() ||
+                                  declaredLength.getIntValue() > kDedupeMaxStreamBytes) {
+                                  return;
+                              }
+                              std::string dict;
+                              size_t fingerprint = imageFingerprint(image, dict);
+                              auto& bucket = seen[fingerprint];
+                              QPDFObjectHandle replacement = image;
+                              for (auto& candidate : bucket) {
+                                  if (!sameImage(image, candidate, dict)) continue;
+                                  replacement = candidate;
+                                  break;
+                              }
+                              if (replacement.isSameObjectAs(image)) {
+                                  bucket.push_back(image);
+                              } else {
+                                  xobjDict.replaceKey(key, replacement);
+                              }
+                              if (identity.isIndirect()) canonical.emplace(identity, replacement);
+                          });
+    }
+}
+
+extern "C" int32_t jpdfium_rust_encode_ccitt_g4(const uint8_t*, int64_t, int32_t, int32_t, int32_t,
+                                                uint8_t**, int64_t*);
+extern "C" void jpdfium_rust_free(uint8_t*);
+
+struct RustBuffer {
+    uint8_t* ptr = nullptr;
+    ~RustBuffer() {
+        if (ptr) jpdfium_rust_free(ptr);
+    }
+    RustBuffer() = default;
+    RustBuffer(RustBuffer const&) = delete;
+    RustBuffer& operator=(RustBuffer const&) = delete;
+};
+
+// Shared eligibility check for the bilevel re-encoders. Both the CCITT and
+// JBIG2 passes accept exactly the same images: 1-bit DeviceGray, no mask or
+// soft mask, default decode array, no existing DCT/JPX/JBIG2 filter, and a
+// pixel count the encoders can handle. Keeping this in one place stops the two
+// passes from drifting apart.
+struct BilevelImage {
+    QPDFObjectHandle dict;
+    int width = 0;
+    int height = 0;
+    std::shared_ptr<Buffer> decoded;
+};
+
+bool readBilevelImage(QPDFObjectHandle& image, BilevelImage& out) {
+    auto dict = image.getDict();
+    if (hasFilter(dict, "/JBIG2Decode") || hasFilter(dict, "/DCTDecode") ||
+        hasFilter(dict, "/JPXDecode")) {
+        return false;
+    }
+    if (!dict.hasKey("/Width") || !dict.hasKey("/Height") || !dict.hasKey("/BitsPerComponent")) {
+        return false;
+    }
+    if (dict.getKey("/BitsPerComponent").getIntValue() != 1) return false;
+    if (dict.hasKey("/ImageMask") || dict.hasKey("/Mask") || dict.hasKey("/SMask")) {
+        return false;
+    }
+    if (!dict.hasKey("/ColorSpace") || !dict.getKey("/ColorSpace").isName() ||
+        dict.getKey("/ColorSpace").getName() != "/DeviceGray") {
+        return false;
+    }
+    if (dict.hasKey("/Decode")) {
+        auto decode = dict.getKey("/Decode");
+        if (!decode.isArray() || decode.getArrayNItems() != 2 ||
+            !decode.getArrayItem(0).isNumber() || !decode.getArrayItem(1).isNumber() ||
+            decode.getArrayItem(0).getNumericValue() != 0 ||
+            decode.getArrayItem(1).getNumericValue() != 1) {
+            return false;
+        }
+    }
+    int64_t widthValue = dict.getKey("/Width").getIntValue();
+    int64_t heightValue = dict.getKey("/Height").getIntValue();
+    if (widthValue <= 0 || heightValue <= 0 || widthValue > 32768 || heightValue > 32768 ||
+        widthValue * heightValue > kBilevelMaxPixels) {
+        return false;
+    }
+    auto decoded = image.getStreamData(qpdf_dl_all);
+    if (!decoded) return false;
+    size_t rowBytes = (static_cast<size_t>(widthValue) + 7) / 8;
+    if (decoded->getSize() < rowBytes * static_cast<size_t>(heightValue)) return false;
+    out.dict = std::move(dict);
+    out.width = static_cast<int>(widthValue);
+    out.height = static_cast<int>(heightValue);
+    out.decoded = std::move(decoded);
+    return true;
+}
+
+// Walks every image on every page once, applying the shared eligibility and
+// decode logic and asking `encode` for a replacement. `encode` receives the
+// decoded samples and the smallest current encoded size it must beat; returning
+// a null handle leaves the image untouched. Repeated indirect images are
+// encoded once and the cached replacement is reused for every placement.
+template <typename Encode>
+int32_t forEachBilevelImage(QPDF& pdf, Encode encode) {
+    QPDFPageDocumentHelper helper{pdf};
+    std::map<std::string, QPDFObjectHandle> replacements;
+    std::set<std::string> attempted;
+    int32_t replaced = 0;
+    for (auto& page : helper.getAllPages()) {
+        page.forEachImage(true, [&](QPDFObjectHandle& image, QPDFObjectHandle& resources,
+                                    std::string const& key) {
+            try {
+                BilevelImage candidate;
+                if (!readBilevelImage(image, candidate)) return;
+                std::string objectKey =
+                    image.isIndirect() ? image.getObjGen().unparse() : std::string();
+                if (!objectKey.empty()) {
+                    auto cached = replacements.find(objectKey);
+                    if (cached != replacements.end()) {
+                        resources.replaceKey(key, cached->second);
+                        return;
+                    }
+                    if (!attempted.insert(objectKey).second) return;
+                }
+                auto raw = image.getRawStreamData();
+                if (!raw) return;
+                size_t baseline = raw->getSize();
+                size_t flateSize = recompressedFlateSize(candidate.decoded.get());
+                if (flateSize > 0 && flateSize < baseline) baseline = flateSize;
+                QPDFObjectHandle replacement = encode(pdf, candidate, baseline);
+                if (replacement.isNull()) return;
+                if (!objectKey.empty()) replacements[objectKey] = replacement;
+                resources.replaceKey(key, replacement);
+                ++replaced;
+            } catch (...) {
+                // A malformed image must not abort the structural pass.
+                return;
+            }
+        });
+    }
+    return replaced;
+}
+
+// Re-encode 1-bit DeviceGray images as JBIG2 when the page and globals streams
+// together are smaller. Returns the number of streams actually replaced.
+int32_t encodeBilevelJbig2(QPDF& pdf) {
+    return forEachBilevelImage(
+        pdf, [](QPDF& pdf, BilevelImage const& image, size_t baseline) -> QPDFObjectHandle {
+            RustBuffer pageData;
+            RustBuffer globalsData;
+            int64_t pageLen = 0;
+            int64_t globalsLen = 0;
+            if (jpdfium_rust_encode_jbig2(image.decoded->getBuffer(),
+                                          static_cast<int64_t>(image.decoded->getSize()),
+                                          image.width, image.height, 0, &pageData.ptr, &pageLen,
+                                          &globalsData.ptr, &globalsLen) != 0 ||
+                pageData.ptr == nullptr || pageLen <= 0) {
+                return QPDFObjectHandle::newNull();
+            }
+            if (!bilevelSmallEnough(pageLen + globalsLen, baseline)) {
+                return QPDFObjectHandle::newNull();
+            }
+
+            auto replacement = pdf.newStream();
+            QPDFObjectHandle dictCopy = image.dict;
+            auto replacementDict = dictCopy.shallowCopy();
+            replacementDict.removeKey("/Filter");
+            replacementDict.removeKey("/DecodeParms");
+            replacement.replaceDict(replacementDict);
+            QPDFObjectHandle parms = QPDFObjectHandle::newNull();
+            if (globalsLen > 0) {
+                auto globalsStream = pdf.newStream();
+                globalsStream.replaceStreamData(
+                    std::string(reinterpret_cast<const char*>(globalsData.ptr),
+                                static_cast<size_t>(globalsLen)),
+                    QPDFObjectHandle::newNull(), QPDFObjectHandle::newNull());
+                auto globalsRef = pdf.makeIndirectObject(globalsStream);
+                parms = QPDFObjectHandle::newDictionary();
+                parms.replaceKey("/JBIG2Globals", globalsRef);
+            }
+            replacement.replaceStreamData(std::string(reinterpret_cast<const char*>(pageData.ptr),
+                                                      static_cast<size_t>(pageLen)),
+                                          QPDFObjectHandle::newName("/JBIG2Decode"), parms);
+            return replacement;
+        });
+}
+
+// Re-encode 1-bit DeviceGray images as CCITT G4 when the encoded stream is
+// smaller. Returns the number of streams actually replaced.
+int32_t encodeBilevelImages(QPDF& pdf) {
+    return forEachBilevelImage(
+        pdf, [](QPDF& pdf, BilevelImage const& image, size_t baseline) -> QPDFObjectHandle {
+            RustBuffer out;
+            int64_t outLen = 0;
+            if (jpdfium_rust_encode_ccitt_g4(
+                    image.decoded->getBuffer(), static_cast<int64_t>(image.decoded->getSize()),
+                    image.width, image.height, 0, &out.ptr, &outLen) != 0 ||
+                out.ptr == nullptr || outLen <= 0) {
+                return QPDFObjectHandle::newNull();
+            }
+            if (!bilevelSmallEnough(outLen, baseline)) return QPDFObjectHandle::newNull();
+
+            auto replacement = pdf.newStream();
+            QPDFObjectHandle dictCopy = image.dict;
+            auto replacementDict = dictCopy.shallowCopy();
+            replacementDict.removeKey("/Filter");
+            replacementDict.removeKey("/DecodeParms");
+            auto parms = QPDFObjectHandle::newDictionary();
+            parms.replaceKey("/K", QPDFObjectHandle::newInteger(-1));
+            parms.replaceKey("/Columns", QPDFObjectHandle::newInteger(image.width));
+            parms.replaceKey("/Rows", QPDFObjectHandle::newInteger(image.height));
+            parms.replaceKey("/BlackIs1", QPDFObjectHandle::newBool(false));
+            replacement.replaceDict(replacementDict);
+            replacement.replaceStreamData(
+                std::string(reinterpret_cast<const char*>(out.ptr), static_cast<size_t>(outLen)),
+                QPDFObjectHandle::newName("/CCITTFaxDecode"), parms);
+            return replacement;
+        });
+}
+
+int32_t applyDocumentOptions(QPDF& pdf, const OptimizeOptions& options) {
     if (options.flags & JPDFIUM_QPDF_QDF) {
         if (options.flags & JPDFIUM_QPDF_LINEARIZE) {
             throw std::runtime_error("QDF mode cannot be combined with linearization");
@@ -208,13 +524,27 @@ void applyDocumentOptions(QPDF& pdf, const OptimizeOptions& options) {
     if (options.flags & JPDFIUM_QPDF_OPTIMIZE_IMAGES) {
         optimizeImages(pdf, options.jpegQuality);
     }
+    // JBIG2 needs PDF 1.4, but only when it actually replaced a stream. Count
+    // JBIG2 replacements separately: a CCITT-only replacement must not bump the
+    // version just because both passes were requested.
+    int32_t jbig2Replaced = 0;
+    if (options.flags & JPDFIUM_QPDF_JBIG2) {
+        jbig2Replaced = encodeBilevelJbig2(pdf);
+    }
+    if (options.flags & JPDFIUM_QPDF_CCITT_G4) {
+        encodeBilevelImages(pdf);
+    }
+    if (options.flags & JPDFIUM_QPDF_DEDUPLICATE_IMAGES) {
+        deduplicateImages(pdf);
+    }
     if (options.flags & JPDFIUM_QPDF_REMOVE_UNREFERENCED_RESOURCES) {
         QPDFPageDocumentHelper{pdf}.removeUnreferencedResources();
     }
+    return jbig2Replaced;
 }
 
 // Shared writer setup; QDF defaults are applied before explicit flags.
-void configureWriter(QPDFWriter& w, const OptimizeOptions& options) {
+void configureWriter(QPDFWriter& w, const OptimizeOptions& options, int32_t jbig2Replaced = 0) {
     if (options.flags & JPDFIUM_QPDF_QDF) {
         w.setQDFMode(true);
         w.setPreserveEncryption(false);
@@ -224,6 +554,12 @@ void configureWriter(QPDFWriter& w, const OptimizeOptions& options) {
     if (options.flags & JPDFIUM_QPDF_COMPRESS_STREAMS) w.setCompressStreams(true);
     if (options.flags & JPDFIUM_QPDF_PRESERVE_UNREFERENCED) w.setPreserveUnreferencedObjects(true);
     if (options.flags & JPDFIUM_QPDF_NORMALIZE_CONTENT) w.setContentNormalization(true);
+    // Only raise the floor when a JBIG2 stream was actually written. qpdf's
+    // minimum-version setter never lowers an already higher version, so a 1.7
+    // source stays 1.7.
+    if ((options.flags & JPDFIUM_QPDF_JBIG2) && jbig2Replaced > 0) {
+        w.setMinimumPDFVersion("1.4");
+    }
     if (options.objectStreamMode >= 0)
         w.setObjectStreamMode(static_cast<qpdf_object_stream_e>(options.objectStreamMode));
     if (options.streamDataMode >= 0)
@@ -248,7 +584,7 @@ int writeToFile(const std::shared_ptr<QPDF>& qpdf, const char* out_path,
                      options.compressionLevel);
         return -1;
     }
-    applyDocumentOptions(*qpdf, options);
+    int32_t jbig2Replaced = applyDocumentOptions(*qpdf, options);
     FILE* out = createOutputFile(out_path);
     if (!out) return -1;
     bool writerOwnsFile = false;
@@ -260,7 +596,7 @@ int writeToFile(const std::shared_ptr<QPDF>& qpdf, const char* out_path,
         // opts out explicitly because readable output cannot stay encrypted.
         w.setOutputFile("jpdfium-out", out, true);
         writerOwnsFile = true;
-        configureWriter(w, options);
+        configureWriter(w, options, jbig2Replaced);
         WriterLock lock{options.compressionLevel};
         w.write();
         return 0;
@@ -285,11 +621,11 @@ QpdfResult optimize(std::span<const uint8_t> input, const OptimizeOptions& optio
         auto qpdf = QPDF::create();
         qpdf->processMemoryFile("jpdfium-input", reinterpret_cast<const char*>(input.data()),
                                 input.size());
-        applyDocumentOptions(*qpdf, options);
+        int32_t jbig2Replaced = applyDocumentOptions(*qpdf, options);
 
         QPDFWriter w{*qpdf};
         w.setOutputMemory();
-        configureWriter(w, options);
+        configureWriter(w, options, jbig2Replaced);
         WriterLock lock{options.compressionLevel};
         w.write();
         return {w.getBufferSharedPointer(), ""};
@@ -308,6 +644,184 @@ std::vector<int32_t> allPageIndices(QPDF& qpdf) {
     std::vector<int32_t> indices(qpdf.getAllPages().size());
     for (size_t i = 0; i < indices.size(); ++i) indices[i] = static_cast<int32_t>(i);
     return indices;
+}
+
+// Outline item captured from a source before its pages are moved, so the destination can be
+// resolved to the output page index the item ends up on.
+struct OutlineNode {
+    std::string title;
+    QPDF* source = nullptr;
+    QPDFObjGen page;
+    bool hasPage = false;
+    bool hasCount = false;
+    int count = 0;
+    std::vector<OutlineNode> children;
+};
+
+using OutputPageMap = std::map<QPDF*, std::map<QPDFObjGen, int32_t>>;
+
+constexpr int kMaxOutlineDepth = 100;
+
+QPDFObjectHandle outlineDestPage(QPDFObjectHandle const& item, QPDFOutlineDocumentHelper& helper) {
+    QPDFObjectHandle dest = item.getKey("/Dest");
+    if (dest.isNull()) {
+        QPDFObjectHandle action = item.getKey("/A");
+        if (action.isDictionary() && action.getKey("/S").isNameAndEquals("/GoTo")) {
+            dest = action.getKey("/D");
+        }
+    }
+    if (dest.isName() || dest.isString()) dest = helper.resolveNamedDest(dest);
+    if (dest.isArray() && dest.getArrayNItems() > 0 && dest.getArrayItem(0).isIndirect()) {
+        return dest.getArrayItem(0);
+    }
+    return QPDFObjectHandle::newNull();
+}
+
+OutlineNode collectOutlineNode(QPDFObjectHandle const& item, QPDF* source,
+                               QPDFOutlineDocumentHelper& helper, int depth,
+                               std::set<QPDFObjGen>& seen) {
+    OutlineNode node;
+    node.source = source;
+    QPDFObjectHandle title = item.getKey("/Title");
+    if (title.isString()) node.title = title.getUTF8Value();
+    QPDFObjectHandle destPage = outlineDestPage(item, helper);
+    if (!destPage.isNull()) {
+        node.page = destPage.getObjGen();
+        node.hasPage = true;
+    }
+    QPDFObjectHandle count = item.getKey("/Count");
+    if (count.isInteger()) {
+        node.hasCount = true;
+        node.count = static_cast<int>(count.getIntValue());
+    }
+    if (depth >= kMaxOutlineDepth) return node;
+
+    QPDFObjectHandle child = item.getKey("/First");
+    while (!child.isNull() && child.isDictionary()) {
+        bool indirect = child.isIndirect();
+        if (indirect && !seen.insert(child.getObjGen()).second) break;
+        node.children.push_back(collectOutlineNode(child, source, helper, depth + 1, seen));
+        child = child.getKey("/Next");
+    }
+    return node;
+}
+
+int rebuildOutlineCounts(OutlineNode& node) {
+    int visibleDescendants = 0;
+    for (auto& child : node.children) {
+        int childVisible = rebuildOutlineCounts(child);
+        bool childOpen = !child.hasCount || child.count >= 0;
+        if (childOpen)
+            visibleDescendants += 1 + childVisible;
+        else
+            visibleDescendants += 1;
+    }
+    if (!node.children.empty()) {
+        bool open = !node.hasCount || node.count >= 0;
+        node.hasCount = true;
+        node.count = open ? visibleDescendants : -visibleDescendants;
+    }
+    return visibleDescendants;
+}
+
+// Best-effort: a malformed outline tree must not fail the structural merge, which is useful even
+// when the navigation data cannot be recovered.
+std::vector<OutlineNode> collectOutlines(std::vector<PageSelection> const& selections) {
+    std::vector<OutlineNode> outlines;
+    std::set<QPDF*> collected;
+    for (auto const& selection : selections) {
+        QPDF* source = selection.source;
+        if (!source || !collected.insert(source).second) continue;
+        try {
+            QPDFOutlineDocumentHelper& helper = QPDFOutlineDocumentHelper::get(*source);
+            if (!helper.hasOutlines()) continue;
+            QPDFObjectHandle root = source->getRoot().getKey("/Outlines");
+            QPDFObjectHandle item = root.getKey("/First");
+            std::set<QPDFObjGen> seen;
+            while (!item.isNull() && item.isDictionary()) {
+                bool indirect = item.isIndirect();
+                if (indirect && !seen.insert(item.getObjGen()).second) break;
+                OutlineNode node = collectOutlineNode(item, source, helper, 0, seen);
+                rebuildOutlineCounts(node);
+                outlines.push_back(std::move(node));
+                item = item.getKey("/Next");
+            }
+        } catch (std::exception const& e) {
+            std::fprintf(stderr, "jpdfium qpdf: outlines from merge source dropped: %s\n",
+                         e.what());
+        }
+    }
+    return outlines;
+}
+
+// Rebuilds one sibling chain and returns its first item, with `last` set for the parent's /Last.
+// Only GoTo page destinations are restored; URI and file actions keep their title and hierarchy
+// but lose the action.
+QPDFObjectHandle buildOutlineList(QPDF& doc, std::vector<OutlineNode> const& nodes,
+                                  QPDFObjectHandle const& parent, OutputPageMap const& outputPages,
+                                  QPDFObjectHandle& last) {
+    if (nodes.empty()) return QPDFObjectHandle::newNull();
+
+    std::vector<QPDFObjectHandle> items;
+    items.reserve(nodes.size());
+    for (size_t i = 0; i < nodes.size(); ++i) {
+        items.push_back(doc.makeIndirectObject(QPDFObjectHandle::newDictionary()));
+    }
+
+    for (size_t i = 0; i < nodes.size(); ++i) {
+        OutlineNode const& node = nodes[i];
+        QPDFObjectHandle item = items[i];
+        item.replaceKey("/Title", QPDFObjectHandle::newUnicodeString(node.title));
+        if (node.hasPage) {
+            auto pagesBySource = outputPages.find(node.source);
+            if (pagesBySource != outputPages.end()) {
+                auto found = pagesBySource->second.find(node.page);
+                if (found != pagesBySource->second.end()) {
+                    QPDFObjectHandle page = doc.getAllPages()[static_cast<size_t>(found->second)];
+                    item.replaceKey("/Dest", QPDFObjectHandle::newArray(
+                                                 {page, QPDFObjectHandle::newName("/Fit")}));
+                }
+            }
+        }
+        item.replaceKey("/Parent", parent);
+        if (i > 0) item.replaceKey("/Prev", items[i - 1]);
+        if (i + 1 < items.size()) item.replaceKey("/Next", items[i + 1]);
+
+        QPDFObjectHandle lastChild;
+        QPDFObjectHandle firstChild =
+            buildOutlineList(doc, node.children, item, outputPages, lastChild);
+        if (!firstChild.isNull()) {
+            item.replaceKey("/First", firstChild);
+            item.replaceKey("/Last", lastChild);
+        }
+        if (node.hasCount) item.replaceKey("/Count", QPDFObjectHandle::newInteger(node.count));
+    }
+    last = items.back();
+    return items.front();
+}
+
+long long visibleOutlineItems(OutlineNode const& node) {
+    long long count = 1;
+    if (!node.hasCount || node.count >= 0) {
+        for (auto const& child : node.children) count += visibleOutlineItems(child);
+    }
+    return count;
+}
+
+void installOutlines(QPDF& doc, std::vector<OutlineNode> const& outlines,
+                     OutputPageMap const& outputPages) {
+    if (outlines.empty()) return;
+
+    QPDFObjectHandle outlineRoot = doc.makeIndirectObject(QPDFObjectHandle::newDictionary());
+    outlineRoot.replaceKey("/Type", QPDFObjectHandle::newName("/Outlines"));
+    QPDFObjectHandle last;
+    QPDFObjectHandle first = buildOutlineList(doc, outlines, outlineRoot, outputPages, last);
+    outlineRoot.replaceKey("/First", first);
+    outlineRoot.replaceKey("/Last", last);
+    long long visible = 0;
+    for (auto const& node : outlines) visible += visibleOutlineItems(node);
+    outlineRoot.replaceKey("/Count", QPDFObjectHandle::newInteger(visible));
+    doc.getRoot().replaceKey("/Outlines", outlineRoot);
 }
 
 // A page with no label in its source is labelled with its physical number in the output, which
@@ -331,7 +845,7 @@ void appendLabel(std::vector<QPDFObjectHandle>& nums, long long outputIndex,
         QPDFObjectHandle previous = nums.back();
         bool continuesPrevious =
             previous.getKey("/S").unparse() == label.getKey("/S").unparse() &&
-            previous.getKey("/P").unparse() == label.getKey("/P").unparse() &&
+            previous.getKey("/P").unparseResolved() == label.getKey("/P").unparseResolved() &&
             previous.getKey("/St").isInteger() && label.getKey("/St").isInteger() &&
             label.getKey("/St").getIntValue() - previous.getKey("/St").getIntValue() ==
                 outputIndex - previousIndex.getIntValue();
@@ -381,11 +895,17 @@ void keepOnlyFields(QPDF& qpdf, std::set<QPDFObjGen> const& keptFields) {
 // left outside the output's page tree is nulled, so a destination or annotation still pointing
 // at one cannot pull it, and everything it draws, back into the file.
 //
-// Dropped, unlike qpdf: outlines, which the Java callers rebuild for each output from the source
-// bookmarks; the structure tree, which describes the source's page order and would carry every
-// removed page's elements; the XFA form, which viewers would show in place of the assembled
-// fields; and usage-rights signatures (/Perms), which any change invalidates.
-void assemblePages(QPDF& primary, std::vector<PageSelection> const& selections) {
+// With `preserveOutlines`, each source's outline tree is captured before pages move and rebuilt
+// against the output page indices. Extraction leaves outlines out: a tree whose destinations
+// point at dropped pages is not worth carrying.
+//
+// Dropped, unlike qpdf: the structure tree, which describes the source's page order and would
+// carry every removed page's elements; the XFA form, which viewers would show in place of the
+// assembled fields; and usage-rights signatures (/Perms), which any change invalidates.
+void assemblePages(QPDF& primary, std::vector<PageSelection> const& selections,
+                   bool preserveOutlines = false) {
+    std::vector<OutlineNode> outlines =
+        preserveOutlines ? collectOutlines(selections) : std::vector<OutlineNode>{};
     std::vector<QPDFObjectHandle> primaryPages = primary.getAllPages();
     for (auto const& page : primaryPages) primary.removePage(page);
 
@@ -399,6 +919,7 @@ void assemblePages(QPDF& primary, std::vector<PageSelection> const& selections) 
     copied[&primary].assign(primaryPages.size(), false);
     std::set<QPDFObjGen> keptFields;
     std::vector<QPDFObjectHandle> labelNums;
+    OutputPageMap outputPages;
     long long outputIndex = 0;
 
     for (auto const& selection : selections) {
@@ -424,6 +945,12 @@ void assemblePages(QPDF& primary, std::vector<PageSelection> const& selections) 
             }
             primary.addPage(page.getObjectHandle(), false);
             QPDFObjectHandle added = primary.getAllPages().back();
+            if (preserveOutlines) {
+                // First occurrence wins: an outline that points at a repeated page navigates to
+                // the copy that appears first in the output.
+                outputPages[&source].emplace(sourcePages[static_cast<size_t>(index)].getObjGen(),
+                                             static_cast<int32_t>(outputIndex));
+            }
             // A repeated page would otherwise share its widgets with the first copy.
             if (repeat || (!fromPrimary && sourceForms.hasAcroForm())) {
                 try {
@@ -464,6 +991,10 @@ void assemblePages(QPDF& primary, std::vector<PageSelection> const& selections) 
          {"/Outlines", "/StructTreeRoot", "/MarkInfo", "/NeedsRendering", "/Perms"}) {
         root.removeKey(key);
     }
+
+    if (preserveOutlines) {
+        installOutlines(primary, outlines, outputPages);
+    }
 }
 
 // Fast structural settings, not an optimization pass: optimize_file owns size tuning. The
@@ -499,7 +1030,7 @@ QpdfResult mergePdfs(const uint8_t* const* inputs, const int64_t* inputLens, int
         if (sources.empty()) {
             return {nullptr, "no readable merge inputs"};
         }
-        assemblePages(*sources.front(), selections);
+        assemblePages(*sources.front(), selections, true);
 
         QPDFWriter w{*sources.front()};
         w.setOutputMemory();
@@ -509,6 +1040,110 @@ QpdfResult mergePdfs(const uint8_t* const* inputs, const int64_t* inputLens, int
         return {w.getBufferSharedPointer(), ""};
     } catch (const std::exception& e) {
         return {nullptr, e.what()};
+    }
+}
+
+struct RangeSource {
+    QPDF& pdf;
+    std::vector<QPDFObjectHandle> const& pages;
+    QPDFAcroFormDocumentHelper forms;
+    QPDFPageLabelDocumentHelper labels;
+};
+
+QPDFObjectHandle copyInto(QPDF& dest, QPDF& source, QPDFObjectHandle value) {
+    if (value.isIndirect()) return dest.copyForeignObject(value);
+    return dest.copyForeignObject(source.makeIndirectObject(value));
+}
+
+void copyFieldsForPages(QPDF& dest, QPDF& source, std::set<QPDFObjGen> const& pageFields) {
+    QPDFObjectHandle acroForm = source.getRoot().getKey("/AcroForm");
+    if (!acroForm.isDictionary()) return;
+    QPDFObjectHandle fields = acroForm.getKey("/Fields");
+    if (!fields.isArray()) return;
+    std::vector<QPDFObjectHandle> kept;
+    for (auto const& field : fields.getArrayAsVector()) {
+        if (field.isIndirect() && pageFields.count(field.getObjGen())) {
+            kept.push_back(dest.copyForeignObject(field));
+        }
+    }
+    if (kept.empty()) return;
+    QPDFObjectHandle form = QPDFObjectHandle::newDictionary();
+    for (auto const& key : acroForm.getKeys()) {
+        if (key == "/Fields" || key == "/XFA") continue;
+        form.replaceKey(key, copyInto(dest, source, acroForm.getKey(key)));
+    }
+    form.replaceKey("/Fields", QPDFObjectHandle::newArray(kept));
+    dest.getRoot().replaceKey("/AcroForm", dest.makeIndirectObject(form));
+}
+
+QPDFObjectHandle ownedLabel(QPDF& dest, QPDFObjectHandle label) {
+    QPDFObjectHandle owned = QPDFObjectHandle::newDictionary();
+    for (auto const& key : label.getKeys()) {
+        QPDFObjectHandle value = label.getKey(key);
+        owned.replaceKey(key, value.isIndirect() ? dest.copyForeignObject(value) : value);
+    }
+    return owned;
+}
+
+int writeRange(RangeSource& source, int32_t first, int32_t last, const char* out_path) {
+    if (first < 0 || last < first || static_cast<size_t>(last) >= source.pages.size()) return -1;
+    auto dest = QPDF::create();
+    dest->emptyPDF();
+    QPDFObjectHandle srcRoot = source.pdf.getRoot();
+    QPDFObjectHandle destRoot = dest->getRoot();
+    for (auto const& key : srcRoot.getKeys()) {
+        if (key == "/Type" || key == "/Pages" || key == "/AcroForm" || key == "/PageLabels" ||
+            key == "/Outlines" || key == "/StructTreeRoot" || key == "/MarkInfo" ||
+            key == "/NeedsRendering" || key == "/Perms") {
+            continue;
+        }
+        destRoot.replaceKey(key, copyInto(*dest, source.pdf, srcRoot.getKey(key)));
+    }
+    QPDFObjectHandle info = source.pdf.getTrailer().getKey("/Info");
+    if (info.isDictionary()) {
+        dest->getTrailer().replaceKey("/Info", copyInto(*dest, source.pdf, info));
+    }
+
+    bool labelled = source.labels.hasPageLabels();
+    std::set<QPDFObjGen> pageFields;
+    std::vector<QPDFObjectHandle> labelNums;
+    for (int32_t index = first; index <= last; ++index) {
+        QPDFObjectHandle page = source.pages[static_cast<size_t>(index)];
+        dest->addPage(page, false);
+        for (auto& field : source.forms.getFormFieldsForPage(QPDFPageObjectHelper{page})) {
+            pageFields.insert(field.getObjectHandle().getObjGen());
+        }
+        if (labelled) {
+            long long outputIndex = index - first;
+            appendLabel(labelNums, outputIndex,
+                        ownedLabel(*dest, labelFor(source.labels, index, outputIndex)));
+        }
+    }
+    if (labelled) {
+        destRoot.replaceKey("/PageLabels", QPDFObjectHandle::newDictionary(
+                                               {{"/Nums", QPDFObjectHandle::newArray(labelNums)}}));
+    }
+    copyFieldsForPages(*dest, source.pdf, pageFields);
+    nullPagesOutsideTree(*dest);
+
+    FILE* out = createOutputFile(out_path);
+    if (!out) {
+        std::fprintf(stderr, "jpdfium qpdf file: cannot open output %s\n", out_path);
+        return -1;
+    }
+    bool writerOwnsFile = false;
+    try {
+        QPDFWriter w{*dest};
+        w.setOutputFile("jpdfium-out", out, true);
+        writerOwnsFile = true;
+        configureAssembledWriter(w);
+        w.setMinimumPDFVersion(source.pdf.getPDFVersion(), source.pdf.getExtensionLevel());
+        WriterLock lock{-1};
+        w.write();
+        return 0;
+    } catch (...) {
+        if (!writerOwnsFile) std::fclose(out);
+        throw;
     }
 }
 
@@ -940,203 +1575,629 @@ std::string stripPdfNamePrefix(std::string name) {
     return name;
 }
 
-/**
- * Check whether a candidate font's name matches the requested name.
- *
- * Matching is exact (case-sensitive, preserving subset prefixes).
- * Leading '/' PDF name prefixes are stripped on both sides.
- */
-bool isFontNameMatch(QPDFObjectHandle const& font, std::string const& candidate,
-                     std::string const& requested) {
-    (void)font;
-    std::string candExact = stripPdfNamePrefix(candidate);
-    std::string reqExact = stripPdfNamePrefix(requested);
-    return candExact == reqExact;
-}
+struct FontSource {
+    std::string name;
+    std::span<const uint8_t> data;
+};
 
-struct ReplaceFontResult {
+struct EmbedFontsResult {
     std::shared_ptr<Buffer> buffer;
     std::string error;
     int32_t rc = 0;
 };
 
-/**
- * Replace embedded font program streams matching an exact /BaseFont name.
- *
- * Safety & Invariant Guarantees:
- * - Refuses signed documents: any /ByteRange, /FT /Sig, or /V signature dictionaries
- *   immediately abort with rc = -3 because rewriting invalidates document signatures.
- * - Password-protected documents that cannot be decrypted abort with rc = -2.
- * - Searches all font dictionaries in the document, including direct /Type /Font
- *   objects, resource dictionaries of pages and Form XObjects (streams), and AcroForm /DR.
- * - Replaces /FontFile2 (TrueType) and /FontFile3 (CFF / OpenType), updating /Length1.
- * - Refuses Type 1 /FontFile without Length1/2/3 with rc = -4 to avoid corrupting Type 1 fonts.
- * - Deduplicates shared indirect /FontDescriptor dictionaries to prevent double-replacement
- *   or corrupted stream state.
- * - Serializes QPDF writer operations with WriterLock to guarantee thread safety.
- *
- * Return codes:
- *   0: success, buffer populated
- *   1: no matching font descriptor stream found
- *  -1: general / QPDF parsing exception
- *  -2: password-protected document
- *  -3: signed document (ByteRange / signature field detected)
- *  -4: unsupported font program type (e.g. Type 1 /FontFile)
- */
-ReplaceFontResult replaceFontStream(std::span<const uint8_t> input, std::string const& baseFont,
-                                    std::span<const uint8_t> fontData) {
+constexpr uint16_t kStandardHigh[96] = {
+    0,      0xA1,   0xA2,   0xA3,   0x2044, 0xA5,   0x192,  0xA7,   0xA4, 0x27,  0x201C, 0xAB,
+    0x2039, 0x203A, 0xFB01, 0xFB02, 0,      0x2013, 0x2020, 0x2021, 0xB7, 0,     0xB6,   0x2022,
+    0x201A, 0x201E, 0x201D, 0xBB,   0x2026, 0x2030, 0,      0xBF,   0,    0x60,  0xB4,   0x2C6,
+    0x2DC,  0xAF,   0x2D8,  0x2D9,  0xA8,   0,      0x2DA,  0xB8,   0,    0x2DD, 0x2DB,  0x2C7,
+    0x2014, 0,      0,      0,      0,      0,      0,      0,      0,    0,     0,      0,
+    0,      0,      0,      0,      0,      0xC6,   0,      0xAA,   0,    0,     0,      0,
+    0x141,  0xD8,   0x152,  0xBA,   0,      0,      0,      0,      0,    0xE6,  0,      0,
+    0,      0x131,  0,      0,      0x142,  0xF8,   0x153,  0xDF,   0,    0,     0,      0};
+constexpr uint16_t kMacRomanHigh[128] = {
+    0xC4,   0xC5,   0xC7,   0xC9,   0xD1,   0xD6,  0xDC,   0xE1,   0xE0,   0xE2,   0xE4,   0xE3,
+    0xE5,   0xE7,   0xE9,   0xE8,   0xEA,   0xEB,  0xED,   0xEC,   0xEE,   0xEF,   0xF1,   0xF3,
+    0xF2,   0xF4,   0xF6,   0xF5,   0xFA,   0xF9,  0xFB,   0xFC,   0x2020, 0xB0,   0xA2,   0xA3,
+    0xA7,   0x2022, 0xB6,   0xDF,   0xAE,   0xA9,  0x2122, 0xB4,   0xA8,   0x2260, 0xC6,   0xD8,
+    0x221E, 0xB1,   0x2264, 0x2265, 0xA5,   0xB5,  0x2202, 0x2211, 0x220F, 0x3C0,  0x222B, 0xAA,
+    0xBA,   0x3A9,  0xE6,   0xF8,   0xBF,   0xA1,  0xAC,   0x221A, 0x192,  0x2248, 0x2206, 0xAB,
+    0xBB,   0x2026, 0x20,   0xC0,   0xC3,   0xD5,  0x152,  0x153,  0x2013, 0x2014, 0x201C, 0x201D,
+    0x2018, 0x2019, 0xF7,   0x25CA, 0xFF,   0x178, 0x2044, 0xA4,   0x2039, 0x203A, 0xFB01, 0xFB02,
+    0x2021, 0xB7,   0x201A, 0x201E, 0x2030, 0xC2,  0xCA,   0xC1,   0xCB,   0xC8,   0xCD,   0xCE,
+    0xCF,   0xCC,   0xD3,   0xD4,   0xF8FF, 0xD2,  0xDA,   0xDB,   0xD9,   0x131,  0x2C6,  0x2DC,
+    0xAF,   0x2D8,  0x2D9,  0x2DA,  0xB8,   0x2DD, 0x2DB,  0x2C7};
+constexpr uint16_t kWinAnsiHigh[32] = {
+    0x20AC, 0x2022, 0x201A, 0x192,  0x201E, 0x2026, 0x2020, 0x2021, 0x2C6,  0x2030, 0x160,
+    0x2039, 0x152,  0x2022, 0x17D,  0x2022, 0x2022, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022,
+    0x2013, 0x2014, 0x2DC,  0x2122, 0x161,  0x203A, 0x153,  0x2022, 0x17E,  0x178};
+
+enum class BaseEncoding { Standard, WinAnsi, MacRoman };
+
+uint32_t baseEncodingUnicode(BaseEncoding enc, int code) {
+    if (code < 0x20) return 0;
+    if (code < 0x7F) {
+        if (enc == BaseEncoding::Standard && code == 0x27) return 0x2019;
+        if (enc == BaseEncoding::Standard && code == 0x60) return 0x2018;
+        return code;
+    }
+    if (enc == BaseEncoding::MacRoman) return code >= 0x80 ? kMacRomanHigh[code - 0x80] : 0;
+    if (enc == BaseEncoding::WinAnsi) {
+        if (code == 0xA0 || code == 0xAD) return code - 0x80;
+        return code >= 0xA0 ? code : (code >= 0x80 ? kWinAnsiHigh[code - 0x80] : 0x2022);
+    }
+    return code >= 0xA0 ? kStandardHigh[code - 0xA0] : 0;
+}
+
+enum class ProgramKind { TrueType, OpenType, BareCff, Type1 };
+
+struct FontProgram {
+    FT_Face face = nullptr;
+    ProgramKind kind{};
+    bool usable = false;
+    bool noSubsetting = false;
+    std::string bytes;
+    long long length1 = 0, length2 = 0, length3 = 0;
+    std::map<std::tuple<ProgramKind, bool, std::set<FT_UInt>>, QPDFObjectHandle> streams;
+};
+
+bool splitType1(std::span<const uint8_t> in, FontProgram& out) {
+    std::string clear, binary, tail;
+    if (in.size() > 6 && in[0] == 0x80) {
+        for (size_t i = 0; i + 6 <= in.size() && in[i] == 0x80 && in[i + 1] != 3;) {
+            size_t len = in[i + 2] | in[i + 3] << 8 | in[i + 4] << 16 | size_t(in[i + 5]) << 24;
+            if (i + 6 + len > in.size()) return false;
+            (in[i + 1] == 2 ? binary : (binary.empty() ? clear : tail))
+                .append(reinterpret_cast<const char*>(in.data()) + i + 6, len);
+            i += 6 + len;
+        }
+    } else {
+        std::string_view s(reinterpret_cast<const char*>(in.data()), in.size());
+        size_t eexec = s.find("eexec"), mark = s.rfind("cleartomark");
+        if (eexec == s.npos) return false;
+        size_t start = s.find_first_not_of(" \t\r\n", eexec + 5);
+        if (start == s.npos) return false;
+        size_t end = mark == s.npos || mark < start ? s.size() : mark;
+        while (end < s.size() && end > start &&
+               (s[end - 1] == '0' || std::isspace(uint8_t(s[end - 1]))))
+            --end;
+        clear = s.substr(0, start);
+        tail = s.substr(end);
+        auto body = s.substr(start, end - start);
+        if (body.size() >= 4 && std::all_of(body.begin(), body.begin() + 4,
+                                            [](char c) { return std::isxdigit(uint8_t(c)); })) {
+            int hi = -1;
+            for (char c : body) {
+                if (!std::isxdigit(uint8_t(c))) continue;
+                int v = std::isdigit(uint8_t(c)) ? c - '0' : (std::tolower(c) - 'a' + 10);
+                if (hi < 0)
+                    hi = v;
+                else
+                    binary.push_back(char(hi << 4 | v)), hi = -1;
+            }
+        } else {
+            binary = body;
+        }
+    }
+    if (clear.empty() || binary.empty()) return false;
+    out.bytes = clear + binary + tail;
+    out.length1 = clear.size(), out.length2 = binary.size(), out.length3 = tail.size();
+    return true;
+}
+
+bool loadProgram(FT_Library lib, std::span<const uint8_t> data, FontProgram& p) {
+    if (data.size() < 4 || std::memcmp(data.data(), "ttcf", 4) == 0 ||
+        FT_New_Memory_Face(lib, data.data(), FT_Long(data.size()), 0, &p.face))
+        return false;
+    std::string_view format = FT_Get_Font_Format(p.face);
+    FT_ULong len = 0;
+    if (FT_IS_SFNT(p.face)) {
+        if (!FT_Load_Sfnt_Table(p.face, FT_MAKE_TAG('C', 'F', 'F', '2'), 0, nullptr, &len))
+            return false;
+        bool glyf = !FT_Load_Sfnt_Table(p.face, FT_MAKE_TAG('g', 'l', 'y', 'f'), 0, nullptr, &len);
+        p.kind = glyf ? ProgramKind::TrueType : ProgramKind::OpenType;
+        FT_ULong os2Len = 0;
+        if (!FT_Load_Sfnt_Table(p.face, FT_MAKE_TAG('O', 'S', '/', '2'), 0, nullptr, &os2Len) &&
+            os2Len >= 10) {
+            std::vector<uint8_t> os2(os2Len);
+            if (!FT_Load_Sfnt_Table(p.face, FT_MAKE_TAG('O', 'S', '/', '2'), 0, os2.data(),
+                                    &os2Len) &&
+                os2Len >= 10) {
+                uint16_t fsType = uint16_t(os2[8] << 8 | os2[9]);
+                p.noSubsetting = (fsType & 0x0100) != 0;
+            }
+        }
+    } else if (format == "CFF") {
+        p.kind = ProgramKind::BareCff;
+    } else if (format == "Type 1") {
+        p.kind = ProgramKind::Type1;
+        return splitType1(data, p);
+    } else {
+        return false;
+    }
+    p.bytes.assign(reinterpret_cast<const char*>(data.data()), data.size());
+    return true;
+}
+
+std::string subsetProgram(FontProgram const& p, std::set<FT_UInt> const& glyphs) {
+    if (p.bytes.size() > std::numeric_limits<unsigned int>::max()) return {};
+    hb_blob_t* blob = hb_blob_create(p.bytes.data(), static_cast<unsigned int>(p.bytes.size()),
+                                     HB_MEMORY_MODE_READONLY, nullptr, nullptr);
+    hb_face_t* face = hb_face_create(blob, 0);
+    hb_blob_destroy(blob);
+    std::string out;
+    if (hb_subset_input_t* input = hb_subset_input_create_or_fail()) {
+        for (FT_UInt g : glyphs) hb_set_add(hb_subset_input_glyph_set(input), g);
+        FT_UInt gid = 0;
+        if (!FT_Select_Charmap(p.face, FT_ENCODING_UNICODE)) {
+            for (FT_ULong u = FT_Get_First_Char(p.face, &gid); gid;
+                 u = FT_Get_Next_Char(p.face, u, &gid))
+                if (glyphs.contains(gid)) hb_set_add(hb_subset_input_unicode_set(input), u);
+        }
+        hb_subset_input_set_flags(input, HB_SUBSET_FLAGS_RETAIN_GIDS | HB_SUBSET_FLAGS_GLYPH_NAMES |
+                                             HB_SUBSET_FLAGS_NOTDEF_OUTLINE);
+        if (hb_face_t* subset = hb_subset_or_fail(face, input)) {
+            hb_blob_t* result = hb_face_reference_blob(subset);
+            unsigned length = 0;
+            const char* data = hb_blob_get_data(result, &length);
+            out.assign(data, length);
+            hb_blob_destroy(result);
+            hb_face_destroy(subset);
+        }
+        hb_subset_input_destroy(input);
+    }
+    hb_face_destroy(face);
+    return out;
+}
+
+QPDFObjectHandle makeProgramStream(QPDF& qpdf, FontProgram const& p, ProgramKind kind, bool cid,
+                                   std::string const& subset) {
+    auto const& bytes = subset.empty() ? p.bytes : subset;
+    auto stream = QPDFObjectHandle::newStream(&qpdf, bytes);
+    auto dict = stream.getDict();
+    if (kind == ProgramKind::TrueType)
+        dict.replaceKey("/Length1", QPDFObjectHandle::newInteger(bytes.size()));
+    if (kind == ProgramKind::Type1) {
+        dict.replaceKey("/Length1", QPDFObjectHandle::newInteger(p.length1));
+        dict.replaceKey("/Length2", QPDFObjectHandle::newInteger(p.length2));
+        dict.replaceKey("/Length3", QPDFObjectHandle::newInteger(p.length3));
+    }
+    char const* subtype = kind == ProgramKind::OpenType  ? "/OpenType"
+                          : kind != ProgramKind::BareCff ? nullptr
+                          : cid                          ? "/CIDFontType0C"
+                                                         : "/Type1C";
+    if (subtype) dict.replaceKey("/Subtype", QPDFObjectHandle::newName(subtype));
+    return stream;
+}
+
+FT_UInt glyphForName(FT_Face face, std::string const& name) {
+    if (FT_HAS_GLYPH_NAMES(face)) {
+        if (FT_UInt gid = FT_Get_Name_Index(face, name.c_str())) return gid;
+    }
+    uint32_t u = name.size() == 7 && name.starts_with("uni")
+                     ? std::strtoul(name.c_str() + 3, nullptr, 16)
+                 : name.size() == 1 ? uint8_t(name[0])
+                                    : 0;
+    return u && !FT_Select_Charmap(face, FT_ENCODING_UNICODE) ? FT_Get_Char_Index(face, u) : 0;
+}
+
+struct SimpleEncoding {
+    BaseEncoding base = BaseEncoding::Standard;
+    bool namedBase = false;
+    std::map<int, std::string> differences;
+};
+
+SimpleEncoding parseEncoding(QPDFObjectHandle const& font) {
+    SimpleEncoding enc;
+    auto encoding = font.getKey("/Encoding");
+    auto base = encoding.isDictionary() ? encoding.getKey("/BaseEncoding") : encoding;
+    enc.namedBase =
+        base.isNameAndEquals("/WinAnsiEncoding") || base.isNameAndEquals("/MacRomanEncoding");
+    if (base.isNameAndEquals("/WinAnsiEncoding")) enc.base = BaseEncoding::WinAnsi;
+    if (base.isNameAndEquals("/MacRomanEncoding")) enc.base = BaseEncoding::MacRoman;
+    auto differences =
+        encoding.isDictionary() ? encoding.getKey("/Differences") : QPDFObjectHandle();
+    int code = 0;
+    for (auto& item :
+         differences.isArray() ? differences.getArrayAsVector() : std::vector<QPDFObjectHandle>{}) {
+        if (item.isInteger())
+            code = item.getIntValueAsInt();
+        else if (item.isName()) {
+            if (code >= 0 && code <= 255) enc.differences[code] = item.getName().substr(1);
+            if (code <= 255) ++code;
+        }
+    }
+    return enc;
+}
+
+FT_UInt glyphForCode(FT_Face face, int code, bool symbolic, SimpleEncoding const& enc) {
+    if (auto it = enc.differences.find(code); it != enc.differences.end()) {
+        FT_UInt gid = it->second == ".notdef" ? 0 : glyphForName(face, it->second);
+        if (gid || !symbolic) return gid;
+    } else if (uint32_t u = symbolic ? 0 : baseEncodingUnicode(enc.base, code)) {
+        if (!FT_Select_Charmap(face, FT_ENCODING_UNICODE)) {
+            if (FT_UInt gid = FT_Get_Char_Index(face, u)) return gid;
+        }
+    }
+    for (int pass = 0; pass < 2; ++pass) {
+        for (int i = 0; i < face->num_charmaps; ++i) {
+            if ((face->charmaps[i]->encoding == FT_ENCODING_UNICODE) != (pass == 1)) continue;
+            FT_Set_Charmap(face, face->charmaps[i]);
+            if (FT_UInt gid = FT_Get_Char_Index(face, code)) return gid;
+            if (FT_UInt gid = FT_Get_Char_Index(face, 0xF000 | code)) return gid;
+        }
+    }
+    return 0;
+}
+
+void addWidths(QPDFObjectHandle font, FT_Face face, bool symbolic) {
+    auto enc = parseEncoding(font);
+    auto widths = QPDFObjectHandle::newArray();
+    for (int code = 0; code < 256; ++code) {
+        FT_Fixed advance = 0;
+        FT_Get_Advance(face, glyphForCode(face, code, symbolic, enc), FT_LOAD_NO_SCALE, &advance);
+        widths.appendItem(QPDFObjectHandle::newInteger(
+            advance * 1000 / (face->units_per_EM ? face->units_per_EM : 1000)));
+    }
+    font.replaceKey("/FirstChar", QPDFObjectHandle::newInteger(0));
+    font.replaceKey("/LastChar", QPDFObjectHandle::newInteger(255));
+    font.replaceKey("/Widths", widths);
+}
+
+bool reachesSameGlyphs(FT_Library lib, std::string const& subset, FT_Face original,
+                       SimpleEncoding const& enc) {
+    FT_Face face = nullptr;
+    if (subset.empty() || FT_New_Memory_Face(lib, reinterpret_cast<const FT_Byte*>(subset.data()),
+                                             FT_Long(subset.size()), 0, &face))
+        return false;
+    bool same = true;
+    for (int code = 0; same && code < 256; ++code)
+        same = glyphForCode(face, code, false, enc) == glyphForCode(original, code, false, enc);
+    FT_Done_Face(face);
+    return same;
+}
+
+int unicodePreference(FT_ULong u, bool symbolic) {
+    if (u >= 0xE000 && u <= 0xF8FF) return 0;
+    if (!symbolic) return 1;
+    if (u >= 0x2700 && u < 0x27C0) return 4;
+    return u < 0x80 ? 1 : u >= 0x2000 && u < 0x2C00 ? 3 : 2;
+}
+
+std::map<FT_UInt, FT_ULong> unicodeByGlyph(FT_Face face, bool symbolic) {
+    std::map<FT_UInt, FT_ULong> unicodeOf;
+    if (FT_Select_Charmap(face, FT_ENCODING_UNICODE)) return unicodeOf;
+    FT_UInt gid = 0;
+    for (FT_ULong u = FT_Get_First_Char(face, &gid); gid; u = FT_Get_Next_Char(face, u, &gid)) {
+        auto it = unicodeOf.try_emplace(gid, u).first;
+        if (unicodePreference(u, symbolic) > unicodePreference(it->second, symbolic))
+            it->second = u;
+    }
+    return unicodeOf;
+}
+
+void setToUnicode(QPDF& qpdf, QPDFObjectHandle font, std::map<uint32_t, FT_ULong> const& codes,
+                  bool twoByte) {
+    if (codes.empty() || font.hasKey("/ToUnicode")) return;
+    std::string cmap = std::string(
+                           "/CIDInit /ProcSet findresource begin 12 dict begin begincmap\n"
+                           "/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> "
+                           "def\n/CMapName /Adobe-Identity-UCS def /CMapType 2 def\n") +
+                       (twoByte ? "1 begincodespacerange <0000> <FFFF> endcodespacerange\n"
+                                : "1 begincodespacerange <00> <FF> endcodespacerange\n");
+    std::string entries;
+    size_t count = 0;
+    for (auto [code, u] : codes) {
+        char entry[40];
+        int n = std::snprintf(entry, sizeof entry, twoByte ? "<%04X> " : "<%02X> ", code);
+        if (u > 0xFFFF)
+            std::snprintf(entry + n, sizeof entry - n, "<%04lX%04lX>\n",
+                          0xD800 + ((u - 0x10000) >> 10), 0xDC00 + ((u - 0x10000) & 0x3FF));
+        else
+            std::snprintf(entry + n, sizeof entry - n, "<%04lX>\n", u);
+        entries += entry;
+        if (++count % 100 == 0 || count == codes.size()) {
+            cmap +=
+                std::to_string((count - 1) % 100 + 1) + " beginbfchar\n" + entries + "endbfchar\n";
+            entries.clear();
+        }
+    }
+    cmap += "endcmap CMapName currentdict /CMap defineresource pop end end\n";
+    font.replaceKey("/ToUnicode", QPDFObjectHandle::newStream(&qpdf, cmap));
+}
+
+void pinTrueTypeMapping(QPDF& qpdf, QPDFObjectHandle font, FT_Face face, bool symbolic) {
+    auto enc = parseEncoding(font);
+    auto unicodeOf = unicodeByGlyph(face, symbolic);
+    std::map<uint32_t, FT_ULong> codes;
+    auto differences = QPDFObjectHandle::newArray();
+    for (int code = 0; code < 256; ++code) {
+        FT_UInt gid = glyphForCode(face, code, symbolic, enc);
+        bool differs = enc.differences.contains(code);
+        FT_ULong u = symbolic || differs ? 0 : baseEncodingUnicode(enc.base, code);
+        if (auto it = unicodeOf.find(gid); !u && gid && it != unicodeOf.end()) u = it->second;
+        if (!symbolic && !enc.namedBase &&
+            (differs || u != baseEncodingUnicode(BaseEncoding::WinAnsi, code))) {
+            char name[64] = ".notdef";
+            if (differs)
+                std::snprintf(name, sizeof name, "%s", enc.differences.at(code).c_str());
+            else if (!gid || !FT_HAS_GLYPH_NAMES(face) ||
+                     FT_Get_Glyph_Name(face, gid, name, sizeof name))
+                std::snprintf(name, sizeof name, u ? "uni%04lX" : ".notdef", u);
+            differences.appendItem(QPDFObjectHandle::newInteger(code));
+            differences.appendItem(QPDFObjectHandle::newName(std::string("/") + name));
+        }
+        if (gid && u) codes[code] = u;
+    }
+    if (!symbolic && !enc.namedBase) {
+        auto encoding = QPDFObjectHandle::newDictionary();
+        encoding.replaceKey("/Type", QPDFObjectHandle::newName("/Encoding"));
+        encoding.replaceKey("/BaseEncoding", QPDFObjectHandle::newName("/WinAnsiEncoding"));
+        encoding.replaceKey("/Differences", differences);
+        font.replaceKey("/Encoding", encoding);
+    }
+    setToUnicode(qpdf, font, codes, false);
+}
+
+QPDFObjectHandle newDescriptor(QPDF& qpdf, QPDFObjectHandle font, FT_Face face, bool symbolic) {
+    auto scaled = [&](long v) {
+        return QPDFObjectHandle::newInteger(v * 1000 /
+                                            (face->units_per_EM ? face->units_per_EM : 1000));
+    };
+    bool italic = face->style_flags & FT_STYLE_FLAG_ITALIC;
+    auto* os2 = static_cast<TT_OS2*>(FT_Get_Sfnt_Table(face, FT_SFNT_OS2));
+    auto bbox = QPDFObjectHandle::newArray();
+    for (long v : {face->bbox.xMin, face->bbox.yMin, face->bbox.xMax, face->bbox.yMax})
+        bbox.appendItem(scaled(v));
+    auto d = QPDFObjectHandle::newDictionary();
+    d.replaceKey("/Type", QPDFObjectHandle::newName("/FontDescriptor"));
+    d.replaceKey("/FontName", font.getKey("/BaseFont"));
+    d.replaceKey("/Flags", QPDFObjectHandle::newInteger((symbolic ? 4 : 32) | (italic ? 64 : 0) |
+                                                        (FT_IS_FIXED_WIDTH(face) ? 1 : 0)));
+    d.replaceKey("/FontBBox", bbox);
+    d.replaceKey("/ItalicAngle", QPDFObjectHandle::newInteger(italic ? -12 : 0));
+    d.replaceKey("/Ascent", scaled(face->ascender));
+    d.replaceKey("/Descent", scaled(face->descender));
+    d.replaceKey("/CapHeight", scaled(os2 && os2->sCapHeight ? os2->sCapHeight : face->ascender));
+    d.replaceKey("/StemV",
+                 QPDFObjectHandle::newInteger(face->style_flags & FT_STYLE_FLAG_BOLD ? 120 : 80));
+    return qpdf.makeIndirectObject(d);
+}
+
+EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
+                            std::vector<FontSource> const& sources, bool onlyMissing,
+                            FILE* out = nullptr) {
+    struct Programs : std::vector<FontProgram> {
+        FT_Library lib = nullptr;
+        ~Programs() {
+            for (auto& p : *this)
+                if (p.face) FT_Done_Face(p.face);
+            if (lib) FT_Done_FreeType(lib);
+        }
+    } programs;
+    programs.resize(sources.size());
+    FT_Library& lib = programs.lib;
     try {
+        if (FT_Init_FreeType(&lib)) return {nullptr, "FreeType init failed", -1};
         auto qpdf = QPDF::create();
-        qpdf->processMemoryFile("font-in", reinterpret_cast<const char*>(input.data()),
-                                input.size());
+        load(*qpdf);
 
-        // 1. Refuse signed documents: a full rewrite invalidates signatures.
-        for (auto& object : qpdf->getAllObjects()) {
-            auto dict = object.isStream() ? object.getDict()
-                                          : (object.isDictionary() ? object : QPDFObjectHandle());
-            if (dict.isDictionary()) {
-                if (dict.hasKey("/ByteRange")) {
-                    return {nullptr,
-                            "document contains signatures (/ByteRange); refusing to rewrite", -3};
-                }
-                auto ft = dict.getKey("/FT");
-                if (ft.isName() && ft.getName() == "/Sig") {
-                    return {nullptr, "document contains signatures (/FT /Sig); refusing to rewrite",
-                            -3};
-                }
-                auto v = dict.getKey("/V");
-                if (v.isDictionary() && v.hasKey("/ByteRange")) {
-                    return {nullptr,
-                            "document contains signatures (/V /ByteRange); refusing to rewrite",
-                            -3};
-                }
-            }
-        }
-
-        // 2. Helper to replace the font stream inside a /FontDescriptor dictionary,
-        // deduplicating indirect descriptors across multiple font references.
-        std::set<QPDFObjGen> seenDescriptors;
-        auto tryReplaceInDescriptor = [&](QPDFObjectHandle& descriptor) -> int {
-            if (!descriptor.isDictionary()) return 0;
-            if (descriptor.isIndirect()) {
-                if (!seenDescriptors.insert(descriptor.getObjGen()).second) {
-                    return 0;  // Already replaced or processed this descriptor
-                }
-            }
-            int count = 0;
-            for (char const* key : {"/FontFile", "/FontFile2", "/FontFile3"}) {
-                auto stream = descriptor.getKey(key);
-                if (!stream.isStream()) continue;
-                if (std::string(key) == "/FontFile") {
-                    return -4;
-                }
-                std::string bytes(reinterpret_cast<const char*>(fontData.data()), fontData.size());
-                auto replacement = QPDFObjectHandle::newStream(qpdf.get(), bytes);
-                auto replacementDict = replacement.getDict();
-                if (std::string(key) == "/FontFile2") {
-                    replacementDict.replaceKey(
-                        "/Length1",
-                        QPDFObjectHandle::newInteger(static_cast<long long>(fontData.size())));
-                } else {
-                    auto subtype = stream.getKey("/Subtype");
-                    if (subtype.isName()) replacementDict.replaceKey("/Subtype", subtype);
-                }
-                descriptor.replaceKey(key, replacement);
-                ++count;
-            }
-            return count;
+        auto hasSignatureValue = [](QPDFObjectHandle const& field) {
+            if (!field.isDictionary()) return false;
+            auto value = field.getKey("/V");
+            return field.hasKey("/ByteRange") ||
+                   (value.isDictionary() && value.hasKey("/ByteRange"));
         };
-
-        // 3. Collect font candidates from direct /Font objects, Form XObject streams,
-        // and resource dictionaries.
-        std::vector<QPDFObjectHandle> fontCandidates;
+        std::vector<QPDFObjectHandle> fonts;
         auto collectFromResources = [&](QPDFObjectHandle const& res) {
-            if (res.isDictionary()) {
-                auto fontDict = res.getKey("/Font");
-                if (fontDict.isDictionary()) {
-                    for (auto const& [name, fontObj] : fontDict.getDictAsMap()) {
-                        if (fontObj.isDictionary()) fontCandidates.push_back(fontObj);
-                    }
-                }
-            }
+            auto fontDict = res.isDictionary() ? res.getKey("/Font") : QPDFObjectHandle();
+            if (!fontDict.isDictionary()) return;
+            for (auto const& [name, font] : fontDict.getDictAsMap())
+                if (font.isDictionary()) fonts.push_back(font);
         };
-
         for (auto& object : qpdf->getAllObjects()) {
-            auto dict = object.isStream() ? object.getDict()
-                                          : (object.isDictionary() ? object : QPDFObjectHandle());
-            if (dict.isDictionary()) {
-                auto type = dict.getKey("/Type");
-                if (type.isName() && type.getName() == "/Font") {
-                    fontCandidates.push_back(dict);
-                }
-                collectFromResources(dict.getKey("/Resources"));
+            auto dict = object.isStream() ? object.getDict() : object;
+            if (!dict.isDictionary()) continue;
+            if (hasSignatureValue(dict)) {
+                return {nullptr, "document is signed; refusing to rewrite", -3};
+            }
+            auto type = dict.getKey("/Type");
+            auto subtypeName = dict.getKey("/Subtype");
+            bool cidDescendant =
+                subtypeName.isName() && (subtypeName.getName() == "/CIDFontType0" ||
+                                         subtypeName.getName() == "/CIDFontType2");
+            if (type.isName() && type.getName() == "/Font" && !cidDescendant) fonts.push_back(dict);
+            collectFromResources(dict.getKey("/Resources"));
+        }
+        auto acroForm = qpdf->getRoot().getKey("/AcroForm");
+        std::vector<QPDFObjectHandle> pendingFields{acroForm};
+        std::set<QPDFObjGen> visitedFields;
+        bool signedForm = false;
+        while (!pendingFields.empty()) {
+            QPDFObjectHandle field = pendingFields.back();
+            pendingFields.pop_back();
+            if (!field.isDictionary()) continue;
+            if (field.isIndirect() && !visitedFields.insert(field.getObjGen()).second) continue;
+            if (hasSignatureValue(field)) {
+                signedForm = true;
+                break;
+            }
+            for (char const* key : {"/Fields", "/Kids"}) {
+                QPDFObjectHandle children = field.getKey(key);
+                if (!children.isArray()) continue;
+                for (auto& child : children.getArrayAsVector()) pendingFields.push_back(child);
             }
         }
-
-        // Also check AcroForm default resources (/DR) from catalog Root
-        auto root = qpdf->getRoot();
-        if (root.isDictionary()) {
-            auto acroForm = root.getKey("/AcroForm");
-            if (acroForm.isDictionary()) {
-                collectFromResources(acroForm.getKey("/DR"));
+        if (acroForm.isDictionary()) {
+            if (signedForm) {
+                return {nullptr, "document is signed; refusing to rewrite", -3};
             }
+            collectFromResources(acroForm.getKey("/DR"));
         }
 
-        // 4. Iterate candidate fonts and replace descriptor streams for matching /BaseFont
-        int replaced = 0;
-        std::set<QPDFObjGen> seenFonts;
-        for (auto& font : fontCandidates) {
-            if (font.hasObjectDescription() && font.getObjGen().getObj() != 0) {
-                if (!seenFonts.insert(font.getObjGen()).second) continue;
+        for (size_t i = 0; i < sources.size(); ++i) {
+            programs[i].usable = loadProgram(lib, sources[i].data, programs[i]);
+            if (!programs[i].usable && !onlyMissing) {
+                return {nullptr, "unusable font program for /BaseFont " + sources[i].name, -4};
             }
+        }
+        auto nameOf = [](QPDFObjectHandle const& font) {
             auto base = font.getKey("/BaseFont");
-            if (!base.isName() || !isFontNameMatch(font, base.getName(), baseFont)) continue;
-
-            auto descriptor = font.getKey("/FontDescriptor");
-            int r = tryReplaceInDescriptor(descriptor);
-            if (r == -4) {
-                return {nullptr, "Type 1 /FontFile replacement without Length1/2/3 is unsupported",
-                        -4};
+            return base.isName() ? stripPdfNamePrefix(base.getName()) : std::string();
+        };
+        auto asLatin1 = [](std::string const& raw) {
+            std::string utf8;
+            for (unsigned char c : raw) {
+                if (c >= 0x80) utf8 += char(0xC0 | c >> 6), c = 0x80 | (c & 0x3F);
+                utf8 += char(c);
             }
-            replaced += r;
-
-            // Type 0 CID fonts have /FontDescriptor in /DescendantFonts
-            auto descendantFonts = font.getKey("/DescendantFonts");
-            if (descendantFonts.isArray()) {
-                for (auto& df : descendantFonts.getArrayAsVector()) {
-                    if (!df.isDictionary()) continue;
-                    auto descDescriptor = df.getKey("/FontDescriptor");
-                    int dr = tryReplaceInDescriptor(descDescriptor);
-                    if (dr == -4) {
-                        return {nullptr,
-                                "Type 1 /FontFile replacement without Length1/2/3 is unsupported",
-                                -4};
-                    }
-                    replaced += dr;
+            return utf8;
+        };
+        int embedded = 0;
+        bool openType = false;
+        std::set<QPDFObjGen> seen;
+        for (auto& font : fonts) {
+            if (font.isIndirect() && !seen.insert(font.getObjGen()).second) continue;
+            auto descendants = font.getKey("/DescendantFonts");
+            bool cid = descendants.isArray() && descendants.getArrayNItems() > 0 &&
+                       descendants.getArrayItem(0).isDictionary();
+            auto target = cid ? descendants.getArrayItem(0) : font;
+            std::string fontName = nameOf(font), targetName = nameOf(target);
+            auto source = std::ranges::find_if(sources, [&](FontSource const& s) {
+                auto name = stripPdfNamePrefix(s.name);
+                return name == fontName || name == targetName || name == asLatin1(fontName) ||
+                       name == asLatin1(targetName);
+            });
+            if (source == sources.end()) continue;
+            auto subtype = target.getKey("/Subtype");
+            if (subtype.isName() && subtype.getName() == "/Type3") continue;
+            auto& program = programs[source - sources.begin()];
+            if (!program.usable) continue;
+            if (cid && program.kind == ProgramKind::Type1) {
+                return {nullptr, "a Type 1 program cannot back a CIDFont: " + fontName, -4};
+            }
+            if (font.getKey("/Encoding").isDictionary()
+                    ? font.getKey("/Encoding")
+                          .getKey("/BaseEncoding")
+                          .isNameAndEquals("/MacExpertEncoding")
+                    : font.getKey("/Encoding").isNameAndEquals("/MacExpertEncoding")) {
+                if (onlyMissing) continue;
+                return {nullptr,
+                        "MacExpertEncoding fonts cannot be substituted safely: " + fontName, -4};
+            }
+            auto descriptor = target.getKey("/FontDescriptor");
+            bool hasProgram = descriptor.isDictionary() &&
+                              (descriptor.hasKey("/FontFile") || descriptor.hasKey("/FontFile2") ||
+                               descriptor.hasKey("/FontFile3"));
+            if (hasProgram && onlyMissing) continue;
+            if (descriptor.isIndirect()) {
+                // A descriptor can be shared by a font that is not being
+                // replaced. Always isolate it before installing a program so
+                // the other font keeps its original glyphs.
+                descriptor = qpdf->makeIndirectObject(
+                    QPDFObjectHandle::newDictionary(descriptor.getDictAsMap()));
+                for (char const* key : {"/FontFile", "/FontFile2", "/FontFile3"})
+                    descriptor.removeKey(key);
+                descriptor.replaceKey("/FontName", target.getKey("/BaseFont"));
+                target.replaceKey("/FontDescriptor", descriptor);
+            }
+            auto flags =
+                descriptor.isDictionary() ? descriptor.getKey("/Flags") : QPDFObjectHandle();
+            bool symbolic = flags.isInteger()
+                                ? (flags.getIntValue() & 4) != 0
+                                : targetName == "Symbol" || targetName == "ZapfDingbats";
+            if (!descriptor.isDictionary()) {
+                descriptor = newDescriptor(*qpdf, target, program.face, symbolic);
+                target.replaceKey("/FontDescriptor", descriptor);
+            }
+            if (!cid && !target.getKey("/Widths").isArray())
+                addWidths(target, program.face, symbolic);
+            std::set<FT_UInt> glyphs;
+            std::string subset;
+            if (!hasProgram && !cid && !symbolic && !program.noSubsetting &&
+                program.kind != ProgramKind::BareCff && program.kind != ProgramKind::Type1) {
+                auto enc = parseEncoding(target);
+                bool resolvable = std::ranges::all_of(enc.differences, [&](auto const& entry) {
+                    return entry.second == ".notdef" || glyphForName(program.face, entry.second);
+                });
+                for (int code = 0; resolvable && code < 256; ++code) {
+                    glyphs.insert(glyphForCode(program.face, code, false, enc));
+                    glyphs.insert(glyphForCode(program.face, code, true, enc));
+                    if (FT_Select_Charmap(program.face, FT_ENCODING_UNICODE)) continue;
+                    for (auto base :
+                         {BaseEncoding::Standard, BaseEncoding::WinAnsi, BaseEncoding::MacRoman})
+                        glyphs.insert(
+                            FT_Get_Char_Index(program.face, baseEncodingUnicode(base, code)));
                 }
+                if (resolvable) subset = subsetProgram(program, glyphs);
+                if (!reachesSameGlyphs(lib, subset, program.face, enc)) subset.clear();
+                if (subset.empty()) glyphs.clear();
             }
+            std::string current = subtype.isName() ? subtype.getName() : "";
+            auto wrapper = descriptor.getKey("/FontFile3");
+            bool wrapped = wrapper.isStream() &&
+                           wrapper.getDict().getKey("/Subtype").isNameAndEquals("/OpenType");
+            auto kind = program.kind == ProgramKind::TrueType && wrapped ? ProgramKind::OpenType
+                                                                         : program.kind;
+            bool glyf = program.kind == ProgramKind::TrueType;
+            bool trueTypeFont = current == "/TrueType" || current == "/CIDFontType2";
+            if (glyf != trueTypeFont) {
+                target.replaceKey("/Subtype", QPDFObjectHandle::newName(
+                                                  cid ? (glyf ? "/CIDFontType2" : "/CIDFontType0")
+                                                      : (glyf ? "/TrueType" : "/Type1")));
+                if (cid && glyf && !target.hasKey("/CIDToGIDMap"))
+                    target.replaceKey("/CIDToGIDMap", QPDFObjectHandle::newName("/Identity"));
+                if (!cid && glyf) pinTrueTypeMapping(*qpdf, target, program.face, symbolic);
+            }
+            auto gidMap = target.getKey("/CIDToGIDMap");
+            if (cid && glyf && !hasProgram &&
+                (font.getKey("/Encoding").isNameAndEquals("/Identity-H") ||
+                 font.getKey("/Encoding").isNameAndEquals("/Identity-V")) &&
+                (gidMap.isNull() || gidMap.isNameAndEquals("/Identity"))) {
+                std::map<uint32_t, FT_ULong> codes;
+                for (auto [gid, u] : unicodeByGlyph(program.face, symbolic)) codes[gid] = u;
+                setToUnicode(*qpdf, font, codes, true);
+            }
+            auto& stream = program.streams[{kind, cid, glyphs}];
+            if (!stream.isInitialized())
+                stream = makeProgramStream(*qpdf, program, kind, cid, subset);
+            if (!glyphs.empty() && !(targetName.size() > 7 && targetName[6] == '+')) {
+                size_t hash = std::hash<std::string>{}(targetName);
+                for (FT_UInt g : glyphs) hash = hash * 31 + g;
+                std::string tag;
+                for (int i = 0; i < 6; ++i, hash /= 26) tag += char('A' + hash % 26);
+                auto tagged = QPDFObjectHandle::newName("/" + tag + "+" + targetName);
+                target.replaceKey("/BaseFont", tagged);
+                descriptor.replaceKey("/FontName", tagged);
+            }
+            for (char const* key : {"/FontFile", "/FontFile2", "/FontFile3"})
+                descriptor.removeKey(key);
+            descriptor.replaceKey(kind == ProgramKind::TrueType ? "/FontFile2"
+                                  : kind == ProgramKind::Type1  ? "/FontFile"
+                                                                : "/FontFile3",
+                                  stream);
+            openType |= kind == ProgramKind::OpenType;
+            ++embedded;
         }
-        if (replaced == 0) {
-            return {nullptr, "no matching font descriptor stream", 1};
-        }
+        if (embedded == 0) return {nullptr, "no matching font", 1};
 
-        // 5. Serialize output through thread-safe QPDFWriter
         QPDFWriter writer{*qpdf};
-        writer.setCompressStreams(false);
+        writer.setCompressStreams(true);
         writer.setDecodeLevel(qpdf_dl_none);
-        writer.setOutputMemory();
+        if (openType) writer.setMinimumPDFVersion("1.6");
+        if (out) {
+            writer.setOutputFile("font-out", out, false);
+        } else {
+            writer.setOutputMemory();
+        }
         WriterLock lock{-1};
         writer.write();
-        return {writer.getBufferSharedPointer(), "", 0};
+        return {out ? nullptr : writer.getBufferSharedPointer(), "", 0};
     } catch (QPDFExc const& e) {
-        if (e.getErrorCode() == qpdf_e_password) {
-            return {nullptr, "password protected", -2};
-        }
+        if (e.getErrorCode() == qpdf_e_password) return {nullptr, "password protected", -2};
         return {nullptr, e.what(), -1};
     } catch (std::exception const& e) {
         return {nullptr, e.what(), -1};
-    } catch (...) {
-        return {nullptr, "non-standard exception while replacing a font stream", -1};
     }
 }
 
@@ -1183,34 +2244,81 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_optimize_ex(const uint8_t* input, int64_t in
     }
 }
 
-JPDFIUM_EXPORT int32_t jpdfium_qpdf_replace_font_stream(const uint8_t* input, int64_t inputLen,
-                                                        const char* baseFont,
-                                                        const uint8_t* fontData, int64_t fontLen,
-                                                        uint8_t** output, int64_t* outputLen) {
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_embed_fonts(const uint8_t* input, int64_t inputLen,
+                                                int32_t count, const char* const* names,
+                                                const uint8_t* const* fonts,
+                                                const int64_t* fontLens, int32_t onlyMissing,
+                                                uint8_t** output, int64_t* outputLen) {
     try {
-        if (!input || inputLen <= 0 || !baseFont || !*baseFont || !fontData || fontLen <= 0 ||
-            !output || !outputLen) {
+        if (!input || inputLen <= 0 || count <= 0 || !names || !fonts || !fontLens || !output ||
+            !outputLen) {
             return -1;
         }
         *output = nullptr;
         *outputLen = 0;
-        auto result = replaceFontStream({input, static_cast<size_t>(inputLen)}, baseFont,
-                                        {fontData, static_cast<size_t>(fontLen)});
+        std::vector<FontSource> sources;
+        for (int32_t i = 0; i < count; ++i) {
+            if (!names[i] || !*names[i] || !fonts[i] || fontLens[i] <= 0) return -1;
+            sources.push_back({names[i], {fonts[i], static_cast<size_t>(fontLens[i])}});
+        }
+        auto result = embedFonts(
+            [&](QPDF& qpdf) {
+                qpdf.processMemoryFile("font-in", reinterpret_cast<const char*>(input),
+                                       static_cast<size_t>(inputLen));
+            },
+            sources, onlyMissing != 0);
         if (result.rc != 0) {
+            std::fprintf(stderr, "jpdfium qpdf embed fonts: %s\n", result.error.c_str());
             return result.rc;
         }
-        auto& buffer = result.buffer;
-        *outputLen = static_cast<int64_t>(buffer->getSize());
+        *outputLen = static_cast<int64_t>(result.buffer->getSize());
         *output = static_cast<uint8_t*>(malloc(static_cast<size_t>(*outputLen)));
         if (!*output) {
             *outputLen = 0;
             return -1;
         }
-        std::memcpy(*output, buffer->getBuffer(), static_cast<size_t>(*outputLen));
+        std::memcpy(*output, result.buffer->getBuffer(), static_cast<size_t>(*outputLen));
         return 0;
     } catch (...) {
         return JPDFIUM_ERR_NATIVE;
     }
+}
+
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_embed_fonts_file(const char* in_path, const char* out_path,
+                                                     int32_t count, const char* const* names,
+                                                     const uint8_t* const* fonts,
+                                                     const int64_t* fontLens, int32_t onlyMissing) {
+    try {
+        if (!in_path || !out_path || count <= 0 || !names || !fonts || !fontLens) return -1;
+        std::vector<FontSource> sources;
+        for (int32_t i = 0; i < count; ++i) {
+            if (!names[i] || !*names[i] || !fonts[i] || fontLens[i] <= 0) return -1;
+            sources.push_back({names[i], {fonts[i], static_cast<size_t>(fontLens[i])}});
+        }
+        FILE* out = createOutputFile(out_path);
+        if (!out) return -1;
+        auto result = embedFonts([&](QPDF& qpdf) { qpdf.processFile(in_path); }, sources,
+                                 onlyMissing != 0, out);
+        const bool closed = std::fclose(out) == 0;
+        if (result.rc != 0) {
+            std::fprintf(stderr, "jpdfium qpdf embed fonts file: %s\n", result.error.c_str());
+            return result.rc;
+        }
+        return closed ? 0 : -1;
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
+    }
+}
+
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_replace_font_stream(const uint8_t* input, int64_t inputLen,
+                                                        const char* baseFont,
+                                                        const uint8_t* fontData, int64_t fontLen,
+                                                        uint8_t** output, int64_t* outputLen) {
+    if (!baseFont || !*baseFont) return -1;
+    const char* names[1] = {baseFont};
+    const uint8_t* fonts[1] = {fontData};
+    const int64_t lens[1] = {fontLen};
+    return jpdfium_qpdf_embed_fonts(input, inputLen, 1, names, fonts, lens, 0, output, outputLen);
 }
 
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_optimize(const uint8_t* input, int64_t inputLen,
@@ -1410,7 +2518,7 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_merge_files(const char* const* paths, int32_
             return -1;
         }
         auto& dest = sources.front();
-        assemblePages(*dest, selections);
+        assemblePages(*dest, selections, true);
 
         FILE* out = createOutputFile(out_path);
         if (!out) {
@@ -1482,6 +2590,42 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_pages_file(const char* in_path,
         std::fprintf(stderr, "jpdfium qpdf extract file: unknown error\n");
         return -1;
     }
+}
+
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_ranges_files(const char* in_path,
+                                                         const int32_t* firstPages,
+                                                         const int32_t* lastPages,
+                                                         int32_t rangeCount,
+                                                         const char* const* out_paths) {
+    if (!in_path || !firstPages || !lastPages || rangeCount <= 0 || !out_paths) return -1;
+    std::shared_ptr<QPDF> src;
+    try {
+        src = QPDF::create();
+        src->processFile(in_path);
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "jpdfium qpdf extract ranges: %s\n", e.what());
+        return -1;
+    } catch (...) {
+        std::fprintf(stderr, "jpdfium qpdf extract ranges: unknown error\n");
+        return -1;
+    }
+    int32_t written = 0;
+    try {
+        std::vector<QPDFObjectHandle> srcPages = src->getAllPages();
+        RangeSource source{*src, srcPages, QPDFAcroFormDocumentHelper{*src},
+                           QPDFPageLabelDocumentHelper{*src}};
+        for (; written < rangeCount; ++written) {
+            if (!out_paths[written] || writeRange(source, firstPages[written], lastPages[written],
+                                                  out_paths[written]) != 0) {
+                break;
+            }
+        }
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "jpdfium qpdf extract ranges: %s\n", e.what());
+    } catch (...) {
+        std::fprintf(stderr, "jpdfium qpdf extract ranges: unknown error\n");
+    }
+    return written;
 }
 
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_pages(const uint8_t* input, int64_t inputLen,
@@ -1844,6 +2988,12 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_optimize_file(const char* in_path, const cha
 
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_pages_file(const char*, const int32_t*, int32_t,
                                                        const char*) {
+    return -1;
+}
+
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_ranges_files(const char*, const int32_t*,
+                                                         const int32_t*, int32_t,
+                                                         const char* const*) {
     return -1;
 }
 

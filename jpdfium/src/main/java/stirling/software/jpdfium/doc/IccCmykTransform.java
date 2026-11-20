@@ -14,6 +14,10 @@ import stirling.software.jpdfium.exception.JPDFiumException;
  * <p>The profile is sampled once into a 33x33x33 RGB lookup table. Both vector
  * colours and image pixels go through that same table, so an sRGB fill and an
  * sRGB image pixel with identical components produce identical ink values.
+ * Exact neutral RGB values are taken from a separate 256-entry neutral ramp,
+ * which avoids off-diagonal LUT interpolation between RGB cube corners while
+ * preserving the profile's own neutral separation (single-channel K for
+ * K-only profiles and rich black for four-colour profiles).
  *
  * <p>Instances are immutable after construction and can be shared between
  * threads. The one-entry source-profile cache is process-wide; it is bounded
@@ -34,7 +38,9 @@ final class IccCmykTransform {
 
     private final ColorSpace srgb = ColorSpace.getInstance(ColorSpace.CS_sRGB);
     private final ICC_ColorSpace cmyk;
+    private final byte[] targetIcc;
     private final byte[] lut = new byte[LUT_BYTES];
+    private final byte[] neutral = new byte[256 * 4];
     private final float[] rgb = new float[3];
 
     /** Build from a 4-component CMYK ICC profile. */
@@ -52,7 +58,23 @@ final class IccCmykTransform {
                     + components + "); expected 4");
         }
         this.cmyk = new ICC_ColorSpace(profile);
+        this.targetIcc = iccProfile.clone();
+        buildNeutralRamp();
         buildLut();
+    }
+
+    private void buildNeutralRamp() {
+        for (int i = 0; i < 256; i++) {
+            float value = i / 255f;
+            rgb[0] = value;
+            rgb[1] = value;
+            rgb[2] = value;
+            float[] device = cmyk.fromCIEXYZ(srgb.toCIEXYZ(rgb));
+            int base = i * 4;
+            for (int c = 0; c < 4; c++) {
+                neutral[base + c] = (byte) clamp255(device[c]);
+            }
+        }
     }
 
     private void buildLut() {
@@ -77,6 +99,12 @@ final class IccCmykTransform {
         int ri = clampByte(r);
         int gi = clampByte(g);
         int bi = clampByte(b);
+        if (ri == gi && gi == bi) {
+            for (int c = 0; c < 4; c++) {
+                out[c] = neutral[ri * 4 + c] & 0xFF;
+            }
+            return;
+        }
         for (int c = 0; c < 4; c++) {
             out[c] = interpolate(ri, gi, bi, c);
         }
@@ -89,6 +117,20 @@ final class IccCmykTransform {
      */
     void toCmykFromIcc(byte[] sourceIcc, float[] components, int[] out) {
         ICC_ColorSpace source = staticSourceSpace(sourceIcc, components.length);
+        if (Arrays.equals(sourceIcc, targetIcc)
+                && components.length == 4
+                && components[0] <= 0.001f
+                && components[1] <= 0.001f
+                && components[2] <= 0.001f) {
+            // A K-only value already in the target ink space must stay
+            // single-channel black. A different CMYK source still goes
+            // through both profiles so its ink is preserved.
+            out[0] = 0;
+            out[1] = 0;
+            out[2] = 0;
+            out[3] = clamp255(components[3]);
+            return;
+        }
         float[] xyz = source.toCIEXYZ(components);
         if (components.length == 1 || components.length == 4) {
             // Gray and CMYK source profiles already carry ink information.
