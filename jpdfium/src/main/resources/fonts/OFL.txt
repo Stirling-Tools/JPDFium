@@ -1,7 +1,12 @@
-Digitized data copyright (c) 2010 Google Corporation
-	with Reserved Font Arimo, Tinos and Cousine.
-Copyright (c) 2012 Red Hat, Inc.
-	with Reserved Font Name Liberation.
+The Liberation, Carlito, Caladea, Noto Sans Arabic and Noto Sans SC families
+shipped in this directory are licensed under the SIL Open Font License 1.1.
+Copyright holders:
+  Liberation: digitized data copyright (c) 2010 Google Corporation;
+    copyright (c) 2012 Red Hat, Inc., with Reserved Font Name Liberation.
+  Carlito: Copyright 2013 The Carlito Project Authors.
+  Caladea: Copyright 2012 The Caladea Project Authors.
+  Noto Sans Arabic: Copyright 2015-2021 Google LLC. All Rights Reserved.
+  Noto Sans SC: (c) 2014-2021 Adobe, with Reserved Font Name 'Source'.
 
 This Font Software is licensed under the SIL Open Font License,
 Version 1.1.
@@ -40,7 +45,7 @@ copyright statement(s).
 as distributed by the Copyright Holder(s).
 
 "Modified Version" refers to any derivative made by adding to, deleting,
-or substituting ? in part or in whole ?
+or substituting — in part or in whole —
 any of the components of the Original Version, by changing formats or
 by porting the Font Software to a new environment.
 
@@ -99,4 +104,3 @@ INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL
 DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM OTHER
 DEALINGS IN THE FONT SOFTWARE.
-
