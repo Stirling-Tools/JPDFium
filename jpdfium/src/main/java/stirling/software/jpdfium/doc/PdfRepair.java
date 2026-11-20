@@ -4,8 +4,13 @@ import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.panama.RepairLib;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.PosixFileAttributeView;
 
 /**
  * PDF repair with a builder-pattern API.
@@ -47,10 +52,21 @@ import java.nio.file.Path;
  */
 public final class PdfRepair {
 
-    // Core repair flags - must match jpdfium.h
-    private static final int FLAG_FORCE_V14 = 0x0001;
-    private static final int FLAG_NORMALIZE_XREF = 0x0002;
-    private static final int FLAG_FIX_STARTXREF = 0x0004;
+    // Core repair flags - bit values must match the JPDFIUM_REPAIR_* defines in
+    // native/bridge/include/jpdfium.h. The previous permutation silently mapped
+    // forceVersion14() to xref normalization and normalizeXref() to startxref
+    // correction; it went unnoticed because Builder.all() sets every bit.
+    // Core repair flags - bit values must match the JPDFIUM_REPAIR_* defines in
+    // native/bridge/include/jpdfium.h. The previous permutation silently mapped
+    // forceVersion14() to xref normalization and normalizeXref() to startxref
+    // correction; it went unnoticed because Builder.all() sets every bit.
+    private static final int FLAG_NORMALIZE_XREF = 0x0001;
+    private static final int FLAG_FIX_STARTXREF = 0x0002;
+    private static final int FLAG_FORCE_V14 = 0x0004;
+
+    // Signature-dictionary marker. /ByteRange appears in every signature field;
+    // repair rewrites the document, which always breaks its digest.
+    private static final byte[] BYTE_RANGE = "/ByteRange".getBytes(StandardCharsets.ISO_8859_1);
 
     private final byte[] inputBytes;
     private final int flags;
@@ -108,10 +124,86 @@ public final class PdfRepair {
     /**
      * Repairs a PDF straight to another file without materializing it, falling back to the
      * {@code byte[]} route on natives without the file entry point. Core stage only.
+     *
+     * <p>
+     * Mirrors {@link #execute()}: a clean signed input is published unchanged (rewriting it
+     * would break its {@code /ByteRange} digest) and a damaged signed input fails instead of
+     * producing output whose signature silently no longer verifies. The marker scan streams
+     * the file, so the input is never held on the heap.
      */
     public static RepairResult.Status repairFile(Path input, Path output, int flags)
             throws IOException {
+        if (containsMarker(input, BYTE_RANGE)) {
+            try (PdfDocument doc = PdfDocument.open(input)) {
+                if (doc.pageCount() > 0) {
+                    publishPassThrough(input, output);
+                    return RepairResult.Status.CLEAN;
+                }
+            } catch (Exception _) {
+                // damaged: fall through to the refusal below
+            }
+            return RepairResult.Status.FAILED;
+        }
         return RepairLib.repairToFile(input, output, flags);
+    }
+
+    /**
+     * Copies a clean pass-through input over the destination with the same staged
+     * publication the native route uses, so a partial copy never truncates an
+     * existing output.
+     */
+    private static void publishPassThrough(Path input, Path output) throws IOException {
+        Path tmp = Files.createTempFile(output.toAbsolutePath().getParent(), ".jpdfium-repair-",
+                ".tmp");
+        try {
+            Files.copy(input, tmp, StandardCopyOption.REPLACE_EXISTING);
+            // createTempFile is 0600; when replacing an existing file keep its
+            // mode so a pass-through repair does not drop permissions.
+            if (Files.exists(output)
+                    && Files.getFileStore(tmp)
+                            .supportsFileAttributeView(PosixFileAttributeView.class)) {
+                try {
+                    Files.setPosixFilePermissions(tmp, Files.getPosixFilePermissions(output));
+                } catch (UnsupportedOperationException _) {
+                    // Destination is not on a POSIX filesystem; keep the temp mode.
+                }
+            }
+            try {
+                Files.move(tmp, output, StandardCopyOption.REPLACE_EXISTING,
+                        StandardCopyOption.ATOMIC_MOVE);
+            } catch (AtomicMoveNotSupportedException e) {
+                Files.move(tmp, output, StandardCopyOption.REPLACE_EXISTING);
+            }
+        } finally {
+            Files.deleteIfExists(tmp);
+        }
+    }
+
+    /**
+     * Streams a file looking for a byte marker. Uses a sliding window so a marker
+     * spanning a buffer boundary is still found; the file is never materialized.
+     */
+    private static boolean containsMarker(Path file, byte[] needle) throws IOException {
+        try (InputStream in = Files.newInputStream(file)) {
+            byte[] buffer = new byte[64 * 1024];
+            final int overlap = needle.length - 1;
+            int carry = 0; // bytes retained from the previous buffer tail
+            int read;
+            while ((read = in.read(buffer, carry, buffer.length - carry)) > 0) {
+                int window = carry + read;
+                outer:
+                for (int i = 0; i + needle.length <= window; i++) {
+                    for (int j = 0; j < needle.length; j++) {
+                        if (buffer[i + j] != needle[j]) continue outer;
+                    }
+                    return true;
+                }
+                int keep = Math.min(overlap, window);
+                System.arraycopy(buffer, window - keep, buffer, 0, keep);
+                carry = keep;
+            }
+            return false;
+        }
     }
 
     /**
