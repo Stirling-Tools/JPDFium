@@ -3,27 +3,40 @@ package stirling.software.jpdfium.fonts;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.model.FontType;
 import stirling.software.jpdfium.panama.FontLib;
+import stirling.software.jpdfium.panama.JpdfiumLib;
 import stirling.software.jpdfium.util.NativeJsonParser;
 
 import java.lang.System.Logger;
 import java.lang.System.Logger.Level;
+import java.lang.foreign.MemorySegment;
 
 /**
  * Font normalization pipeline - fixes broken fonts that cause auto-redact failures,
  * garbled text extraction, and corrupted rendering after edits.
  *
- * <p>Broken fonts are the #1 reason auto-redact misses characters. The pipeline:
+ * <p>Broken fonts are the #1 reason auto-redact misses characters. The per-page
+ * repair pipeline is:
  * <pre>
- * Extract font -> Classify type -> Repair CMap ->
- * Re-subset -> Normalize to OTF/CFF -> Re-embed -> Repair /W table
+ * Save through PDFium -> Load with qpdf -> Walk page font resources ->
+ * Load embedded program in FreeType -> Generate /ToUnicode and repair widths ->
+ * Write back through qpdf and reload the document
  * </pre>
+ *
+ * <p>{@link #normalizePage} combines the two repairs in a single qpdf rewrite, so
+ * a page whose fonts need both changes is saved and reloaded only once. Only
+ * fonts with a readable embedded program ({@code /FontFile}, {@code /FontFile2}
+ * or {@code /FontFile3}) are processed; a missing or unembedded program has no
+ * authoritative cmap or advance widths to read, so embedding is handled
+ * separately by {@link stirling.software.jpdfium.doc.PdfFontEmbedder}.
  *
  * <p>Each stage uses a strictly MIT-compatible native library:
  * <ul>
- *   <li><strong>FreeType</strong> (FTL/MIT) - extract, classify, width repair, Type1 parse</li>
+ *   <li><strong>FreeType</strong> (FTL/MIT) - cmap walking for /ToUnicode, authoritative
+ *       advance widths, classify, Type1 parse</li>
  *   <li><strong>HarfBuzz hb-subset</strong> (MIT) - subset, layout table preservation, CFF2 output</li>
  *   <li><strong>ICU4C</strong> (Unicode License) - Unicode normalization (NFC/NFD) before CMap generation</li>
- *   <li><strong>qpdf</strong> (Apache 2.0) - stream replacement, incremental save, font dict edit</li>
+ *   <li><strong>qpdf</strong> (Apache 2.0) - resource walking, stream replacement, font dict edit,
+ *       single write-back per page</li>
  * </ul>
  *
  * <p><b>Usage</b></p>
@@ -47,13 +60,33 @@ public final class FontNormalizer {
     /**
      * Run the full font normalization pipeline on all fonts on a page.
      *
+     * <p>Finds font dictionaries through the page resources (including nested
+     * form XObjects, annotation appearances, and patterns), repairs a missing or
+     * empty {@code /ToUnicode} map from the embedded program's cmap, and rebuilds
+     * simple-font {@code /Widths} or CID {@code /W} entries from FreeType's
+     * unscaled advance widths. Both repairs share one qpdf load/write cycle.
+     *
+     * <p>Fonts without an embedded program are skipped, since there is no cmap or
+     * advance-width source to read. Use
+     * {@link stirling.software.jpdfium.doc.PdfFontEmbedder} first to embed missing
+     * or unembedded font programs.
+     *
      * @param doc       open PDF document
      * @param pageIndex zero-based page index
      * @return normalization result with statistics
      */
     public static Result normalizePage(PdfDocument doc, int pageIndex) {
+        if (pageIndex < 0) {
+            throw new IllegalArgumentException("pageIndex must be >= 0: " + pageIndex);
+        }
+        return normalizePageInternal(doc, pageIndex);
+    }
+
+    private static Result normalizePageInternal(PdfDocument doc, int pageIndex) {
         LOG.log(Level.DEBUG, "Normalizing fonts on page {0}", pageIndex);
+        MemorySegment before = doc.rawHandleForRead();
         String json = FontLib.normalizePage(doc.nativeHandle(), pageIndex);
+        refreshRawHandleIfChanged(doc, before);
         Result result = parseResultJson(json);
         LOG.log(Level.INFO,
                 "Page {0}: {1} fonts processed, {2} ToUnicode fixed, {3} widths repaired, {4} Type1 converted, {5} re-subset",
@@ -65,25 +98,16 @@ public final class FontNormalizer {
     /**
      * Normalize all pages in the document.
      *
+     * <p>The native bridge walks every page in a single qpdf pass, sharing
+     * visited resources and font dictionaries across pages, then writes and
+     * reloads the document at most once.
+     *
      * @param doc open PDF document
      * @return aggregated result across all pages
      */
     public static Result normalizeAll(PdfDocument doc) {
         LOG.log(Level.DEBUG, "Normalizing all {0} pages", doc.pageCount());
-        int totalFonts = 0;
-        int totalTuc = 0;
-        int totalWidths = 0;
-        int totalType1 = 0;
-        int totalResubset = 0;
-        for (int i = 0; i < doc.pageCount(); i++) {
-            Result r = normalizePage(doc, i);
-            totalFonts += r.fontsProcessed;
-            totalTuc += r.toUnicodeFixed;
-            totalWidths += r.widthsRepaired;
-            totalType1 += r.type1Converted;
-            totalResubset += r.resubset;
-        }
-        Result total = new Result(totalFonts, totalTuc, totalWidths, totalType1, totalResubset);
+        Result total = normalizePageInternal(doc, -1);
         LOG.log(Level.INFO,
                 "Document total: {0} fonts processed, {1} ToUnicode fixed, {2} widths repaired",
                 total.fontsProcessed, total.toUnicodeFixed, total.widthsRepaired);
@@ -94,15 +118,41 @@ public final class FontNormalizer {
      * Fix /ToUnicode CMap for all fonts on a page.
      *
      * <p>Wrong ToUnicode causes wrong text extraction, which causes patterns to miss,
-     * which causes redact to silently fail. Uses FreeType to walk the font's internal
-     * cmap table and generate a correct GID-&gt;Unicode map.
+     * which causes redact to silently fail. The native bridge loads each embedded
+     * program with FreeType, walks its Unicode cmap using
+     * {@code FT_Get_First_Char}/{@code FT_Get_Next_Char}, resolves CID-to-GID
+     * mappings when the font uses a {@code /CIDToGIDMap} stream, and writes a new
+     * Adobe-Identity-UCS CMap through qpdf. Fonts that already have a non-empty
+     * {@code /ToUnicode} stream are left alone.
+     *
+     * <p>Fonts with no embedded program cannot be repaired here; embed them with
+     * {@link stirling.software.jpdfium.doc.PdfFontEmbedder} first.
      *
      * @param doc       open PDF document
      * @param pageIndex zero-based page index
      * @return number of fonts repaired
      */
     public static int fixToUnicode(PdfDocument doc, int pageIndex) {
+        if (pageIndex < 0) {
+            throw new IllegalArgumentException("pageIndex must be >= 0: " + pageIndex);
+        }
+        return fixToUnicodeInternal(doc, pageIndex);
+    }
+
+    /**
+     * Fix /ToUnicode CMaps for every page in one native pass.
+     *
+     * @param doc open PDF document
+     * @return number of fonts repaired
+     */
+    public static int fixToUnicodeAll(PdfDocument doc) {
+        return fixToUnicodeInternal(doc, -1);
+    }
+
+    private static int fixToUnicodeInternal(PdfDocument doc, int pageIndex) {
+        MemorySegment before = doc.rawHandleForRead();
         int fixed = FontLib.fixToUnicode(doc.nativeHandle(), pageIndex);
+        refreshRawHandleIfChanged(doc, before);
         if (fixed > 0) {
             LOG.log(Level.INFO, "Page {0}: fixed /ToUnicode CMap for {1} font(s)", pageIndex, fixed);
         }
@@ -112,16 +162,50 @@ public final class FontNormalizer {
     /**
      * Repair /W (glyph width) tables using FreeType's authoritative advance widths.
      *
+     * <p>For simple fonts ({@code /TrueType}, {@code /Type1}, {@code /MMType1})
+     * the native bridge recomputes {@code /FirstChar}, {@code /LastChar}, and
+     * {@code /Widths} from each glyph's unscaled horizontal advance, normalised to
+     * 1000 units per em. Existing widths are replaced only when the array is
+     * missing, has the wrong length, or disagrees with the program. CID fonts
+     * without a {@code /W} array gain a compact GID-keyed array. Fonts with no
+     * readable embedded program are skipped; embed them with
+     * {@link stirling.software.jpdfium.doc.PdfFontEmbedder} first.
+     *
      * @param doc       open PDF document
      * @param pageIndex zero-based page index
      * @return number of fonts repaired
      */
     public static int repairWidths(PdfDocument doc, int pageIndex) {
+        if (pageIndex < 0) {
+            throw new IllegalArgumentException("pageIndex must be >= 0: " + pageIndex);
+        }
+        return repairWidthsInternal(doc, pageIndex);
+    }
+
+    /**
+     * Repair /W tables for every page in one native pass.
+     *
+     * @param doc open PDF document
+     * @return number of fonts repaired
+     */
+    public static int repairWidthsAll(PdfDocument doc) {
+        return repairWidthsInternal(doc, -1);
+    }
+
+    private static int repairWidthsInternal(PdfDocument doc, int pageIndex) {
+        MemorySegment before = doc.rawHandleForRead();
         int repaired = FontLib.repairWidths(doc.nativeHandle(), pageIndex);
+        refreshRawHandleIfChanged(doc, before);
         if (repaired > 0) {
             LOG.log(Level.INFO, "Page {0}: repaired /W table for {1} font(s)", pageIndex, repaired);
         }
         return repaired;
+    }
+
+    private static void refreshRawHandleIfChanged(PdfDocument doc, MemorySegment before) {
+        if (!JpdfiumLib.docRawHandle(doc.nativeHandle()).equals(before)) {
+            doc.refreshRawHandle();
+        }
     }
 
     /**
