@@ -628,12 +628,15 @@ namespace {
 // remove annotations a viewer would not draw first. For a full bake, clear the
 // no-view flag so the markup is written into content; the annotation itself is
 // consumed by the flatten pass.
+constexpr int kAnnotFlagHidden = 1 << 1;
+constexpr int kAnnotFlagNoView = 1 << 5;
+
 void removeUndisplayedAnnotations(FPDF_PAGE page) {
     for (int i = FPDFPage_GetAnnotCount(page) - 1; i >= 0; --i) {
         FPDF_ANNOTATION annot = FPDFPage_GetAnnot(page, i);
         if (!annot) continue;
         const int flags = FPDFAnnot_GetFlags(annot);
-        if (flags >= 0 && (flags & (FPDF_ANNOT_FLAG_NOVIEW | FPDF_ANNOT_FLAG_HIDDEN))) {
+        if (flags >= 0 && (flags & (kAnnotFlagNoView | kAnnotFlagHidden))) {
             FPDFPage_RemoveAnnot(page, i);
         }
         FPDFPage_CloseAnnot(annot);
@@ -646,8 +649,8 @@ void clearNoViewAnnotations(FPDF_PAGE page) {
         FPDF_ANNOTATION annot = FPDFPage_GetAnnot(page, i);
         if (!annot) continue;
         const int flags = FPDFAnnot_GetFlags(annot);
-        if (flags >= 0 && (flags & FPDF_ANNOT_FLAG_NOVIEW)) {
-            FPDFAnnot_SetFlags(annot, flags & ~FPDF_ANNOT_FLAG_NOVIEW);
+        if (flags >= 0 && (flags & kAnnotFlagNoView)) {
+            FPDFAnnot_SetFlags(annot, flags & ~kAnnotFlagNoView);
         }
         FPDFPage_CloseAnnot(annot);
     }
