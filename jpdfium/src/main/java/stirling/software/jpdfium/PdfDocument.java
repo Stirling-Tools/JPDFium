@@ -1084,7 +1084,7 @@ public final class PdfDocument implements AutoCloseable {
                 // Flatten rewrites page content in place and keeps every open page
                 // valid, so a partial pass only needs the content flag.
                 try {
-                    JpdfiumLib.docFlattenAnnotations(handle);
+                    JpdfiumLib.docFlattenAnnotationsDisplay(handle);
                 } finally {
                     // A failed pass can still have baked the pages before it.
                     markContentModified();

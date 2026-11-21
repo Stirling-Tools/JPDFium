@@ -77,7 +77,10 @@ jobs:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
       - uses: google/osv-scanner-action/osv-scanner-action@f4cfcc01edc9c8b756a9b873b7a623ca674da51e # v2.5.0
         with:
-          scan-args: --config=osv-scanner.toml --recursive ./
+          scan-args: |-
+            --config=osv-scanner.toml
+            --recursive
+            ./
 
   scorecard:
     name: OpenSSF Scorecard
