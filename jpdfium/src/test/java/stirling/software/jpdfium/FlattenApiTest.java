@@ -743,6 +743,7 @@ class FlattenApiTest {
 
     @Test
     void fullFlattenStripsFormsOutlinesAndAttachments() {
+        assumeTrue(NativeRuntime.isFull(), "full flattening needs the real PDFium natives");
         byte[] out72;
         try (PdfDocument doc = PdfDocument.open(MINIMAL_PDF)) {
             doc.flatten(FlattenMode.FULL, 72);
@@ -758,6 +759,7 @@ class FlattenApiTest {
 
     @Test
     void fullFlattenUsesJpegAndScalesWithDpi() {
+        assumeTrue(NativeRuntime.isFull(), "full flattening needs the real PDFium natives");
         byte[] out72;
         byte[] out150;
         try (PdfDocument doc = PdfDocument.open(MINIMAL_PDF)) {

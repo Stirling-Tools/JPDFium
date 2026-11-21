@@ -1092,13 +1092,18 @@ public final class PdfDocument implements AutoCloseable {
             }
             case FULL -> {
                 if (dpi <= 0) throw new IllegalArgumentException("dpi must be > 0");
-                if (includeNonPrintableAnnotations) {
-                    boolean hadAnnotations = hasAnnotations();
-                    try {
-                        JpdfiumLib.docFlattenAnnotationsDisplay(handle);
-                    } finally {
-                        if (hadAnnotations) markContentModified();
-                    }
+                if (securityHandlerRevision() > 0) {
+                    throw new JPDFiumException(
+                            "full flatten would remove encryption; decrypt the document first");
+                }
+                // Flatten form widgets and annotations into page content before
+                // rasterizing. FPDF_ANNOT alone does not draw widgets; they only
+                // reach the bitmap after FPDFPage_Flatten bakes their appearances.
+                boolean hadAnnotations = hasAnnotations();
+                try {
+                    JpdfiumLib.docFlattenAnnotations(handle);
+                } finally {
+                    if (hadAnnotations) markContentModified();
                 }
                 int count = pageCount();
                 List<byte[]> jpegs = new ArrayList<>(count);
