@@ -679,6 +679,24 @@ int32_t jpdfium_page_flatten_display(int64_t page) noexcept {
     return (rc == FLATTEN_SUCCESS || rc == FLATTEN_NOTHINGTODO) ? JPDFIUM_OK : JPDFIUM_ERR_NATIVE;
 }
 
+int32_t flattenDocument(int64_t docHandle, bool displayOnly) {
+    DocWrapper* w = decodeDoc(docHandle);
+    if (!w || !w->core || !w->core->doc) return JPDFIUM_ERR_INVALID;
+    const int pages = FPDF_GetPageCount(w->core->doc);
+    bool failed = false;
+    for (int i = 0; i < pages; ++i) {
+        FPDF_PAGE page = FPDF_LoadPage(w->core->doc, i);
+        if (!page) {
+            failed = true;
+            continue;
+        }
+        const int rc = flattenPage(page, displayOnly);
+        FPDF_ClosePage(page);
+        if (rc != FLATTEN_SUCCESS && rc != FLATTEN_NOTHINGTODO) failed = true;
+    }
+    return failed ? JPDFIUM_ERR_NATIVE : JPDFIUM_OK;
+}
+
 int32_t jpdfium_doc_flatten_annotations(int64_t docHandle) noexcept {
     return flattenDocument(docHandle, false);
 }
