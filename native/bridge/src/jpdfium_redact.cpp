@@ -665,6 +665,8 @@ int flattenPage(FPDF_PAGE page, bool displayOnly) {
     return FPDFPage_Flatten(page, FLAT_NORMALDISPLAY);
 }
 
+}  // namespace
+
 int32_t jpdfium_page_flatten(int64_t page) noexcept {
     PageWrapper* pw = decodePage(page);
     if (!pw || !pw->page) return JPDFIUM_ERR_INVALID;
