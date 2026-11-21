@@ -623,74 +623,44 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
 
 namespace {
 
-// FPDFPage_Flatten skips only hidden and invisible annotations, so no-view
-// markup would be baked into content a viewer shows. Hide it for the bake and
-// put the original flags back afterwards; the two high bits are scratch only.
-constexpr int kScratchAddedHidden = 1 << 30;
-constexpr int kScratchWasHidden = 1 << 29;
+// FPDFPage_Flatten removes every drawable annotation, but its treatment of
+// no-view/hidden flags differs between PDFium builds. For a display bake,
+// remove annotations a viewer would not draw first. For a full bake, clear the
+// no-view flag so the markup is written into content; the annotation itself is
+// consumed by the flatten pass.
+void removeUndisplayedAnnotations(FPDF_PAGE page) {
+    for (int i = FPDFPage_GetAnnotCount(page) - 1; i >= 0; --i) {
+        FPDF_ANNOTATION annot = FPDFPage_GetAnnot(page, i);
+        if (!annot) continue;
+        const int flags = FPDFAnnot_GetFlags(annot);
+        if (flags >= 0 && (flags & (FPDF_ANNOT_FLAG_NOVIEW | FPDF_ANNOT_FLAG_HIDDEN))) {
+            FPDFPage_RemoveAnnot(page, i);
+        }
+        FPDFPage_CloseAnnot(annot);
+    }
+}
 
-void hideNoViewAnnotations(FPDF_PAGE page) {
+void clearNoViewAnnotations(FPDF_PAGE page) {
     const int count = FPDFPage_GetAnnotCount(page);
     for (int i = 0; i < count; ++i) {
         FPDF_ANNOTATION annot = FPDFPage_GetAnnot(page, i);
         if (!annot) continue;
         const int flags = FPDFAnnot_GetFlags(annot);
         if (flags >= 0 && (flags & FPDF_ANNOT_FLAG_NOVIEW)) {
-            const int scratch =
-                (flags & FPDF_ANNOT_FLAG_HIDDEN) ? kScratchWasHidden : kScratchAddedHidden;
-            FPDFAnnot_SetFlags(annot, flags | scratch | FPDF_ANNOT_FLAG_HIDDEN);
-        }
-        FPDFPage_CloseAnnot(annot);
-    }
-}
-
-void restoreNoViewFlags(FPDF_PAGE page) {
-    const int count = FPDFPage_GetAnnotCount(page);
-    for (int i = 0; i < count; ++i) {
-        FPDF_ANNOTATION annot = FPDFPage_GetAnnot(page, i);
-        if (!annot) continue;
-        const int flags = FPDFAnnot_GetFlags(annot);
-        if (flags >= 0 && (flags & (kScratchAddedHidden | kScratchWasHidden))) {
-            int restored = flags & ~(kScratchAddedHidden | kScratchWasHidden);
-            if (flags & kScratchAddedHidden) restored &= ~FPDF_ANNOT_FLAG_HIDDEN;
-            FPDFAnnot_SetFlags(annot, restored);
+            FPDFAnnot_SetFlags(annot, flags & ~FPDF_ANNOT_FLAG_NOVIEW);
         }
         FPDFPage_CloseAnnot(annot);
     }
 }
 
 int flattenPage(FPDF_PAGE page, bool displayOnly) {
-    if (!displayOnly) return FPDFPage_Flatten(page, FLAT_NORMALDISPLAY);
-    hideNoViewAnnotations(page);
-    const int rc = FPDFPage_Flatten(page, FLAT_NORMALDISPLAY);
-    restoreNoViewFlags(page);
-    return rc;
-}
-
-int32_t flattenDocument(int64_t docHandle, bool displayOnly) noexcept {
-    bool mutated = false;
-    try {
-        DocWrapper* dw = decodeDoc(docHandle);
-        if (!dw || !dw->core->doc) return JPDFIUM_ERR_INVALID;
-        const int count = FPDF_GetPageCount(dw->core->doc);
-        for (int i = 0; i < count; ++i) {
-            UniquePage page(FPDF_LoadPage(dw->core->doc, i));
-            if (!page) return mutated ? JPDFIUM_ERR_CONTENT_MUTATED : JPDFIUM_ERR_NOT_FOUND;
-            const int rc = flattenPage(page.get(), displayOnly);
-            if (rc != FLATTEN_SUCCESS && rc != FLATTEN_NOTHINGTODO) {
-                return mutated ? JPDFIUM_ERR_CONTENT_MUTATED : JPDFIUM_ERR_NATIVE;
-            }
-            if (rc == FLATTEN_SUCCESS) mutated = true;
-        }
-        // Flatten rewrites content in place and keeps every FPDF_PAGE valid, so
-        // the structural generation must not move; Java tracks the edit itself.
-        return JPDFIUM_OK;
-    } catch (...) {
-        return mutated ? JPDFIUM_ERR_CONTENT_MUTATED : JPDFIUM_ERR_NATIVE;
+    if (displayOnly) {
+        removeUndisplayedAnnotations(page);
+    } else {
+        clearNoViewAnnotations(page);
     }
+    return FPDFPage_Flatten(page, FLAT_NORMALDISPLAY);
 }
-
-}  // namespace
 
 int32_t jpdfium_page_flatten(int64_t page) noexcept {
     PageWrapper* pw = decodePage(page);
