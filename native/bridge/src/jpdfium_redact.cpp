@@ -658,9 +658,11 @@ void clearNoViewAnnotations(FPDF_PAGE page) {
 
 int flattenPage(FPDF_PAGE page, bool displayOnly) {
     if (displayOnly) {
-        removeUndisplayedAnnotations(page);
-    } else {
+        // Annotations mode bakes every markup, including no-view annotations.
         clearNoViewAnnotations(page);
+    } else {
+        // Full mode rasterizes what a viewer sees; no-view/hidden markup stays out.
+        removeUndisplayedAnnotations(page);
     }
     return FPDFPage_Flatten(page, FLAT_NORMALDISPLAY);
 }
