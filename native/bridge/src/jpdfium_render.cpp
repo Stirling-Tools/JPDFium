@@ -898,3 +898,100 @@ int32_t jpdfium_doc_flatten_to_images(int64_t docHandle, int32_t dpi) noexcept {
         return committed ? JPDFIUM_ERR_CONTENT_MUTATED : JPDFIUM_ERR_NATIVE;
     }
 }
+
+namespace {
+struct JpegMemAccess {
+    FPDF_FILEACCESS fa;
+    const uint8_t* data;
+    size_t size;
+};
+
+int jpegMemGetBlock(void* param, unsigned long position, unsigned char* pBuf, unsigned long size) {
+    auto* m = static_cast<JpegMemAccess*>(param);
+    if (!m || position > m->size || size > m->size - position) return 0;
+    std::memcpy(pBuf, m->data + position, size);
+    return 1;
+}
+}  // namespace
+
+int32_t jpdfium_doc_rebuild_clean(int64_t docHandle) JPDFIUM_NOEXCEPT {
+    try {
+        DocWrapper* dw = decodeDoc(docHandle);
+        if (!dw || !dw->core->doc) return JPDFIUM_ERR_INVALID;
+
+        FPDF_DOCUMENT clean = FPDF_CreateNewDocument();
+        if (!clean) return JPDFIUM_ERR_NATIVE;
+
+        int pageCount = FPDF_GetPageCount(dw->core->doc);
+        if (pageCount > 0 && !FPDF_ImportPages(clean, dw->core->doc, nullptr, 0)) {
+            FPDF_CloseDocument(clean);
+            return JPDFIUM_ERR_NATIVE;
+        }
+
+        FPDF_CloseDocument(dw->core->doc);
+        dw->core->doc = clean;
+        ++dw->core->generation;
+        return JPDFIUM_OK;
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
+    }
+}
+
+int32_t jpdfium_page_replace_with_jpeg(int64_t docHandle, int32_t pageIndex,
+                                       const uint8_t* jpegData, int64_t jpegLen, float wPt,
+                                       float hPt) JPDFIUM_NOEXCEPT {
+    try {
+        DocWrapper* dw = decodeDoc(docHandle);
+        if (!dw || !dw->core->doc || !jpegData || jpegLen <= 0 || !std::isfinite(wPt) ||
+            !std::isfinite(hPt) || wPt <= 0.0f || hPt <= 0.0f) {
+            return JPDFIUM_ERR_INVALID;
+        }
+        int pageCount = FPDF_GetPageCount(dw->core->doc);
+        if (pageIndex < 0 || pageIndex >= pageCount) return JPDFIUM_ERR_NOT_FOUND;
+
+        struct DocumentCloser {
+            void operator()(FPDF_DOCUMENT document) const noexcept {
+                if (document) FPDF_CloseDocument(document);
+            }
+        };
+        std::unique_ptr<std::remove_pointer_t<FPDF_DOCUMENT>, DocumentCloser> scratch(
+            FPDF_CreateNewDocument());
+        if (!scratch) return JPDFIUM_ERR_NATIVE;
+
+        UniquePage newPage(FPDFPage_New(scratch.get(), 0, wPt, hPt));
+        if (!newPage) return JPDFIUM_ERR_NATIVE;
+
+        UniquePageObject imgObj(FPDFPageObj_NewImageObj(scratch.get()));
+        if (!imgObj) return JPDFIUM_ERR_NATIVE;
+
+        JpegMemAccess mem{};
+        mem.data = jpegData;
+        mem.size = static_cast<size_t>(jpegLen);
+        mem.fa.m_FileLen = static_cast<unsigned long>(mem.size);
+        mem.fa.m_GetBlock = &jpegMemGetBlock;
+        mem.fa.m_Param = &mem;
+
+        if (!FPDFImageObj_LoadJpegFileInline(nullptr, 0, imgObj.get(), &mem.fa)) {
+            return JPDFIUM_ERR_NATIVE;
+        }
+
+        FS_MATRIX matrix = {wPt, 0, 0, hPt, 0, 0};
+        FPDFPageObj_SetMatrix(imgObj.get(), &matrix);
+
+        FPDFPage_InsertObject(newPage.get(), imgObj.get());
+        imgObj.release();
+        if (!FPDFPage_GenerateContent(newPage.get())) return JPDFIUM_ERR_NATIVE;
+        newPage.reset();
+
+        if (!FPDF_ImportPages(dw->core->doc, scratch.get(), "1", pageIndex + 1)) {
+            return JPDFIUM_ERR_NATIVE;
+        }
+        scratch.reset();
+
+        FPDFPage_Delete(dw->core->doc, pageIndex);
+        ++dw->core->generation;
+        return JPDFIUM_OK;
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
+    }
+}

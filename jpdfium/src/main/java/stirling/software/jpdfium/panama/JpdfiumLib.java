@@ -1623,6 +1623,25 @@ public final class JpdfiumLib {
         });
     }
 
+    public static void docRebuildClean(long doc) {
+        PdfiumRuntime.execute(() -> {
+            check(JpdfiumH.jpdfium_doc_rebuild_clean(doc), "docRebuildClean");
+        });
+    }
+
+    public static void pageReplaceWithJpeg(long doc, int pageIndex, byte[] jpegData, float wPt, float hPt) {
+        if (jpegData == null || jpegData.length == 0) {
+            throw new IllegalArgumentException("jpegData must not be empty");
+        }
+        PdfiumRuntime.execute(() -> {
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment seg = arena.allocateFrom(JAVA_BYTE, jpegData);
+                check(JpdfiumH.jpdfium_page_replace_with_jpeg(doc, pageIndex, seg, jpegData.length, wPt, hPt),
+                        "pageReplaceWithJpeg");
+            }
+        });
+    }
+
     /**
      * Bakes annotations and form fields into page content on every page, in one native pass over
      * the document handle.

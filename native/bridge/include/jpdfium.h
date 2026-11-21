@@ -260,6 +260,10 @@ JPDFIUM_EXPORT int32_t jpdfium_page_flatten(int64_t page) JPDFIUM_NOEXCEPT;
 // what a viewer draws on screen. Used before rasterizing a page.
 JPDFIUM_EXPORT int32_t jpdfium_page_flatten_display(int64_t page) JPDFIUM_NOEXCEPT;
 JPDFIUM_EXPORT int32_t jpdfium_page_to_image(int64_t doc, int32_t pageIndex, int32_t dpi);
+JPDFIUM_EXPORT int32_t jpdfium_doc_rebuild_clean(int64_t doc) JPDFIUM_NOEXCEPT;
+JPDFIUM_EXPORT int32_t jpdfium_page_replace_with_jpeg(int64_t doc, int32_t pageIndex,
+                                                      const uint8_t* jpegData, int64_t jpegLen,
+                                                      float wPt, float hPt) JPDFIUM_NOEXCEPT;
 
 // Document-wide flatten over a file-backed document handle.
 //

@@ -2753,6 +2753,131 @@ public class JpdfiumH extends JpdfiumH$shared {
         }
     }
 
+    private static class jpdfium_doc_rebuild_clean {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            JpdfiumH.C_INT,
+            JpdfiumH.C_LONG
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_doc_rebuild_clean");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_doc_rebuild_clean(int64_t doc)
+     * }
+     */
+    public static FunctionDescriptor jpdfium_doc_rebuild_clean$descriptor() {
+        return jpdfium_doc_rebuild_clean.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_doc_rebuild_clean(int64_t doc)
+     * }
+     */
+    public static MethodHandle jpdfium_doc_rebuild_clean$handle() {
+        return jpdfium_doc_rebuild_clean.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_doc_rebuild_clean(int64_t doc)
+     * }
+     */
+    public static MemorySegment jpdfium_doc_rebuild_clean$address() {
+        return jpdfium_doc_rebuild_clean.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int32_t jpdfium_doc_rebuild_clean(int64_t doc)
+     * }
+     */
+    public static int jpdfium_doc_rebuild_clean(long doc) {
+        var mh$ = jpdfium_doc_rebuild_clean.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("jpdfium_doc_rebuild_clean", doc);
+            }
+            return (int)mh$.invokeExact(doc);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class jpdfium_page_replace_with_jpeg {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            JpdfiumH.C_INT,
+            JpdfiumH.C_LONG,
+            JpdfiumH.C_INT,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_LONG,
+            JpdfiumH.C_FLOAT,
+            JpdfiumH.C_FLOAT
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_page_replace_with_jpeg");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_page_replace_with_jpeg(int64_t doc, int32_t pageIndex, const uint8_t *jpegData, int64_t jpegLen, float wPt, float hPt)
+     * }
+     */
+    public static FunctionDescriptor jpdfium_page_replace_with_jpeg$descriptor() {
+        return jpdfium_page_replace_with_jpeg.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_page_replace_with_jpeg(int64_t doc, int32_t pageIndex, const uint8_t *jpegData, int64_t jpegLen, float wPt, float hPt)
+     * }
+     */
+    public static MethodHandle jpdfium_page_replace_with_jpeg$handle() {
+        return jpdfium_page_replace_with_jpeg.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_page_replace_with_jpeg(int64_t doc, int32_t pageIndex, const uint8_t *jpegData, int64_t jpegLen, float wPt, float hPt)
+     * }
+     */
+    public static MemorySegment jpdfium_page_replace_with_jpeg$address() {
+        return jpdfium_page_replace_with_jpeg.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int32_t jpdfium_page_replace_with_jpeg(int64_t doc, int32_t pageIndex, const uint8_t *jpegData, int64_t jpegLen, float wPt, float hPt)
+     * }
+     */
+    public static int jpdfium_page_replace_with_jpeg(long doc, int pageIndex, MemorySegment jpegData, long jpegLen, float wPt, float hPt) {
+        var mh$ = jpdfium_page_replace_with_jpeg.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("jpdfium_page_replace_with_jpeg", doc, pageIndex, jpegData, jpegLen, wPt, hPt);
+            }
+            return (int)mh$.invokeExact(doc, pageIndex, jpegData, jpegLen, wPt, hPt);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
     private static class jpdfium_doc_flatten_annotations {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,

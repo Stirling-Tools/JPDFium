@@ -114,6 +114,11 @@ public final class PdfPage implements AutoCloseable {
      * @param dpi render resolution in DPI; must be positive
      * @return rendered pixels and the resulting dimensions
      */
+    RenderResult renderAtFlags(int dpi, int flags) {
+        ensureOpen();
+        return JpdfiumLib.renderPage(handle, dpi, false, flags);
+    }
+
     public RenderResult renderAt(int dpi) {
         return renderAt(dpi, false, null);
     }
@@ -1222,8 +1227,14 @@ public final class PdfPage implements AutoCloseable {
             case ANNOTATIONS -> flatten();
             case FULL -> {
                 if (dpi <= 0) throw new IllegalArgumentException("dpi must be > 0");
+                var sz = size();
+                float wPt = sz.width();
+                float hPt = sz.height();
+                byte[] jpegBytes = PdfDocument.encodeJpeg(renderAt(dpi).toBufferedImage(), 0.85f);
                 close();
-                ownerDoc.convertPageToImage(pageIndex, dpi);
+                ownerDoc.replacePageWithJpeg(pageIndex, jpegBytes, wPt, hPt);
+                ownerDoc.invalidateOpenPages();
+                ownerDoc.markContentModified();
             }
         }
     }

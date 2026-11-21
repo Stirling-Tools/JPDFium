@@ -31,11 +31,20 @@ import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.PageEditBindings;
 import stirling.software.jpdfium.panama.PdfiumRuntime;
 
+import java.awt.Color;
+import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.UncheckedIOException;
+import javax.imageio.IIOImage;
+import javax.imageio.ImageIO;
+import javax.imageio.ImageWriteParam;
+import javax.imageio.ImageWriter;
+import javax.imageio.stream.ImageOutputStream;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemoryLayout;
 import java.lang.foreign.MemorySegment;
@@ -1054,6 +1063,20 @@ public final class PdfDocument implements AutoCloseable {
      * @param dpi  render resolution for {@link FlattenMode#FULL} (ignored for other modes)
      */
     public void flatten(FlattenMode mode, int dpi) {
+        flatten(mode, dpi, true);
+    }
+
+    /**
+     * Flatten all pages using the specified mode, DPI, and annotation visibility behavior.
+     *
+     * @param mode                           what to flatten (see {@link FlattenMode})
+     * @param dpi                            render resolution for {@link FlattenMode#FULL} (ignored for other modes)
+     * @param includeNonPrintableAnnotations {@code true} for PDFBox behavior (render all visible
+     *                                       annotations and form fields); {@code false} for PDFium
+     *                                       print behavior ({@code FPDF_PRINTING}, skipping
+     *                                       non-printable annotations)
+     */
+    public void flatten(FlattenMode mode, int dpi, boolean includeNonPrintableAnnotations) {
         ensureOpen();
         if (mode == null) throw new IllegalArgumentException("mode must not be null");
         switch (mode) {
@@ -1061,48 +1084,82 @@ public final class PdfDocument implements AutoCloseable {
                 // Flatten rewrites page content in place and keeps every open page
                 // valid, so a partial pass only needs the content flag.
                 try {
-                    JpdfiumLib.docFlattenAnnotations(handle);
+                    JpdfiumLib.docFlattenAnnotationsDisplay(handle);
                 } finally {
                     // A failed pass can still have baked the pages before it.
                     markContentModified();
                 }
             }
             case FULL -> {
-                // Validate before the try: the Java guard in JpdfiumLib throws
-                // for a non-positive dpi before any native work, and the finally
-                // below would otherwise mark pages stale for an untouched
-                // document.
                 if (dpi <= 0) throw new IllegalArgumentException("dpi must be > 0");
-                // Widget values often exist only as annotation appearances.
-                // PDFium's raster pass does not initialize a form-fill
-                // environment, so bake widgets into page content first; the
-                // raster then contains the same values a viewer shows.
+                if (securityHandlerRevision() > 0) {
+                    throw new JPDFiumException(
+                            "full flatten would remove encryption; decrypt the document first");
+                }
+                // Flatten form widgets and annotations into page content before
+                // rasterizing. FPDF_ANNOT alone does not draw widgets; they only
+                // reach the bitmap after FPDFPage_Flatten bakes their appearances.
                 boolean hadAnnotations = hasAnnotations();
                 try {
-                    JpdfiumLib.docFlattenAnnotationsDisplay(handle);
+                    JpdfiumLib.docFlattenAnnotations(handle);
                 } finally {
-                    // The bake rewrites page content and keeps open pages valid.
-                    // A later raster failure only rolls back the raster pass, so
-                    // the annotation edit must stay visible as a modified document.
                     if (hadAnnotations) markContentModified();
                 }
-                // The native pass rolls back any failure it can still undo and reports
-                // CONTENT_MUTATED only once the replaced pages can no longer be restored.
-                boolean replacedPages = false;
-                try {
-                    JpdfiumLib.docFlattenToImages(handle, dpi);
-                    // An empty document leaves nothing replaced, so nothing is stale.
-                    replacedPages = pageCount() > 0;
-                } catch (JPDFiumException e) {
-                    replacedPages = e.isContentMutated();
-                    throw e;
-                } finally {
-                    if (replacedPages) {
-                        invalidateOpenPages();
-                        markContentModified();
+                int count = pageCount();
+                List<byte[]> jpegs = new ArrayList<>(count);
+                float[] widths = new float[count];
+                float[] heights = new float[count];
+                for (int i = 0; i < count; i++) {
+                    try (PdfPage p = page(i)) {
+                        var sz = p.size();
+                        widths[i] = sz.width();
+                        heights[i] = sz.height();
+                        int renderFlags = includeNonPrintableAnnotations ? 0x01 : (0x01 | 0x800);
+                        BufferedImage img =
+                                p.renderAtFlags(dpi, renderFlags).toBufferedImage();
+                        jpegs.add(encodeJpeg(img, 0.85f));
                     }
                 }
+                for (int i = 0; i < count; i++) {
+                    JpdfiumLib.pageReplaceWithJpeg(handle, i, jpegs.get(i), widths[i], heights[i]);
+                }
+                JpdfiumLib.docRebuildClean(handle);
+                invalidateOpenPages();
+                markContentModified();
             }
+        }
+    }
+
+    void replacePageWithJpeg(int pageIndex, byte[] jpegBytes, float wPt, float hPt) {
+        JpdfiumLib.pageReplaceWithJpeg(handle, pageIndex, jpegBytes, wPt, hPt);
+    }
+
+    static byte[] encodeJpeg(BufferedImage image, float quality) {
+        try {
+            BufferedImage rgb = new BufferedImage(
+                    image.getWidth(), image.getHeight(), BufferedImage.TYPE_INT_RGB);
+            Graphics2D g = rgb.createGraphics();
+            try {
+                g.setColor(Color.WHITE);
+                g.fillRect(0, 0, rgb.getWidth(), rgb.getHeight());
+                g.drawImage(image, 0, 0, null);
+            } finally {
+                g.dispose();
+            }
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            ImageWriter writer = ImageIO.getImageWritersByFormatName("jpeg").next();
+            try (ImageOutputStream ios = ImageIO.createImageOutputStream(baos)) {
+                writer.setOutput(ios);
+                ImageWriteParam param = writer.getDefaultWriteParam();
+                param.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
+                param.setCompressionQuality(quality);
+                writer.write(null, new IIOImage(rgb, null, null), param);
+            } finally {
+                writer.dispose();
+            }
+            return baos.toByteArray();
+        } catch (IOException e) {
+            throw new UncheckedIOException("Failed to encode flattened page as JPEG", e);
         }
     }
 
