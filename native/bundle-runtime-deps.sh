@@ -410,6 +410,9 @@ bundle_windows() {
     case "$PLATFORM" in
         windows-arm64|vips-windows-arm64) vcpkg_triplet="arm64-windows" ;;
     esac
+    case "$PLATFORM" in
+        windows-*) vcpkg_triplet="${VCPKG_TARGET_TRIPLET:-$vcpkg_triplet}" ;;
+    esac
     local vcpkg_root="${VCPKG_ROOT:-${VCPKG_INSTALLATION_ROOT:-C:/vcpkg}}"
     local search_dirs=(
         "$DIST_DIR"
@@ -492,6 +495,60 @@ bundle_windows() {
         done
         rm -rf "$work_dir"
     fi
+
+    local crt
+    for crt in "$DIST_DIR"/msvcp140*.dll "$DIST_DIR"/vcruntime140*.dll "$DIST_DIR"/concrt140*.dll; do
+        [ -e "$crt" ] || continue
+        local crt_name importer imported=""
+        crt_name=$(basename "$crt" | tr 'A-Z' 'a-z')
+        for importer in "$DIST_DIR"/*.dll; do
+            [ "$importer" = "$crt" ] && continue
+            if "$DUMPBIN" //dependents "$importer" 2>/dev/null \
+                | tr 'A-Z' 'a-z' | grep -qxF "    $crt_name"; then
+                imported=1
+                break
+            fi
+        done
+        if [ -z "$imported" ]; then
+            echo "Dropping $(basename "$crt"): nothing in the bundle imports it"
+            rm -f "$crt"
+        fi
+    done
+}
+
+is_authenticode_signed() {
+    local win_path
+    win_path=$(cygpath -w "$1" 2>/dev/null || echo "$1")
+    powershell.exe -NoProfile -NonInteractive -Command \
+        "if ((Get-AuthenticodeSignature -LiteralPath '$win_path').Status -eq 'Valid') { exit 0 } else { exit 1 }" \
+        >/dev/null 2>&1
+}
+
+sign_windows() {
+    case "$PLATFORM" in
+        windows-*) ;;
+        *) return 0 ;;
+    esac
+    if [ -z "${SM_KEYPAIR_ALIAS:-}" ]; then
+        if [ "${WINDOWS_ALLOW_UNSIGNED:-}" = "1" ]; then
+            echo "WARNING: SM_KEYPAIR_ALIAS not set - skipping Windows code-signing (WINDOWS_ALLOW_UNSIGNED=1). These DLLs must not ship." >&2
+            return 0
+        fi
+        echo "ERROR: SM_KEYPAIR_ALIAS not set - refusing to ship unsigned Windows DLLs" \
+             "(set WINDOWS_ALLOW_UNSIGNED=1 for builds that never publish)" >&2
+        return 1
+    fi
+    local signer
+    signer="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ci/sign-windows-dll.ps1"
+    local f
+    for f in "$DIST_DIR"/*.dll; do
+        [ -e "$f" ] || continue
+        if is_authenticode_signed "$f"; then
+            echo "Already signed: $(basename "$f")"
+            continue
+        fi
+        pwsh -NoProfile -NonInteractive -File "$(cygpath -w "$signer")" "$(cygpath -w "$f")"
+    done
 }
 
 # Windows loads ICU data at runtime, so icudt*.dll never appears as a PE
@@ -790,9 +847,14 @@ case "$PLATFORM" in
         if command -v llvm-strip >/dev/null 2>&1; then
             for f in "$DIST_DIR"/*.dll; do
                 [ -e "$f" ] || continue
+                if is_authenticode_signed "$f"; then
+                    echo "Not stripping $(basename "$f"): it carries its publisher's signature"
+                    continue
+                fi
                 llvm-strip --strip-unneeded "$f" 2>/dev/null || true
             done
         fi
+        sign_windows
         ;;
     *)
         echo "Unknown platform: $PLATFORM" >&2

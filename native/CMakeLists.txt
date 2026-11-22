@@ -405,6 +405,9 @@ if(JPDFIUM_USE_PDFIUM)
                 "C:/ProgramData/chocolatey/bin"
         )
     endif()
+    if(WIN32 AND VCPKG_TARGET_TRIPLET MATCHES "-jpdfium$")
+        set(PKG_CONFIG_ARGN "--static" CACHE STRING "" FORCE)
+    endif()
     find_package(PkgConfig REQUIRED)
 
     # PCRE2 - JIT-compiled regex for pattern matching. The redaction engine

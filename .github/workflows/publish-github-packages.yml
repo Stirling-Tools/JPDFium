@@ -255,10 +255,10 @@ jobs:
           # vcpkg-install.sh adds our freetype overlay port (GitHub mirror, the
           # stock gitlab.freedesktop.org source is chronically flaky) + retries.
           if [ "${{ matrix.platform }}" = "windows-arm64" ]; then
-            TRIPLET="arm64-windows"
+            TRIPLET="arm64-windows-jpdfium"
             PLAT_GEN="ARM64"
           else
-            TRIPLET="x64-windows"
+            TRIPLET="x64-windows-jpdfium"
             PLAT_GEN="x64"
           fi
           bash native/vcpkg-install.sh \
@@ -451,6 +451,7 @@ jobs:
         if: matrix.libc != 'musl' && steps.fetch.outputs.freebsd_missing != 'true'
         env:
           FREEBSD_SYSROOT: ${{ github.workspace }}/native/freebsd-sysroot
+          WINDOWS_ALLOW_UNSIGNED: '1'
         run: |
           # Bridge's own dynamic deps - pcre2-8, freetype, harfbuzz, icu, qpdf,
           # pugixml, libunibreak + transitive deps. bundle-runtime-deps.sh

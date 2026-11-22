@@ -270,10 +270,10 @@ jobs:
           # vcpkg-install.sh adds our freetype overlay port (GitHub mirror, the
           # stock gitlab.freedesktop.org source is chronically flaky) + retries.
           if [ "${{ matrix.platform }}" = "windows-arm64" ]; then
-            TRIPLET="arm64-windows"
+            TRIPLET="arm64-windows-jpdfium"
             PLAT_GEN="ARM64"
           else
-            TRIPLET="x64-windows"
+            TRIPLET="x64-windows-jpdfium"
             PLAT_GEN="x64"
           fi
           bash native/vcpkg-install.sh \
@@ -469,6 +469,50 @@ jobs:
         with:
           name: windows-icu-trimmed
           path: native/dist/
+
+      - name: Check for Windows signing credentials
+        id: windows-signing
+        if: startsWith(matrix.platform, 'windows-')
+        env:
+          SM_API_KEY: ${{ secrets.SM_API_KEY }}
+        run: |
+          if [ -z "$SM_API_KEY" ]; then
+            echo "::warning::no DigiCert KeyLocker credentials configured - windows natives will be UNSIGNED (fork/dev CI)"
+            echo "WINDOWS_ALLOW_UNSIGNED=1" >> "$GITHUB_ENV"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install DigiCert KeyLocker tools
+        if: steps.windows-signing.outputs.enabled == 'true'
+        uses: digicert/ssm-code-signing@1d820463733701cf1484c7eb5d7d24a15ca2c454 # v1.2.1
+        env:
+          SM_API_KEY: ${{ secrets.SM_API_KEY }}
+          SM_CLIENT_CERT_FILE_B64: ${{ secrets.SM_CLIENT_CERT_FILE_B64 }}
+          SM_CLIENT_CERT_PASSWORD: ${{ secrets.SM_CLIENT_CERT_PASSWORD }}
+          SM_KEYPAIR_ALIAS: ${{ secrets.SM_KEYPAIR_ALIAS }}
+          SM_HOST: ${{ secrets.SM_HOST }}
+
+      - name: Configure DigiCert KeyLocker
+        if: steps.windows-signing.outputs.enabled == 'true'
+        shell: pwsh
+        env:
+          SM_API_KEY: ${{ secrets.SM_API_KEY }}
+          SM_CLIENT_CERT_FILE_B64: ${{ secrets.SM_CLIENT_CERT_FILE_B64 }}
+          SM_CLIENT_CERT_PASSWORD: ${{ secrets.SM_CLIENT_CERT_PASSWORD }}
+          SM_KEYPAIR_ALIAS: ${{ secrets.SM_KEYPAIR_ALIAS }}
+          SM_HOST: ${{ secrets.SM_HOST }}
+        run: |
+          $certPath = Join-Path $env:RUNNER_TEMP "Certificate_pkcs12.p12"
+          [IO.File]::WriteAllBytes($certPath, [Convert]::FromBase64String($env:SM_CLIENT_CERT_FILE_B64))
+          "SM_CLIENT_CERT_FILE=$certPath" >> $env:GITHUB_ENV
+          "SM_HOST=$env:SM_HOST" >> $env:GITHUB_ENV
+          "SM_API_KEY=$env:SM_API_KEY" >> $env:GITHUB_ENV
+          "SM_CLIENT_CERT_PASSWORD=$env:SM_CLIENT_CERT_PASSWORD" >> $env:GITHUB_ENV
+          "SM_KEYPAIR_ALIAS=$env:SM_KEYPAIR_ALIAS" >> $env:GITHUB_ENV
+          $env:SM_CLIENT_CERT_FILE = $certPath
+          & smctl keypair ls
+          if ($LASTEXITCODE -ne 0) { throw "smctl keypair ls failed" }
 
       - name: Bundle runtime deps + strip
         if: matrix.libc != 'musl' && steps.fetch.outputs.freebsd_missing != 'true'
