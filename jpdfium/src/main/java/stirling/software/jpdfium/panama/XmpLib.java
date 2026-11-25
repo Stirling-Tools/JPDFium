@@ -2,8 +2,10 @@ package stirling.software.jpdfium.panama;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
+import java.util.Optional;
 
 import static java.lang.foreign.ValueLayout.ADDRESS;
+import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 import static java.lang.foreign.ValueLayout.JAVA_INT;
 
 /**
@@ -48,5 +50,68 @@ public final class XmpLib {
         PdfiumRuntime.execute(() -> {
             JpdfiumLib.check(JpdfiumH.jpdfium_metadata_strip_all(doc), "metadataStripAll");
         });
+    }
+
+    /**
+     * Replace the catalog XMP packet. A null or empty packet removes the stream.
+     *
+     * @param doc    native document handle
+     * @param packet UTF-8 XMP XML, or null to remove the packet
+     */
+    public static void setXmp(long doc, byte[] packet) {
+        setXmp(doc, packet, false);
+    }
+
+    /**
+     * Replace the catalog XMP packet, optionally allowing the native bridge to
+     * read the existing file-backed source directly when no PDFium-side
+     * changes are pending.
+     *
+     * @param doc            native document handle
+     * @param packet         UTF-8 XMP XML, or null to remove the packet
+     * @param sourceIsCurrent true when /Info, custom keys, and /Trapped are unchanged
+     */
+    public static void setXmp(long doc, byte[] packet, boolean sourceIsCurrent) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment data = MemorySegment.NULL;
+            int length = 0;
+            if (packet != null && packet.length > 0) {
+                length = packet.length;
+                data = arena.allocate(length);
+                MemorySegment.copy(packet, 0, data, JAVA_BYTE, 0, length);
+            }
+            MemorySegment segment = data;
+            int size = length;
+            PdfiumRuntime.execute(() -> {
+                JpdfiumLib.check(JpdfiumH.jpdfium_metadata_set_xmp_ex(
+                        doc, segment, size, sourceIsCurrent ? 1 : 0), "metadataSetXmp");
+            });
+        }
+    }
+
+    /**
+     * Read the catalog XMP packet.
+     *
+     * @param doc native document handle
+     * @return the UTF-8 XML packet, or empty when the catalog has no metadata stream
+     */
+    public static Optional<byte[]> getXmp(long doc) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment out = arena.allocate(ADDRESS);
+            MemorySegment length = arena.allocate(JAVA_INT);
+            int rc = PdfiumRuntime.executeInt(() ->
+                    JpdfiumH.jpdfium_metadata_get_xmp(doc, out, length));
+            if (rc == JpdfiumLib.ERR_NOT_FOUND) return Optional.empty();
+            JpdfiumLib.check(rc, "metadataGetXmp");
+
+            int size = length.get(JAVA_INT, 0);
+            if (size <= 0) return Optional.empty();
+            MemorySegment data = out.get(ADDRESS, 0);
+            try {
+                return Optional.of(data.reinterpret(size).toArray(JAVA_BYTE));
+            } finally {
+                JpdfiumH.jpdfium_free_buffer(data);
+            }
+        }
     }
 }

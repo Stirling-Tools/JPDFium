@@ -122,4 +122,30 @@ public final class EmbedPdfDocumentBindings {
     /** Set runtime owner permissions override. */
     public static final MethodHandle EPDF_SetRuntimeOwnerPermissions = Symbols.downcallOptional("EPDF_SetRuntimeOwnerPermissions",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
+
+    // --- Document metadata (EmbedPDF) ---
+
+    /** Set an /Info dictionary entry; a null value removes the entry. */
+    public static final MethodHandle EPDF_SetMetaText = Symbols.downcallOptional("EPDF_SetMetaText",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
+
+    /** Check whether an /Info dictionary entry exists. */
+    public static final MethodHandle EPDF_HasMetaText = Symbols.downcallOptional("EPDF_HasMetaText",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
+
+    /** Count /Info dictionary keys; the second argument limits the count to custom keys. */
+    public static final MethodHandle EPDF_GetMetaKeyCount = Symbols.downcallOptional("EPDF_GetMetaKeyCount",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
+
+    /** Get an /Info dictionary key name as UTF-8. */
+    public static final MethodHandle EPDF_GetMetaKeyName = Symbols.downcallOptional("EPDF_GetMetaKeyName",
+            FunctionDescriptor.of(JAVA_LONG, ADDRESS, JAVA_INT, JAVA_INT, ADDRESS, JAVA_LONG));
+
+    /** Get the /Trapped status (0 not set, 1 true, 2 false, 3 unknown). */
+    public static final MethodHandle EPDF_GetMetaTrapped = Symbols.downcallOptional("EPDF_GetMetaTrapped",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS));
+
+    /** Set the /Trapped status (0 not set, 1 true, 2 false, 3 unknown). */
+    public static final MethodHandle EPDF_SetMetaTrapped = Symbols.downcallOptional("EPDF_SetMetaTrapped",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
 }
