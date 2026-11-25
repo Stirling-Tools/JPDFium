@@ -114,6 +114,7 @@ public final class ColorBindings {
     public static final int PDFX_NEUTRALS_TO_BLACK = 0x04;
     public static final int PDFX_CONVERT_SPECIAL = 0x08;
     public static final int PDFX_STRICT_IMAGES = 0x10;
+    public static final int PDFX_ALLOW_STRIP_OC = 0x20;
     private static final int JPDFIUM_ERR_PDFX_NONCONFORMANT = -11;
     private static final int PDFX_MESSAGE_CAPACITY = 1024;
 

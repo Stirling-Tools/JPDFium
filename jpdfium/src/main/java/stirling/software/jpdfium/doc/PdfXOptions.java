@@ -32,6 +32,8 @@ public final class PdfXOptions {
     private final boolean embedMissingFonts;
     private final List<Path> fontDirectories;
     private final String title;
+    private final boolean flattenTransparency;
+    private final int flattenDpi;
 
     private PdfXOptions(Builder b) {
         this.standard = b.standard;
@@ -54,6 +56,8 @@ public final class PdfXOptions {
         this.embedMissingFonts = b.embedMissingFonts;
         this.fontDirectories = List.copyOf(b.fontDirectories);
         this.title = b.title;
+        this.flattenTransparency = b.flattenTransparency;
+        this.flattenDpi = b.flattenDpi;
     }
 
     public PdfXStandard standard() {
@@ -140,6 +144,20 @@ public final class PdfXOptions {
         return title;
     }
 
+    /**
+     * When true, pages using transparency, soft masks, JBIG2/JPX images, or hidden optional
+     * content are selectively rasterized for PDF/X-1a and PDF/X-3 while non-transparent pages
+     * stay vector. Defaults to false (reject incompatible pages).
+     */
+    public boolean flattenTransparency() {
+        return flattenTransparency;
+    }
+
+    /** Resolution (DPI) used when selectively flattening incompatible PDF/X-1a/3 pages. */
+    public int flattenDpi() {
+        return flattenDpi;
+    }
+
     /** Build the vector/image conversion options represented by these PDF/X options. */
     public PdfColorConverter.ColorConvertOptions colorOptions() {
         byte[] profile = outputIntentProfile();
@@ -182,6 +200,8 @@ public final class PdfXOptions {
         private boolean embedMissingFonts = true;
         private List<Path> fontDirectories = List.of();
         private String title;
+        private boolean flattenTransparency;
+        private int flattenDpi = 200;
 
         private Builder() {}
 
@@ -293,6 +313,21 @@ public final class PdfXOptions {
         /** Optional title for the output document information dictionary. */
         public Builder title(String value) {
             this.title = value;
+            return this;
+        }
+
+        /**
+         * Selectively flatten pages that use transparency, soft masks, or PDF 1.4+ image filters
+         * when targeting PDF/X-1a or PDF/X-3, keeping all clean pages vector.
+         */
+        public Builder flattenTransparency(boolean value) {
+            this.flattenTransparency = value;
+            return this;
+        }
+
+        /** Resolution (DPI) for selectively flattened pages (72..600, default 200). */
+        public Builder flattenDpi(int value) {
+            this.flattenDpi = Math.clamp(value, 72, 600);
             return this;
         }
 

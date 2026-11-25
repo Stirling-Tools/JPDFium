@@ -896,10 +896,77 @@ bool XmlHasProperty(const std::vector<pugi::xml_node>& descriptions, const std::
     return false;
 }
 
+void XmlNormalizeLegacyPrefixesNode(pugi::xml_node node) {
+    static const std::pair<const char*, const char*> kLegacyPrefixes[] = {
+        {"xapMM", "xmpMM"},
+        {"xapRights", "xmpRights"},
+        {"xapTPg", "xmpTPg"},
+        {"xap", "xmp"},
+    };
+    auto rewriteName = [&](const char* raw, bool isAttr) -> std::string {
+        std::string s(raw ? raw : "");
+        if (isAttr && s.rfind("xmlns:", 0) == 0) {
+            std::string pfx = s.substr(6);
+            for (const auto& [oldP, newP] : kLegacyPrefixes) {
+                if (pfx == oldP) return std::string("xmlns:") + newP;
+            }
+            return s;
+        }
+        size_t colon = s.find(':');
+        if (colon != std::string::npos) {
+            std::string pfx = s.substr(0, colon);
+            for (const auto& [oldP, newP] : kLegacyPrefixes) {
+                if (pfx == oldP) return std::string(newP) + s.substr(colon);
+            }
+        }
+        return s;
+    };
+    if (node.type() == pugi::node_pi && std::string(node.name()) == "xpacket") {
+        // ISO 15930-7 / ISO 19005 forbid bytes= and encoding= attributes in <?xpacket ...?>.
+        std::string v(node.value() ? node.value() : "");
+        if (v.find("bytes=") != std::string::npos || v.find("encoding=") != std::string::npos) {
+            if (v.find("end=") != std::string::npos) {
+                node.set_value("end=\"w\"");
+            } else {
+                node.set_value("begin=\"\xEF\xBB\xBF\" id=\"W5M0MpCehiHzreSzNTczkc9d\"");
+            }
+        }
+    }
+    if (node.type() == pugi::node_element) {
+        std::string nn = rewriteName(node.name(), false);
+        if (nn != node.name()) node.set_name(nn.c_str());
+        for (pugi::xml_attribute attr : node.attributes()) {
+            std::string an = rewriteName(attr.name(), true);
+            if (an != attr.name()) {
+                // Avoid duplicate xmlns:xmpMM if already present on the same element.
+                if (an.rfind("xmlns:", 0) == 0 && node.attribute(an.c_str())) {
+                    node.remove_attribute(attr);
+                } else {
+                    attr.set_name(an.c_str());
+                }
+            }
+        }
+    }
+    for (pugi::xml_node child : node.children()) {
+        XmlNormalizeLegacyPrefixesNode(child);
+    }
+}
+
+bool XmlHasDefaultNamespace(const pugi::xml_node& node, int depth = 0) {
+    if (depth > 32) return false;
+    if (node.type() == pugi::node_element && node.attribute("xmlns")) return true;
+    for (pugi::xml_node child : node.children()) {
+        if (XmlHasDefaultNamespace(child, depth + 1)) return true;
+    }
+    return false;
+}
+
 bool EditPdfxXml(pugi::xml_document* document, const std::string& version,
                  const std::string& conformance, const std::string& title = "",
                  const std::string& trapped = "", const std::string& mod_date = "",
                  const std::vector<XmpField>& extra = {}) {
+    if (XmlHasDefaultNamespace(*document)) return false;
+    XmlNormalizeLegacyPrefixesNode(*document);
     std::vector<pugi::xml_node> descriptions;
     XmlCollectDescriptions(*document, 0, &descriptions);
     if (descriptions.empty()) return false;
@@ -1052,7 +1119,10 @@ std::string PdfDateToXmp(const std::string& pdf) {
     std::string out(buf);
 
     size_t tz = cur;
-    if (tz == pdf.size()) return out;
+    if (tz == pdf.size()) {
+        out.push_back('Z');
+        return out;
+    }
     if (pdf[tz] == 'Z') {
         if (tz + 1 == pdf.size()) {
             out.push_back('Z');
@@ -1102,6 +1172,9 @@ void UpdateOrCreatePdfxMetadata(QPDF* qpdf, const char* version, const char* con
     std::string trapped;
     std::string mod_date;
     std::string create_date;
+    std::string creator;
+    std::string producer;
+    std::string keywords;
     QPDFObjectHandle info_dict = qpdf->getTrailer().getKey("/Info");
     if (info_dict.isDictionary()) {
         QPDFObjectHandle title_obj = info_dict.getKey("/Title");
@@ -1118,14 +1191,54 @@ void UpdateOrCreatePdfxMetadata(QPDF* qpdf, const char* version, const char* con
         }
         QPDFObjectHandle mod_obj = info_dict.getKey("/ModDate");
         if (mod_obj.isString()) {
-            mod_date = PdfDateToXmp(mod_obj.getUTF8Value());
+            std::string rawMod = mod_obj.getUTF8Value();
+            mod_date = PdfDateToXmp(rawMod);
+            if (!mod_date.empty()) {
+                std::string normMod = (rawMod.rfind("D:", 0) == 0) ? rawMod : ("D:" + rawMod);
+                bool hasTz = normMod.find('Z') != std::string::npos ||
+                             normMod.find('+') != std::string::npos ||
+                             normMod.find('-') != std::string::npos;
+                if (!hasTz) normMod.push_back('Z');
+                if (normMod != rawMod) {
+                    info_dict.replaceKey("/ModDate", QPDFObjectHandle::newString(normMod));
+                }
+            }
         }
         QPDFObjectHandle create_obj = info_dict.getKey("/CreationDate");
         if (create_obj.isString()) {
-            create_date = PdfDateToXmp(create_obj.getUTF8Value());
+            std::string rawCreate = create_obj.getUTF8Value();
+            create_date = PdfDateToXmp(rawCreate);
+            if (!create_date.empty()) {
+                std::string normCreate =
+                    (rawCreate.rfind("D:", 0) == 0) ? rawCreate : ("D:" + rawCreate);
+                bool hasTz = normCreate.find('Z') != std::string::npos ||
+                             normCreate.find('+') != std::string::npos ||
+                             normCreate.find('-') != std::string::npos;
+                if (!hasTz) normCreate.push_back('Z');
+                if (normCreate != rawCreate) {
+                    info_dict.replaceKey("/CreationDate", QPDFObjectHandle::newString(normCreate));
+                }
+            }
         }
+        if (info_dict.getKey("/Creator").isString())
+            creator = info_dict.getKey("/Creator").getUTF8Value();
+        if (info_dict.getKey("/Producer").isString())
+            producer = info_dict.getKey("/Producer").getUTF8Value();
+        if (info_dict.getKey("/Keywords").isString())
+            keywords = info_dict.getKey("/Keywords").getUTF8Value();
+        // Drop empty string /Info entries so /Info never has an empty field without a matching XMP
+        // property.
+        if (creator.empty() && info_dict.hasKey("/Creator")) info_dict.removeKey("/Creator");
+        if (producer.empty() && info_dict.hasKey("/Producer")) info_dict.removeKey("/Producer");
+        if (keywords.empty() && info_dict.hasKey("/Keywords")) info_dict.removeKey("/Keywords");
+        // Remove /Author and /Subject from /Info when absent/divergent from XMP
+        // dc:creator/dc:description so /Info never conflicts with XMP (PDF/X-4 XMP
+        // synchronization).
+        if (info_dict.hasKey("/Author")) info_dict.removeKey("/Author");
+        if (info_dict.hasKey("/Subject")) info_dict.removeKey("/Subject");
     }
     char now[32];
+    char nowPdf[32];
     {
         const std::time_t t = std::time(nullptr);
         std::tm utc{};
@@ -1135,10 +1248,23 @@ void UpdateOrCreatePdfxMetadata(QPDF* qpdf, const char* version, const char* con
         gmtime_r(&t, &utc);
 #endif
         std::strftime(now, sizeof(now), "%Y-%m-%dT%H:%M:%SZ", &utc);
+        std::strftime(nowPdf, sizeof(nowPdf), "D:%Y%m%d%H%M%SZ", &utc);
     }
-    if (mod_date.empty()) mod_date = now;
-    if (create_date.empty()) create_date = mod_date;
-    const std::vector<XmpField> extra = {
+    if (mod_date.empty()) {
+        mod_date = now;
+        if (info_dict.isDictionary() && info_dict.hasKey("/ModDate")) {
+            info_dict.replaceKey("/ModDate", QPDFObjectHandle::newString(nowPdf));
+        }
+    }
+    if (create_date.empty()) {
+        create_date = mod_date;
+        if (info_dict.isDictionary() && info_dict.hasKey("/CreationDate")) {
+            QPDFObjectHandle modObj = info_dict.getKey("/ModDate");
+            info_dict.replaceKey("/CreationDate",
+                                 modObj.isString() ? modObj : QPDFObjectHandle::newString(nowPdf));
+        }
+    }
+    std::vector<XmpField> extra = {
         {kXmpNs, "xmp", "CreateDate", create_date, false},
         {kXmpNs, "xmp", "MetadataDate", now, false},
         {kXmpMmNs, "xmpMM", "DocumentID", NewUuid(), true},
@@ -1146,6 +1272,9 @@ void UpdateOrCreatePdfxMetadata(QPDF* qpdf, const char* version, const char* con
         {kXmpMmNs, "xmpMM", "VersionID", "1", true},
         {kXmpMmNs, "xmpMM", "RenditionClass", "default", true},
     };
+    if (!creator.empty()) extra.push_back({kXmpNs, "xmp", "CreatorTool", creator, false});
+    if (!producer.empty()) extra.push_back({kPdfNs, "pdf", "Producer", producer, false});
+    if (!keywords.empty()) extra.push_back({kPdfNs, "pdf", "Keywords", keywords, false});
 
     std::string xml;
     QPDFObjectHandle root = qpdf->getRoot();
@@ -1196,14 +1325,14 @@ void UpdateOrCreatePdfxMetadata(QPDF* qpdf, const char* version, const char* con
     metadata.getDict().replaceKey("/Subtype", QPDFObjectHandle::newName("/XML"));
     root.replaceKey("/Metadata", metadata);
 
-    // ISO 15930-1 (PDF/X-1a) and ISO 15930-3 (PDF/X-3) require GTS_PDFXVersion
-    // in the document information dictionary.
-    if (ver.rfind("PDF/X-1", 0) == 0 || ver.rfind("PDF/X-3", 0) == 0) {
+    // Write GTS_PDFXVersion into /Info for all PDF/X standards (ISO 15930-1/3/7/8).
+    // Only PDF/X-1a defines /GTS_PDFXConformance in /Info; omit it for PDF/X-3/4/6.
+    if (!ver.empty()) {
         QPDFObjectHandle info = qpdf->getTrailer().getKey("/Info");
         if (!info.isDictionary()) info = QPDFObjectHandle::newDictionary();
         if (!info.isIndirect()) info = qpdf->makeIndirectObject(info);
         info.replaceKey("/GTS_PDFXVersion", QPDFObjectHandle::newUnicodeString(ver));
-        if (!conf.empty()) {
+        if (ver.rfind("PDF/X-1", 0) == 0 && !conf.empty()) {
             info.replaceKey("/GTS_PDFXConformance", QPDFObjectHandle::newUnicodeString(conf));
         } else if (info.hasKey("/GTS_PDFXConformance")) {
             info.removeKey("/GTS_PDFXConformance");
@@ -1217,6 +1346,59 @@ std::shared_ptr<Buffer> InjectPdfx(const uint8_t* input, size_t input_len, const
                                    const char* condition_identifier, const char* info) {
     auto qpdf = QPDF::create();
     qpdf->processMemoryFile("jpdfium-pdfx-input", reinterpret_cast<const char*>(input), input_len);
+    // Recursively strip non-root object-level /Metadata streams (including nested direct dicts)
+    // whose legacy XMP schemas break PDF/X validation.
+    QPDFObjGen rootGen = qpdf->getRoot().getObjGen();
+    std::set<QPDFObjGen> metaSeen;
+    std::function<void(QPDFObjectHandle, int)> stripMeta = [&](QPDFObjectHandle o, int depth) {
+        if (depth > 24) return;
+        if (o.isIndirect()) {
+            if (o.getObjGen() == rootGen) return;
+            if (!metaSeen.insert(o.getObjGen()).second) return;
+        }
+        if (o.isStream()) {
+            QPDFObjectHandle d = o.getDict();
+            if (d.hasKey("/Metadata")) d.removeKey("/Metadata");
+            for (const auto& k : d.getKeys()) {
+                if (k == "/Parent") continue;
+                stripMeta(d.getKey(k), depth + 1);
+            }
+        } else if (o.isDictionary()) {
+            if (o.hasKey("/Metadata")) {
+                bool keepPageXmp = false;
+                if (o.getKey("/Type").isNameAndEquals("/Page")) {
+                    QPDFObjectHandle pm = o.getKey("/Metadata");
+                    if (pm.isStream()) {
+                        try {
+                            auto mb = pm.getStreamData(qpdf_dl_all);
+                            if (mb && mb->getSize() > 0 && mb->getSize() < 1024 * 1024) {
+                                std::string s(reinterpret_cast<const char*>(mb->getBuffer()),
+                                              mb->getSize());
+                                if (s.find("rdf:RDF") != std::string::npos &&
+                                    s.find("xapMM:") == std::string::npos &&
+                                    s.find("xmlns:xap=") == std::string::npos &&
+                                    s.find("GTS_PDFX") == std::string::npos) {
+                                    keepPageXmp = true;
+                                }
+                            }
+                        } catch (std::exception&) {
+                            keepPageXmp = false;
+                        }
+                    }
+                }
+                if (!keepPageXmp) o.removeKey("/Metadata");
+            }
+            for (const auto& k : o.getKeys()) {
+                if (k == "/Parent") continue;
+                stripMeta(o.getKey(k), depth + 1);
+            }
+        } else if (o.isArray()) {
+            for (int i = 0; i < o.getArrayNItems(); ++i) stripMeta(o.getArrayItem(i), depth + 1);
+        }
+    };
+    for (auto& obj : qpdf->getAllObjects()) {
+        stripMeta(obj, 0);
+    }
     qpdf->getRoot().replaceKey(
         "/OutputIntents",
         MergeOutputIntents(qpdf.get(), icc, icc_len, "GTS_PDFX", condition_identifier, info));
