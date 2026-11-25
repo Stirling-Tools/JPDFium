@@ -1363,6 +1363,65 @@ class PdfXConverterTest {
         }
     }
 
+    @Test
+    void pdfx1aSelectivelyFlattensTransparentPagesWhenEnabled() throws Exception {
+        assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
+        byte[] input;
+        try (PDDocument doc = new PDDocument()) {
+            // Page 0: opaque vector text
+            PDPage cleanPage = new PDPage(PDRectangle.A4);
+            doc.addPage(cleanPage);
+            try (PDPageContentStream cs = new PDPageContentStream(doc, cleanPage)) {
+                cs.beginText();
+                cs.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 14);
+                cs.newLineAtOffset(72, 700);
+                cs.showText("Vector page stays searchable");
+                cs.endText();
+            }
+            // Page 1: semi-transparent fill
+            PDPage transparentPage = new PDPage(PDRectangle.A4);
+            doc.addPage(transparentPage);
+            PDExtendedGraphicsState gs = new PDExtendedGraphicsState();
+            gs.setNonStrokingAlphaConstant(0.5f);
+            try (PDPageContentStream cs = new PDPageContentStream(doc, transparentPage)) {
+                cs.setGraphicsStateParameters(gs);
+                cs.setNonStrokingColor(0.2f, 0.4f, 0.8f);
+                cs.addRect(72, 600, 200, 100);
+                cs.fill();
+            }
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            doc.save(bytes);
+            input = bytes.toByteArray();
+        }
+
+        // Default (flattenTransparency=false) still rejects transparency
+        PdfXOptions strictOpts = PdfXOptions.builder()
+                .standard(PdfXStandard.PDF_X_1A)
+                .outputIntentProfile(PdfIccProfiles.compactCmykV2())
+                .title("Flatten Test")
+                .build();
+        assertThrows(JPDFiumException.class, () -> PdfXConverter.applyMetadata(input, strictOpts));
+
+        // With flattenTransparency=true, page 1 is flattened while page 0 stays vector text
+        PdfXOptions flattenOpts = PdfXOptions.builder()
+                .standard(PdfXStandard.PDF_X_1A)
+                .outputIntentProfile(PdfIccProfiles.compactCmykV2())
+                .title("Flatten Test")
+                .flattenTransparency(true)
+                .flattenDpi(150)
+                .build();
+        byte[] out = PdfXConverter.applyMetadata(input, flattenOpts);
+        try (PDDocument reopened = Loader.loadPDF(out)) {
+            assertEquals(2, reopened.getNumberOfPages());
+            var stripper = new org.apache.pdfbox.text.PDFTextStripper();
+            stripper.setStartPage(1);
+            stripper.setEndPage(1);
+            String page0Text = stripper.getText(reopened).trim();
+            assertTrue(page0Text.contains("Vector page stays searchable"),
+                    "Clean page 0 must remain vector text, got: " + page0Text);
+        }
+    }
+
     private static COSArray cosFloats(float... values) {
         COSArray arr = new COSArray();
         for (float v : values) arr.add(new COSFloat(v));
