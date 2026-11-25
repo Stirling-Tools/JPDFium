@@ -25,6 +25,8 @@ import javax.imageio.stream.MemoryCacheImageOutputStream;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.exception.JPDFiumException;
+import stirling.software.jpdfium.fonts.PdfFontRewriteOptions;
+import stirling.software.jpdfium.fonts.PdfFontRewriter;
 import stirling.software.jpdfium.model.PdfVersion;
 import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.model.RenderResult;
@@ -152,19 +154,45 @@ public final class PdfXConverter {
     }
 
     private static byte[] embedMissingFonts(byte[] pdf, PdfXOptions options) {
-        if (!options.embedMissingFonts() || !PdfFontEmbedder.isAvailable()) return pdf;
+        if (!options.embedMissingFonts()) return pdf;
+        byte[] out = pdf;
+        if (PdfFontRewriter.isAvailable()) {
+            try {
+                PdfFontRewriteOptions fontOpts = PdfFontRewriteOptions.builder()
+                        .convertToPdfA2b(false)
+                        .donorFontDirs(options.fontDirectories())
+                        .build();
+                out = PdfFontRewriter.rewrite(out, fontOpts).pdf();
+            } catch (JPDFiumException ignored) {
+                // Fall back to PdfFontEmbedder below.
+            }
+        }
+        if (!PdfFontEmbedder.isAvailable()) return out;
         try {
-            return PdfFontEmbedder.embedMissing(pdf, options.fontDirectories().toArray(Path[]::new)).pdf();
+            return PdfFontEmbedder.embedMissing(out, options.fontDirectories().toArray(Path[]::new)).pdf();
         } catch (IOException | JPDFiumException e) {
             if (options.requireEmbeddedFonts()) {
                 throw new JPDFiumException("PDF/X font embedding failed: " + e.getMessage(), e);
             }
-            return pdf;
+            return out;
         }
     }
 
     private static void embedMissingFonts(Path pdf, PdfXOptions options) {
-        if (!options.embedMissingFonts() || !PdfFontEmbedder.isAvailable()) return;
+        if (!options.embedMissingFonts()) return;
+        if (PdfFontRewriter.isAvailable()) {
+            try {
+                PdfFontRewriteOptions fontOpts = PdfFontRewriteOptions.builder()
+                        .convertToPdfA2b(false)
+                        .donorFontDirs(options.fontDirectories())
+                        .build();
+                byte[] rewritten = PdfFontRewriter.rewrite(Files.readAllBytes(pdf), fontOpts).pdf();
+                Files.write(pdf, rewritten);
+            } catch (IOException | JPDFiumException ignored) {
+                // Fall back to PdfFontEmbedder below.
+            }
+        }
+        if (!PdfFontEmbedder.isAvailable()) return;
         try {
             PdfFontEmbedder.embedMissingTo(
                     pdf, pdf, options.fontDirectories().toArray(Path[]::new));
@@ -443,6 +471,21 @@ public final class PdfXConverter {
                 applyPageBoxes(metadata);
                 requireEmbeddedFonts(metadata, options);
                 out = metadata.saveBytes();
+            }
+            if (options.embedMissingFonts() && PdfFontRewriter.isAvailable()) {
+                try {
+                    PdfFontRewriteOptions fontOpts = PdfFontRewriteOptions.builder()
+                            .convertToPdfA2b(false)
+                            .donorFontDirs(options.fontDirectories())
+                            .build();
+                    int flags = fontOpts.toNativeFlags();
+                    if (standard == PdfXStandard.PDF_X_4 || standard == PdfXStandard.PDF_X_6) {
+                        flags |= PdfFontRewriteOptions.FLAG_INJECT_DEFAULT_RGB;
+                    }
+                    out = PdfFontRewriter.rewriteWithFlags(out, flags, fontOpts.donorFontDirs()).pdf();
+                } catch (JPDFiumException ignored) {
+                    // Keep existing PDF/X bytes if font rewriter declines the document.
+                }
             }
             return PdfVersionConverter.forceVersion(out, versionFor(standard));
         }
