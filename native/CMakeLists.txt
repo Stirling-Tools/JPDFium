@@ -204,6 +204,17 @@ if(JPDFIUM_USE_PDFIUM)
         bridge/src/jpdfium_pattern.cpp
         bridge/src/jpdfium_font_shared.cpp
         bridge/src/jpdfium_font_normalizer.cpp
+        bridge/src/jpdfium_font_rewriter.cpp
+        bridge/src/jpdfium_rewriter_fonts.cpp
+        bridge/src/jpdfium_rewriter_fonts_cid.cpp
+        bridge/src/jpdfium_rewriter_fonts_simple.cpp
+        bridge/src/jpdfium_rewriter_fonts_simple_widths.cpp
+        bridge/src/jpdfium_rewriter_pdfa_xmp.cpp
+        bridge/src/jpdfium_rewriter_pdfa_objects.cpp
+        bridge/src/jpdfium_rewriter_pdfa_profiles.cpp
+        bridge/src/jpdfium_rewriter_sfnt.cpp
+        bridge/src/jpdfium_rewriter_streams_codes.cpp
+        bridge/src/jpdfium_rewriter_streams_color.cpp
         bridge/src/jpdfium_image.cpp
         bridge/src/jpdfium_color.cpp
         bridge/src/jpdfium_pdfx.cpp
