@@ -225,6 +225,9 @@ if(JPDFIUM_USE_PDFIUM)
         target_compile_options(jpdfium PRIVATE -Wall -Wextra -Wpedantic -Werror
                                -Wno-ignored-qualifiers)
     endif()
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND NOT APPLE)
+        target_compile_options(jpdfium PRIVATE -fno-gnu-unique)
+    endif()
 
     # Size/perf: only JPDFIUM_EXPORT symbols leave the bridge, and the linker
     # may drop bridge and static-dependency code the JVM never calls. PDFium's

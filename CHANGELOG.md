@@ -27,6 +27,9 @@ publishing workflows, not library releases, so they are not listed here.
 - `NativeLoader.loadedDirectory()`, `loadPrepared(Path, Path)` and
   `libraryFileName(String)` for loading a prepared copy of the natives.
 
+- The Linux bridge is compiled with `-fno-gnu-unique` under GCC, so each
+  loaded copy keeps its own template statics.
+
 - `PdfXOptions.neutralsToBlack(boolean)`, on by default, maps neutral RGB
   vector colours to K only instead of four-colour black.
 

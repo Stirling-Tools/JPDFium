@@ -77,9 +77,9 @@ What to know before using it:
 - **A crash in any instance ends the process.** Host the pool in a worker process when a damaged document must not take anything else down.
 - **Linux and macOS only.** On Windows `PdfiumInstancePool.maxInstances()` is 1.
 - **Natives must load from the classpath bundle.** Each instance needs a directory it can copy; a library found through `System.loadLibrary` has none.
-- **Each instance copies the bundle once** next to the native cache (about 33 MB on Linux), renaming every library except PartitionAlloc, which must stay single per process. Copies are reused across runs. On macOS each copy is re-signed ad hoc with `/usr/bin/codesign`.
+- **Each instance copies the bundle once** into `instance-NNN` inside the native cache entry (about 33 MB on Linux), renaming every library except PartitionAlloc, which must stay single per process. The copies are owner-only like the entry, removed with it, and reused across runs only while their recorded SHA-256 hashes match (`-Djpdfium.native.verify=marker` skips the hashing, as for the cache). Concurrent processes preparing the same copy wait on a file lock. On macOS each copy is re-signed ad hoc with `/usr/bin/codesign`.
 - **Instance numbers are unique per process**, up to 999, because the JVM refuses to load one library file in two class loaders.
-- The pool checks that each instance's bridge resolved PDFium to its own copy and fails the build otherwise.
+- The pool checks that each instance's bridge and bindings resolved PDFium to its own copy, and on Linux that `/proc/self/maps` shows no PDFium or bridge outside the cache entry and every renamed library inside its own instance directory. It fails the build otherwise.
 
 ## Scaling beyond one process
 

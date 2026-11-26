@@ -5,16 +5,19 @@ import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.SymbolLookup;
 import java.lang.reflect.InvocationTargetException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantLock;
 
 import stirling.software.jpdfium.exception.NativeLoadException;
 import stirling.software.jpdfium.panama.NativeLoader;
@@ -35,18 +38,22 @@ public final class PdfiumInstancePool implements AutoCloseable {
     private static final String JPDFIUM_PREFIX = "stirling.software.jpdfium.";
     private static final String NATIVE_LOADER = "stirling.software.jpdfium.panama.NativeLoader";
     private static final String PROBE_SYMBOL = "FPDF_InitLibrary";
+    private static final Path PROC_MAPS = Path.of("/proc/self/maps");
 
     // The JVM refuses a library file already loaded by another class loader, so every isolated
     // instance in this process gets a number, and so a copy, of its own.
     private static final AtomicInteger NEXT_INDEX = new AtomicInteger(1);
 
     private final List<PdfiumInstance> instances;
-    private final BlockingQueue<PdfiumInstance> free;
-    private volatile boolean closed;
+    private final ReentrantLock lock = new ReentrantLock(true);
+    private final Condition freed = lock.newCondition();
+    private final Deque<PdfiumInstance> free;
+    private final Set<PdfiumInstance> leased = new HashSet<>();
+    private boolean closed;
 
     private PdfiumInstancePool(List<PdfiumInstance> instances) {
         this.instances = List.copyOf(instances);
-        this.free = new ArrayBlockingQueue<>(instances.size(), true, instances);
+        this.free = new ArrayDeque<>(instances);
     }
 
     /** Most instances one pool can hold on this platform; isolated slots are also capped per process. */
@@ -90,29 +97,93 @@ public final class PdfiumInstancePool implements AutoCloseable {
 
     /** Free instances right now; a hint only. */
     public int available() {
-        return free.size();
+        lock.lock();
+        try {
+            return free.size();
+        } finally {
+            lock.unlock();
+        }
     }
 
-    /** Blocks until an instance is free. Give it back with {@link #release}. */
+    /**
+     * Blocks until an instance is free. Give it back with {@link #release}.
+     *
+     * @throws IllegalStateException if the pool is closed, including while waiting
+     */
     public PdfiumInstance acquire() throws InterruptedException {
-        ensureOpen();
-        return free.take();
+        lock.lockInterruptibly();
+        try {
+            while (true) {
+                PdfiumInstance instance = takeFree();
+                if (instance != null) {
+                    return instance;
+                }
+                freed.await();
+            }
+        } finally {
+            lock.unlock();
+        }
     }
 
-    /** Null if none frees up within the timeout. */
+    /**
+     * Null if none frees up within the timeout.
+     *
+     * @throws IllegalStateException if the pool is closed, including while waiting
+     */
     public PdfiumInstance acquire(Duration timeout) throws InterruptedException {
-        ensureOpen();
-        return free.poll(timeout.toNanos(), TimeUnit.NANOSECONDS);
+        long remaining = timeout.toNanos();
+        lock.lockInterruptibly();
+        try {
+            while (true) {
+                PdfiumInstance instance = takeFree();
+                if (instance != null) {
+                    return instance;
+                }
+                if (remaining <= 0) {
+                    return null;
+                }
+                remaining = freed.awaitNanos(remaining);
+            }
+        } finally {
+            lock.unlock();
+        }
     }
 
+    int waiting() {
+        lock.lock();
+        try {
+            return lock.getWaitQueueLength(freed);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private PdfiumInstance takeFree() {
+        if (closed) {
+            throw new IllegalStateException("PDFium instance pool is closed");
+        }
+        PdfiumInstance instance = free.pollFirst();
+        if (instance != null) {
+            leased.add(instance);
+        }
+        return instance;
+    }
+
+    /** @throws IllegalStateException if the instance is not currently acquired from this pool */
     public void release(PdfiumInstance instance) {
         if (!instances.contains(instance)) {
             throw new IllegalArgumentException(instance + " does not belong to this pool");
         }
-        if (free.contains(instance)) {
-            throw new IllegalStateException(instance + " was released twice");
+        lock.lock();
+        try {
+            if (!leased.remove(instance)) {
+                throw new IllegalStateException(instance + " was released twice or never acquired");
+            }
+            free.addLast(instance);
+            freed.signal();
+        } finally {
+            lock.unlock();
         }
-        free.add(instance);
     }
 
     /** Runs a task on the next free instance; see {@link PdfiumInstance#call}. */
@@ -126,17 +197,18 @@ public final class PdfiumInstancePool implements AutoCloseable {
     }
 
     /**
-     * Stops handing out instances. Loaded natives stay mapped until the JVM exits, since a
-     * library cannot be unloaded while its class loader might still be reachable.
+     * Stops handing out instances and fails every caller blocked in {@code acquire}. Loaded
+     * natives stay mapped until the JVM exits, since a library cannot be unloaded while its class
+     * loader might still be reachable.
      */
     @Override
     public void close() {
-        closed = true;
-    }
-
-    private void ensureOpen() {
-        if (closed) {
-            throw new IllegalStateException("PDFium instance pool is closed");
+        lock.lock();
+        try {
+            closed = true;
+            freed.signalAll();
+        } finally {
+            lock.unlock();
         }
     }
 
@@ -216,7 +288,26 @@ public final class PdfiumInstancePool implements AutoCloseable {
                 verifyOwnPdfium(index, prepared, baseDir, boundAddress(loader));
                 created.add(new PdfiumInstance(index, loader, true));
             }
+            verifyMappings(baseDir, created);
             return new PdfiumInstancePool(created);
+        }
+
+        private static void verifyMappings(Path baseDir, List<PdfiumInstance> created) {
+            if (InstanceNatives.currentFormat() != InstanceNatives.Format.ELF
+                    || !Files.isReadable(PROC_MAPS)) {
+                return;
+            }
+            List<Integer> indices = new ArrayList<>();
+            for (PdfiumInstance instance : created) {
+                if (instance.isolated()) {
+                    indices.add(instance.id());
+                }
+            }
+            try {
+                InstanceNatives.verifyMappings(Files.readString(PROC_MAPS), baseDir, indices);
+            } catch (IOException e) {
+                throw new NativeLoadException("PDFium instances are not isolated: " + e.getMessage(), e);
+            }
         }
 
         private static Path defaultDirectory(ClassLoader parent) {

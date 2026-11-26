@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -152,5 +153,29 @@ class PdfiumInstancePoolTest {
     void preparedCopiesAreReusedByTheNextPool() {
         PdfiumInstancePool.prepareCopies(3);
         assertEquals(2, PdfiumInstancePool.builder().size(2).build().size());
+    }
+
+    @Test
+    @Timeout(10)
+    void closingFailsCallersWaitingForAnInstance() throws Exception {
+        PdfiumInstancePool single = PdfiumInstancePool.builder().size(1).build();
+        PdfiumInstance only = single.acquire();
+        ExecutorService threads = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> untimed = threads.submit(() -> single.acquire());
+            Future<?> timed = threads.submit(() -> single.acquire(Duration.ofMinutes(5)));
+            while (single.waiting() < 2) {
+                Thread.onSpinWait();
+            }
+            single.close();
+            for (Future<?> waiting : List.of(untimed, timed)) {
+                ExecutionException failed = assertThrows(ExecutionException.class, waiting::get);
+                assertTrue(failed.getCause() instanceof IllegalStateException);
+            }
+            single.release(only);
+            assertThrows(IllegalStateException.class, () -> single.release(only));
+        } finally {
+            threads.shutdownNow();
+        }
     }
 }
