@@ -1063,7 +1063,10 @@ bool fontForbidsSubsetting(FT_Face face) {
         loaded < 10)
         return false;
     const uint16_t fsType = readU16BE(os2.data() + 8);
-    return (fsType & 0x0100U) != 0;
+    // 0x0002 Restricted License embedding, 0x0100 No subsetting. The Java
+    // embedder already refuses 0x0002; subsetting an already-embedded program
+    // is also a modification, so the normalizer must refuse it too.
+    return (fsType & (0x0002U | 0x0100U)) != 0;
 }
 
 bool fontHasSfntTable(FT_Face face, FT_ULong tag) {
@@ -1545,14 +1548,11 @@ std::map<uint32_t, std::vector<uint32_t>> parseToUnicode(QPDFObjectHandle const&
         return {};
     }
     if (!toUnicode.isStream()) return {};
-    try {
-        std::shared_ptr<Buffer> data = toUnicode.getStreamData(qpdf_dl_generalized);
-        if (!data || data->getSize() == 0) return {};
-        std::string_view sv(reinterpret_cast<const char*>(data->getBuffer()), data->getSize());
-        return jpdfium::font::parseToUnicodeCmap(sv, true);
-    } catch (...) {
-        return {};
-    }
+    std::shared_ptr<Buffer> data =
+        readStreamBufferBounded(toUnicode, qpdf_dl_generalized, size_t{4} * 1024U * 1024U);
+    if (!data || data->getSize() == 0) return {};
+    std::string_view sv(reinterpret_cast<const char*>(data->getBuffer()), data->getSize());
+    return jpdfium::font::parseToUnicodeCmap(sv, true);
 }
 
 std::map<uint32_t, uint32_t> parseToUnicodeSingleScalar(QPDFObjectHandle const& font) {

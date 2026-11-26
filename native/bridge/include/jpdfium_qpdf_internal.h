@@ -4,10 +4,12 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <map>
 #include <memory>
 #include <set>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -19,6 +21,7 @@ struct DocWrapper;
 
 #ifdef JPDFIUM_HAS_QPDF
 #include <qpdf/Buffer.hh>
+#include <qpdf/Pipeline.hh>
 #include <qpdf/QPDF.hh>
 #include <qpdf/QPDFExc.hh>
 #include <qpdf/QPDFObjectHandle.hh>
@@ -28,6 +31,53 @@ struct DocWrapper;
 namespace jpdfium::qpdf_detail {
 
 #ifdef JPDFIUM_HAS_QPDF
+
+constexpr size_t kMaxQpdfStreamBytes = size_t{64} * 1024U * 1024U;
+
+class BoundedBufferPipeline final : public Pipeline {
+   public:
+    BoundedBufferPipeline(char const* identifier, size_t maxBytes)
+        : Pipeline(identifier, nullptr), maxBytes_(maxBytes) {}
+
+    void write(unsigned char const* data, size_t len) override {
+        if (len > maxBytes_ - out_.size()) {
+            throw std::runtime_error("QPDF stream exceeds decompressed byte limit");
+        }
+        if (len > 0) {
+            out_.append(reinterpret_cast<char const*>(data), len);
+        }
+    }
+
+    void finish() override {}
+
+    std::shared_ptr<Buffer> takeBuffer() {
+        auto buf = std::make_shared<Buffer>(out_.size());
+        if (!out_.empty()) {
+            std::memcpy(buf->getBuffer(), out_.data(), out_.size());
+        }
+        return buf;
+    }
+
+   private:
+    size_t maxBytes_;
+    std::string out_;
+};
+
+inline std::shared_ptr<Buffer> readStreamBufferBounded(
+    QPDFObjectHandle stream, qpdf_stream_decode_level_e dl = qpdf_dl_generalized,
+    size_t maxBytes = kMaxQpdfStreamBytes) {
+    if (!stream.isStream()) return nullptr;
+    try {
+        BoundedBufferPipeline sink("qpdf-bounded", maxBytes);
+        bool filtered = false;
+        if (!stream.pipeStreamData(&sink, &filtered, 0, dl, true)) {
+            return nullptr;
+        }
+        return sink.takeBuffer();
+    } catch (std::exception const&) {
+        return nullptr;
+    }
+}
 
 struct QpdfResult {
     std::shared_ptr<Buffer> buffer;
