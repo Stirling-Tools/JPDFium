@@ -186,8 +186,39 @@ public final class PdfXConverter {
             for (int j = 0; j < BYTE_RANGE.length; j++) {
                 if (input[i + j] != BYTE_RANGE[j]) continue outer;
             }
+            if (!byteRangeArrayAt(input, i + BYTE_RANGE.length)) continue;
             throw new JPDFiumException("PDF/X conversion rewrites the document and would invalidate"
                     + " its digital signature; remove the signature first");
+        }
+    }
+
+    /** A signature /ByteRange is a direct array of four non-negative integers. */
+    private static boolean byteRangeArrayAt(byte[] input, int pos) {
+        pos = skipPdfSpace(input, pos);
+        if (pos >= input.length || input[pos] != '[') return false;
+        pos++;
+        for (int i = 0; i < 4; i++) {
+            pos = skipPdfSpace(input, pos);
+            if (pos >= input.length || input[pos] < '0' || input[pos] > '9') return false;
+            long value = 0;
+            while (pos < input.length && input[pos] >= '0' && input[pos] <= '9') {
+                value = value * 10 + (input[pos++] - '0');
+                if (value > Integer.MAX_VALUE) return false;
+            }
+        }
+        pos = skipPdfSpace(input, pos);
+        return pos < input.length && input[pos] == ']';
+    }
+
+    private static int skipPdfSpace(byte[] input, int pos) {
+        for (;;) {
+            while (pos < input.length
+                    && (input[pos] == ' ' || input[pos] == '\t' || input[pos] == '\r'
+                            || input[pos] == '\n' || input[pos] == '\f')) {
+                pos++;
+            }
+            if (pos >= input.length || input[pos] != '%') return pos;
+            while (pos < input.length && input[pos] != '\n' && input[pos] != '\r') pos++;
         }
     }
 
@@ -278,9 +309,11 @@ public final class PdfXConverter {
     }
 
     private static void applyDocumentInfo(PdfDocument document, PdfXOptions options) {
-        // ISO 15930 forbids /Trapped true in PDF/X output: the input's claim
-        // must not survive the conversion.
-        document.setTrappedFalse();
+        // PDF/X permits both /Trapped true and false. Preserve an existing true
+        // claim and normalize only absent or unknown values.
+        if (document.getTrapped() != DocBindings.PDFTRAPPED_TRUE) {
+            document.setTrappedFalse();
+        }
         if (options.standard() == PdfXStandard.PDF_X_1A || options.standard() == PdfXStandard.PDF_X_3) {
             document.setMetadata("GTS_PDFXVersion", options.standard().gtsVersion());
             if (options.standard().gtsConformance() != null) {

@@ -41,6 +41,7 @@ import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.exception.JPDFiumException;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -755,7 +756,7 @@ class PdfXConverterTest {
     }
 
     @Test
-    void trappedTrueIsResetToFalse() throws Exception {
+    void trappedTrueIsPreserved() throws Exception {
         assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
         byte[] input = Files.readAllBytes(resource("/pdfs/general/minimal.pdf"));
         byte[] withTrappedTrue;
@@ -768,12 +769,12 @@ class PdfXConverterTest {
         PdfXOptions options = PdfXOptions.builder()
                 .standard(PdfXStandard.PDF_X_4)
                 .useCompactCmyk()
-                .title("Reset Trapped")
+                .title("Preserve Trapped")
                 .build();
         byte[] out = PdfXConverter.applyMetadata(withTrappedTrue, options);
         try (PDDocument doc = Loader.loadPDF(out)) {
-            // ISO 15930 forbids /Trapped true: the conversion must reset it.
-            assertEquals("False", doc.getDocumentInformation().getTrapped());
+            // PDF/X permits both values; an existing true claim must survive.
+            assertEquals("True", doc.getDocumentInformation().getTrapped());
         }
     }
 
@@ -818,6 +819,26 @@ class PdfXConverterTest {
                 () -> PdfXConverter.applyMetadata(input, options));
         assertTrue(refused.getMessage().contains("signature"),
                 "refusal must name the signature: " + refused.getMessage());
+    }
+
+    @Test
+    void markerTextIsNotTreatedAsSignature() throws Exception {
+        assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
+        byte[] input = Files.readAllBytes(resource("/pdfs/general/minimal.pdf"));
+        byte[] withMarker;
+        try (PDDocument doc = Loader.loadPDF(input)) {
+            doc.getDocumentInformation().setSubject("Understanding /ByteRange");
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            doc.save(baos);
+            withMarker = baos.toByteArray();
+        }
+        PdfXOptions options = PdfXOptions.builder()
+                .standard(PdfXStandard.PDF_X_4)
+                .useCompactCmyk()
+                .title("Marker Text")
+                .build();
+        assertDoesNotThrow(() -> PdfXConverter.applyMetadata(withMarker, options),
+                "document text mentioning /ByteRange is not a signature");
     }
 
     @Test
