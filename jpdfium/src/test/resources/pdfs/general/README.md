@@ -10,7 +10,7 @@ From [mozilla/pdf.js](https://github.com/mozilla/pdf.js), Apache License 2.0,
 
 | File | Why it is unusual |
 |---|---|
-| `90ms_rksj_h_sample.pdf` | Adobe-Japan1 text through the predefined `90ms-RKSJ-H` CMap (`HeiseiMin-W3`); embedding must fall back to a bundled font instead of substituting the CID program |
+| `90ms_rksj_h_sample.pdf` | Adobe-Japan1 text through the predefined `90ms-RKSJ-H` CMap (`HeiseiMin-W3`); embedding must leave the font unresolved with a CID-encoding reason instead of substituting the CID program |
 | `issue11915.pdf` | Regression of [pdf.js #11915](https://github.com/mozilla/pdf.js/issues/11915), garbled display of fonts |
 | `issue13916.pdf` | Regression of [pdf.js #13916](https://github.com/mozilla/pdf.js/issues/13916), embedded font displayed with wrong (Czech) characters |
 

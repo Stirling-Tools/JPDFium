@@ -841,38 +841,38 @@ class PdfFontEmbedderTest {
     }
 
     @Test
-    void bundledFallbacksResolveKnownFamilyAliases() {
-        PdfFontEmbedder.FontStatus calibri = PdfFontEmbedder.diagnose("Calibri");
+    void bundledFallbacksResolveKnownFamilyAliases(@TempDir Path emptyDir) {
+        PdfFontEmbedder.FontStatus calibri = PdfFontEmbedder.diagnose("Calibri", emptyDir);
         assertTrue(calibri.resolved(), calibri.reason());
         assertTrue(calibri.source().endsWith("Carlito-Regular.ttf.xz"), calibri.source());
         assertEquals(0, calibri.fsType());
 
-        PdfFontEmbedder.FontStatus arialItalic = PdfFontEmbedder.diagnose("Arial-ItalicMT,Italic");
+        PdfFontEmbedder.FontStatus arialItalic = PdfFontEmbedder.diagnose("Arial-ItalicMT,Italic", emptyDir);
         assertTrue(arialItalic.resolved(), arialItalic.reason());
         assertTrue(arialItalic.source().endsWith("LiberationSans-Italic.ttf.xz"),
                 arialItalic.source());
 
-        PdfFontEmbedder.FontStatus cambria = PdfFontEmbedder.diagnose("Cambria-Bold");
+        PdfFontEmbedder.FontStatus cambria = PdfFontEmbedder.diagnose("Cambria-Bold", emptyDir);
         assertTrue(cambria.resolved(), cambria.reason());
         assertTrue(cambria.source().endsWith("Caladea-Bold.ttf.xz"), cambria.source());
 
-        PdfFontEmbedder.FontStatus simSun = PdfFontEmbedder.diagnose("SimSun");
+        PdfFontEmbedder.FontStatus simSun = PdfFontEmbedder.diagnose("SimSun", emptyDir);
         assertTrue(simSun.resolved(), simSun.reason());
         assertTrue(simSun.source().endsWith("NotoSansSC-Regular.ttf.xz"), simSun.source());
 
-        PdfFontEmbedder.FontStatus arabic = PdfFontEmbedder.diagnose("TraditionalArabic");
+        PdfFontEmbedder.FontStatus arabic = PdfFontEmbedder.diagnose("TraditionalArabic", emptyDir);
         assertTrue(arabic.resolved(), arabic.reason());
         assertTrue(arabic.source().endsWith("NotoSansArabic-Regular.ttf.xz"), arabic.source());
 
-        PdfFontEmbedder.FontStatus fangSong = PdfFontEmbedder.diagnose("\u00b7\u00c2\u00cb\u00ce_GB2312");
+        PdfFontEmbedder.FontStatus fangSong = PdfFontEmbedder.diagnose("\u00b7\u00c2\u00cb\u00ce_GB2312", emptyDir);
         assertTrue(fangSong.resolved(), fangSong.reason());
         assertTrue(fangSong.source().endsWith("NotoSansSC-Regular.ttf.xz"), fangSong.source());
 
-        PdfFontEmbedder.FontStatus swiss = PdfFontEmbedder.diagnose("SWISS_742_BOLD__TM_");
+        PdfFontEmbedder.FontStatus swiss = PdfFontEmbedder.diagnose("SWISS_742_BOLD__TM_", emptyDir);
         assertTrue(swiss.resolved(), swiss.reason());
         assertTrue(swiss.source().endsWith("LiberationSans-Bold.ttf.xz"), swiss.source());
 
-        PdfFontEmbedder.FontStatus goNoto = PdfFontEmbedder.diagnose("AGVOXM+GoNotoCurrent-Regular-Regular");
+        PdfFontEmbedder.FontStatus goNoto = PdfFontEmbedder.diagnose("AGVOXM+GoNotoCurrent-Regular-Regular", emptyDir);
         assertTrue(goNoto.resolved(), goNoto.reason());
         assertTrue(goNoto.source().endsWith("NotoSansSC-Regular.ttf.xz"), goNoto.source());
     }
