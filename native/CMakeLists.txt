@@ -297,6 +297,10 @@ if(JPDFIUM_USE_PDFIUM)
         target_include_directories(jpdfium PRIVATE "${TURBOJPEG_INCLUDE}")
         target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_TURBOJPEG=1)
         target_link_libraries(jpdfium PRIVATE "${TURBOJPEG_LIB}")
+        if(WIN32 AND VCPKG_TARGET_TRIPLET MATCHES "-jpdfium$")
+            find_library(SPNG_LIB NAMES spng_static spng libspng REQUIRED)
+            target_link_libraries(jpdfium PRIVATE "${SPNG_LIB}")
+        endif()
     endif()
 
     find_program(CARGO_CMD cargo)
@@ -404,6 +408,9 @@ if(JPDFIUM_USE_PDFIUM)
                 "C:/Strawberry/c/bin"
                 "C:/ProgramData/chocolatey/bin"
         )
+    endif()
+    if(WIN32 AND VCPKG_TARGET_TRIPLET MATCHES "-jpdfium$")
+        set(PKG_CONFIG_ARGN "--static" CACHE STRING "" FORCE)
     endif()
     find_package(PkgConfig REQUIRED)
 

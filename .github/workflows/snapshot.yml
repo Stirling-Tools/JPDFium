@@ -330,10 +330,10 @@ jobs:
           # vcpkg-install.sh adds our freetype overlay port (GitHub mirror, the
           # stock gitlab.freedesktop.org source is chronically flaky) + retries.
           if [ "${{ matrix.platform }}" = "windows-arm64" ]; then
-            TRIPLET="arm64-windows"
+            TRIPLET="arm64-windows-jpdfium"
             PLAT_GEN="ARM64"
           else
-            TRIPLET="x64-windows"
+            TRIPLET="x64-windows-jpdfium"
             PLAT_GEN="x64"
           fi
           bash native/vcpkg-install.sh \
@@ -590,6 +590,7 @@ jobs:
           # is fine because the smoke loads the freshly-built dylib on the same
           # runner. The upstream publish has the cert, so signing is enforced.
           MACOS_ALLOW_UNSIGNED: ${{ (github.event_name == 'pull_request' || secrets.MACOS_CERTIFICATE_P12_BASE64 == '') && '1' || '' }}
+          WINDOWS_ALLOW_UNSIGNED: '1'
           # Shipped jar: a platform with no size budget entry must FAIL, not
           # silently disable the gate.
           SIZE_GATE_STRICT: '1'

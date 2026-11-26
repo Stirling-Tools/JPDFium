@@ -89,6 +89,12 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Changed
 
+- Windows natives link their vcpkg dependencies statically into `jpdfium.dll`,
+  so each Windows natives jar ships about half as many DLLs (x64 32 to 16,
+  arm64 31 to 15). The Visual C++ runtime DLLs now ship as Microsoft's
+  unmodified signed files, and release builds Authenticode-sign the rest when
+  DigiCert KeyLocker credentials are configured.
+
 - Releases publish to https://maven.stirlingpdf.com first and are then mirrored
   to Maven Central. Add `maven("https://maven.stirlingpdf.com")` to your
   repositories to get a release as soon as it is out; earlier releases are there
