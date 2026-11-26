@@ -122,6 +122,10 @@ bool serializeCanonical(QPDFObjectHandle const& obj, std::string& out,
         out += "<<";
         for (auto const& [k, v] : dict.getDictAsMap()) {
             if (skipStreamLength && k == "/Length") continue;
+            // QPDF exposes decoded key bytes. Length-prefix them so a decoded
+            // key cannot collide with a differently encoded key sequence.
+            out += std::to_string(k.size());
+            out.push_back(':');
             out += k;
             out.push_back(' ');
             if (!serializeCanonical(v, out, false, depth + 1)) return false;
@@ -146,8 +150,8 @@ bool streamsEqual(QPDFObjectHandle canonical, QPDFObjectHandle candidate,
                   std::string const& canonicalDict, std::string const& candidateDict) {
     if (canonicalDict != candidateDict) return false;
     try {
-        auto a = canonical.getStreamData(qpdf_dl_none);
-        auto b = candidate.getStreamData(qpdf_dl_none);
+        auto a = canonical.getRawStreamData();
+        auto b = candidate.getRawStreamData();
         if (!a || !b) return false;
         if (a->getSize() != b->getSize()) return false;
         if (a->getSize() == 0) return true;
@@ -377,6 +381,7 @@ int dedupeResources(QPDF& qpdf) {
         // Stream buckets keyed by 64-bit digest + raw size, confirmed byte-for-byte on hit.
         std::map<std::pair<uint64_t, size_t>, std::vector<StreamEntry>> streamPool;
         std::map<QPDFObjGen, QPDFObjectHandle> redirects;
+        constexpr size_t kMaxDedupeStreamBytes = 16u * 1024u * 1024u;
 
         for (QPDFObjectHandle& obj : objects) {
             if (!obj.isInitialized() || !obj.isIndirect()) continue;
@@ -386,14 +391,20 @@ int dedupeResources(QPDF& qpdf) {
             if (obj.isStream()) {
                 std::string dictKey;
                 if (!serializeCanonical(obj, dictKey, true, 0)) continue;
+                auto declaredLength = obj.getDict().getKey("/Length");
+                if (declaredLength.isInteger() &&
+                    declaredLength.getIntValue() > static_cast<long long>(kMaxDedupeStreamBytes)) {
+                    continue;
+                }
                 std::shared_ptr<Buffer> raw;
                 try {
-                    raw = obj.getStreamData(qpdf_dl_none);
+                    raw = obj.getRawStreamData();
                 } catch (...) {
                     continue;
                 }
                 if (!raw) continue;
                 size_t rawSize = raw->getSize();
+                if (rawSize > kMaxDedupeStreamBytes) continue;
                 uint64_t digest = 14695981039346656037ULL;
                 digest = fnv1aUpdateStr(digest, dictKey);
                 digest ^= 0xffULL;

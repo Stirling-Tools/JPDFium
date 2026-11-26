@@ -11,9 +11,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <functional>
 #include <limits>
 #include <map>
+#include <memory>
 #include <set>
 #include <span>
 #include <string>
@@ -1130,18 +1132,23 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_embed_fonts_file(const char* in_path, const 
             if (!names[i] || !*names[i] || !fonts[i] || fontLens[i] <= 0) return -1;
             sources.push_back({names[i], {fonts[i], static_cast<size_t>(fontLens[i])}});
         }
-        FILE* out = jpdfium::qpdf_detail::createOutputFile(out_path);
-        if (!out) return -1;
+        std::error_code ec;
+        if (std::filesystem::exists(in_path, ec) && std::filesystem::exists(out_path, ec) &&
+            std::filesystem::equivalent(in_path, out_path, ec)) {
+            return -1;
+        }
+        FILE* raw = jpdfium::qpdf_detail::createOutputFile(out_path);
+        if (!raw) return -1;
+        std::unique_ptr<FILE, decltype(&std::fclose)> out(raw, &std::fclose);
         const bool onlyMissing = (flags & 1) != 0;
         const bool stripSignatures = (flags & 2) != 0;
         auto result = embedFonts([&](QPDF& qpdf) { qpdf.processFile(in_path); }, sources,
-                                 onlyMissing, out, false, stripSignatures);
-        const bool closed = std::fclose(out) == 0;
+                                 onlyMissing, out.get(), false, stripSignatures);
         if (result.rc != 0) {
             std::fprintf(stderr, "jpdfium qpdf embed fonts file: %s\n", result.error.c_str());
             return result.rc;
         }
-        return closed ? 0 : -1;
+        return std::fclose(out.release()) == 0 ? 0 : -1;
     } catch (...) {
         return JPDFIUM_ERR_NATIVE;
     }

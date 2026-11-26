@@ -189,8 +189,10 @@ class ImageOptimizer final : public QPDFObjectHandle::StreamDataProvider {
             hd > 65535.0) {
             return false;
         }
-        info.width = static_cast<JDIMENSION>(std::llround(wd));
-        info.height = static_cast<JDIMENSION>(std::llround(hd));
+        // The decoded sample count follows the truncated dimensions. Rounding a
+        // fractional dimension up would make Pl_DCT reject the buffer.
+        info.width = static_cast<JDIMENSION>(wd);
+        info.height = static_cast<JDIMENSION>(hd);
 
         QPDFObjectHandle colorspaceObj = dict.getKey("/ColorSpace");
         std::string colorspace = colorspaceObj.isName() ? colorspaceObj.getName() : std::string();
