@@ -2080,6 +2080,22 @@
           "void*",
           "void*"
         ]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": [
+          "void*",
+          "jlong",
+          "jint",
+          "void*",
+          "void*",
+          "jlong",
+          "void*",
+          "jlong",
+          "void*",
+          "void*",
+          "void*"
+        ]
       }
     ],
     "upcalls": [

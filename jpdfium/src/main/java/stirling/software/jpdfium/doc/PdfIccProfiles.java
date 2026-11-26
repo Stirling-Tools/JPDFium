@@ -13,6 +13,7 @@ public final class PdfIccProfiles {
 
     private static final String COMPACT_CMYK_RESOURCE = "/icc/JPDFiumCompactCmyk.icc";
     private static final String COMPACT_CMYK_V2_RESOURCE = "/icc/JPDFiumCompactCmykV2.icc";
+    private static final String SRGB_V2_RESOURCE = "/icc/JPDFiumSrgbV2.icc";
 
     private PdfIccProfiles() {}
 
@@ -34,6 +35,14 @@ public final class PdfIccProfiles {
         return Holder.COMPACT_CMYK_V2.clone();
     }
 
+    /**
+     * Bundled ICC v2.1 sRGB profile for PDF/A-1 output intents and ICCBased
+     * replacement (ISO 19005-1 requires ICC version 2 profiles).
+     */
+    public static byte[] srgbV2() {
+        return Holder.SRGB_V2.clone();
+    }
+
     private static byte[] load(String resource) {
         try (InputStream in = PdfIccProfiles.class.getResourceAsStream(resource)) {
             if (in == null) {
@@ -48,5 +57,6 @@ public final class PdfIccProfiles {
     private static final class Holder {
         private static final byte[] COMPACT_CMYK = load(COMPACT_CMYK_RESOURCE);
         private static final byte[] COMPACT_CMYK_V2 = load(COMPACT_CMYK_V2_RESOURCE);
+        private static final byte[] SRGB_V2 = load(SRGB_V2_RESOURCE);
     }
 }
