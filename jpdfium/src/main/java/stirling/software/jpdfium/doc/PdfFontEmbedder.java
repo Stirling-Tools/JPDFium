@@ -346,19 +346,21 @@ public final class PdfFontEmbedder {
         for (PdfFontAuditor.FontResource resource : resources) {
             substitutable.merge(resource.baseName(), safeToSubstitute(resource), Boolean::logicalAnd);
         }
-        List<String> missing = resources.stream()
+        List<String> allMissing = resources.stream()
                 .map(PdfFontAuditor.FontResource::baseName)
                 .distinct()
+                .toList();
+        List<String> missing = allMissing.stream()
                 .filter(name -> substitutable.getOrDefault(name, true))
                 .toList();
         Map<String, byte[]> found = programsFor(missing, fontDirs);
         if (found.isEmpty() || !QpdfLib.embedFontsToFile(input, output, found, true)) {
             Files.copy(input, output, StandardCopyOption.REPLACE_EXISTING);
-            return new FileResult(List.of(), missing);
+            return new FileResult(List.of(), allMissing);
         }
         List<String> unresolved = nonEmbedded(output);
         return new FileResult(
-                missing.stream().filter(n -> !unresolved.contains(n)).toList(), unresolved);
+                allMissing.stream().filter(n -> !unresolved.contains(n)).toList(), unresolved);
     }
 
     private static Map<String, byte[]> programsFor(List<String> missing, Path... fontDirs)
@@ -562,7 +564,14 @@ public final class PdfFontEmbedder {
                     String resource = columns[0].trim();
                     String postScriptName = columns[1].trim();
                     if (resource.isEmpty() || postScriptName.isEmpty()) continue;
-                    int fsType = columns.length > 2 ? Integer.parseInt(columns[2].trim()) : -1;
+                    int fsType = -1;
+                    if (columns.length > 2) {
+                        try {
+                            fsType = Integer.parseInt(columns[2].trim());
+                        } catch (NumberFormatException malformed) {
+                            // Unknown durability is safer than failing the whole pack.
+                        }
+                    }
                     Face face = new Face(null, "/fonts/" + resource, -1, 0, true, fsType);
                     String faceKey = key(postScriptName);
                     index.putIfAbsent(faceKey, face);
