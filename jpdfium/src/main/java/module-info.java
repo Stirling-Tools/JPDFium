@@ -28,6 +28,8 @@ module stirling.software.jpdfium {
     exports stirling.software.jpdfium.internal;
     // Image codec SPI: jpdfium-vips registers a libvips-backed implementation
     exports stirling.software.jpdfium.spi;
+    // Several PDFium engines in one JVM
+    exports stirling.software.jpdfium.instance;
 
     uses ImageCodec;
 

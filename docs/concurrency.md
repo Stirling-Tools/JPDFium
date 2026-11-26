@@ -1,6 +1,6 @@
 # Concurrency
 
-PDFium calls are serialized within each process. Adding threads does not parallelize PDFium rendering, although non-PDFium work may overlap.
+PDFium calls are serialized within each loaded copy of PDFium. Adding threads does not parallelize PDFium rendering, although non-PDFium work may overlap; to run PDFium on several cores, see [Several PDFium instances in one process](#several-pdfium-instances-in-one-process).
 
 ## Rules
 
@@ -57,9 +57,33 @@ Negative values are rejected as invalid configuration rather than treated as unl
 
 See [configuration.md](configuration.md) for the full list.
 
+## Several PDFium instances in one process
+
+`PdfiumInstancePool` loads independent copies of PDFium in one JVM, so native work runs on several cores without a JVM per engine. Each isolated instance has its own class loader, its own copy of JPDFium's classes and lock, and its own renamed copy of the native libraries.
+
+```java
+PdfiumInstancePool pool = PdfiumInstancePool.builder()
+        .size(4)                         // instance 0 plus 3 isolated instances
+        .isolate("com.example.pdfjobs.") // your classes that use JPDFium types
+        .build();
+
+String text = (String) pool.call("com.example.pdfjobs.ExtractText", pdfBytes);
+```
+
+A task is a class under an isolated package that implements `Function<Object, Object>` and has a public no-argument constructor. Inputs and results must be JDK types, because JPDFium types from one instance are different classes in another. Instance 0 is the caller's own JPDFium and shares its lock with any other JPDFium use in the JVM.
+
+What to know before using it:
+
+- **A crash in any instance ends the process.** Host the pool in a worker process when a damaged document must not take anything else down.
+- **Linux and macOS only.** On Windows `PdfiumInstancePool.maxInstances()` is 1.
+- **Natives must load from the classpath bundle.** Each instance needs a directory it can copy; a library found through `System.loadLibrary` has none.
+- **Each instance copies the bundle once** into `instance-NNN` inside the native cache entry (about 33 MB on Linux), renaming every library except PartitionAlloc, which must stay single per process. The copies are owner-only like the entry, removed with it, and reused across runs only while their recorded SHA-256 hashes match (`-Djpdfium.native.verify=marker` skips the hashing, as for the cache). Concurrent processes preparing the same copy wait on a file lock. On macOS each copy is re-signed ad hoc with `/usr/bin/codesign`.
+- **Instance numbers are unique per process**, up to 999, because the JVM refuses to load one library file in two class loaders.
+- The pool checks that each instance's bridge and bindings resolved PDFium to its own copy, and on Linux that `/proc/self/maps` shows no PDFium or bridge outside the cache entry and every renamed library inside its own instance directory. It fails the build otherwise.
+
 ## Scaling beyond one process
 
-To use more than one core for native work, run bounded worker processes, each with its own JVM and documents.
+To use more than one core for native work without sharing a process, run bounded worker processes, each with its own JVM and documents. A worker process can itself host a `PdfiumInstancePool`.
 
 ## Cancellation
 

@@ -7,6 +7,7 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.lang.foreign.MemorySegment;
 import java.lang.foreign.SymbolLookup;
 import java.net.MalformedURLException;
 import java.net.URL;
@@ -23,6 +24,7 @@ import org.tukaani.xz.XZInputStream;
 public final class NativeLoader {
 
     private static volatile boolean loaded = false;
+    private static volatile Path loadedDirectory;
 
     /**
      * Classpath for a Maven-downloaded natives jar. Consulted only when the
@@ -316,9 +318,60 @@ public final class NativeLoader {
             }
             System.load(bridge.toAbsolutePath().toString());
             verifyBridgeAbi();
+            loadedDirectory = tmpDir.toAbsolutePath();
         } catch (IOException e) {
             throw new NativeLoadException("Failed to extract native library", e);
         }
+    }
+
+    /**
+     * Directory the natives were loaded from in this class loader, or null when they came
+     * from {@code System.loadLibrary} and so have no directory of their own. Loads them first.
+     */
+    public static Path loadedDirectory() {
+        ensureLoaded();
+        return loadedDirectory;
+    }
+
+    /**
+     * Loads this class loader's natives from a prepared PDFium and bridge pair instead of the
+     * classpath. For {@code PdfiumInstancePool}: the pair must carry library names no other
+     * loaded copy uses, or the bridge binds to that copy's PDFium.
+     *
+     * @throws IllegalStateException if natives are already loaded in this class loader
+     */
+    public static synchronized void loadPrepared(Path pdfium, Path bridge) {
+        if (loaded) {
+            throw new IllegalStateException("PDFium natives are already loaded in this class loader");
+        }
+        try {
+            System.load(pdfium.toAbsolutePath().toString());
+            System.load(bridge.toAbsolutePath().toString());
+            // The ABI check initialises JpdfiumLib, which calls ensureLoaded(); marked loaded
+            // first, that call returns instead of loading the classpath natives as well.
+            loadedDirectory = bridge.toAbsolutePath().getParent();
+            loaded = true;
+            verifyBridgeAbi();
+        } catch (Throwable t) {
+            loaded = false;
+            loadError = t;
+            throw (t instanceof NativeLoadException nle) ? nle
+                    : new NativeLoadException("Failed to load prepared native library", t);
+        }
+    }
+
+    /**
+     * Address this class loader's bindings resolve {@code symbol} to, or 0 if they do not. Lets a
+     * caller check which loaded copy of PDFium a class loader is bound to.
+     */
+    public static long boundAddress(String symbol) {
+        ensureLoaded();
+        return SymbolLookup.loaderLookup().find(symbol).map(MemorySegment::address).orElse(0L);
+    }
+
+    /** File name of a native library on this platform, e.g. {@code libpdfium.so}. */
+    public static String libraryFileName(String lib) {
+        return nativeFilename(lib);
     }
 
     private static List<String> readLibraryIndex(String resource, boolean requireSupplemental)
