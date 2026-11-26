@@ -20,6 +20,13 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Added
 
+- `PdfiumInstancePool`: several independent PDFium engines in one JVM, each
+  with its own class loader and renamed copy of the natives, so native work
+  runs in parallel. Linux and macOS. See [concurrency.md](docs/concurrency.md).
+
+- `NativeLoader.loadedDirectory()`, `loadPrepared(Path, Path)` and
+  `libraryFileName(String)` for loading a prepared copy of the natives.
+
 - `PdfXOptions.neutralsToBlack(boolean)`, on by default, maps neutral RGB
   vector colours to K only instead of four-colour black.
 
