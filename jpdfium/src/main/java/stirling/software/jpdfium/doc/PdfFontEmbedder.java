@@ -257,7 +257,16 @@ public final class PdfFontEmbedder {
             statuses.add(new FontStatus(name, source(face), face.fsType(), true, "embedded"));
         }
         byte[] out = found.isEmpty() ? null : QpdfLib.embedFonts(pdf, found, true);
-        if (out == null) return new Result(pdf, List.of(), missing, statuses);
+        if (out == null) {
+            List<FontStatus> unchanged = new ArrayList<>(statuses.size());
+            for (FontStatus status : statuses) {
+                unchanged.add(status.resolved()
+                        ? new FontStatus(status.baseName(), status.source(), status.fsType(), false,
+                                "native embedder left the font unchanged")
+                        : status);
+            }
+            return new Result(pdf, List.of(), missing, unchanged);
+        }
         List<String> unresolved = PdfFontAuditor.unembeddedNames(out);
         List<FontStatus> finalStatuses = new ArrayList<>(statuses.size());
         for (FontStatus status : statuses) {
@@ -332,7 +341,16 @@ public final class PdfFontEmbedder {
     /** File-backed variant that lets native qpdf read the input and write the output. */
     public static FileResult embedMissingTo(Path input, Path output, Path... fontDirs)
             throws IOException {
-        List<String> missing = nonEmbedded(input);
+        List<PdfFontAuditor.FontResource> resources = resources(input);
+        Map<String, Boolean> substitutable = new HashMap<>();
+        for (PdfFontAuditor.FontResource resource : resources) {
+            substitutable.merge(resource.baseName(), safeToSubstitute(resource), Boolean::logicalAnd);
+        }
+        List<String> missing = resources.stream()
+                .map(PdfFontAuditor.FontResource::baseName)
+                .distinct()
+                .filter(name -> substitutable.getOrDefault(name, true))
+                .toList();
         Map<String, byte[]> found = programsFor(missing, fontDirs);
         if (found.isEmpty() || !QpdfLib.embedFontsToFile(input, output, found, true)) {
             Files.copy(input, output, StandardCopyOption.REPLACE_EXISTING);
@@ -360,23 +378,31 @@ public final class PdfFontEmbedder {
     }
 
     private static List<String> nonEmbedded(Path pdf) {
+        return resources(pdf).stream()
+                .map(PdfFontAuditor.FontResource::baseName)
+                .distinct()
+                .toList();
+    }
+
+    private static List<PdfFontAuditor.FontResource> resources(Path pdf) {
         try (PdfDocument doc = PdfDocument.open(pdf)) {
             if (PdfFontAuditor.inventoryAvailable()) {
                 List<PdfFontAuditor.FontResource> all = PdfFontAuditor.inventory(doc);
                 if (!all.isEmpty()) {
-                    List<String> names = new ArrayList<>();
+                    List<PdfFontAuditor.FontResource> resources = new ArrayList<>();
                     for (PdfFontAuditor.FontResource resource : all) {
-                        if (resource.baseName().isEmpty() || resource.embedded()
-                                || "Type3".equals(resource.subtype())) {
-                            continue;
+                        if (!resource.baseName().isEmpty() && !resource.embedded()
+                                && !"Type3".equals(resource.subtype())) {
+                            resources.add(resource);
                         }
-                        names.add(resource.baseName());
                     }
-                    return names.stream().distinct().toList();
+                    return resources;
                 }
             }
             return PdfFontAuditor.audit(doc).nonEmbeddedFonts().stream()
-                    .map(PdfFontAuditor.FontInfo::baseName).distinct().toList();
+                    .map(font -> new PdfFontAuditor.FontResource(
+                            font.baseName(), "", "", false, false, false, false, "", Set.of(), ""))
+                    .toList();
         }
     }
 
@@ -569,16 +595,21 @@ public final class PdfFontEmbedder {
                 // the index so diagnose() can say why it was rejected.
                 boolean embeddable = (fsType & 0xF) != 2 && (fsType & 0x0200) == 0;
                 for (String name : names(b, offset)) {
-                    index.putIfAbsent(
+                    Face candidate = new Face(
+                            path,
+                            null,
+                            collection ? offset : -1,
+                            size,
+                            mtime,
+                            embeddable,
+                            fsType);
+                    index.merge(
                             key(name),
-                            new Face(
-                                    path,
-                                    null,
-                                    collection ? offset : -1,
-                                    size,
-                                    mtime,
-                                    embeddable,
-                                    fsType));
+                            candidate,
+                            (existing, replacement) ->
+                                    existing.embeddable() || !replacement.embeddable()
+                                            ? existing
+                                            : replacement);
                 }
             }
         } catch (IOException | RuntimeException ignored) {
@@ -648,6 +679,7 @@ public final class PdfFontEmbedder {
                 if (raced != null) return raced;
                 PROGRAMS.put(face, data);
                 programBytes += data.length;
+                evictPrograms();
             }
             return data;
         }
@@ -676,15 +708,20 @@ public final class PdfFontEmbedder {
             if (raced != null) return raced;
             PROGRAMS.put(key, data);
             programBytes += data.length;
-            Iterator<Map.Entry<Face, byte[]>> it = PROGRAMS.entrySet().iterator();
-            while (it.hasNext()
-                    && (PROGRAMS.size() > MAX_PROGRAMS || programBytes > MAX_PROGRAM_BYTES)) {
-                Map.Entry<Face, byte[]> eldest = it.next();
-                programBytes -= eldest.getValue().length;
-                it.remove();
-            }
+            evictPrograms();
         }
         return data;
+    }
+
+    /** Enforce the shared program-cache limits after either insertion path. */
+    private static void evictPrograms() {
+        Iterator<Map.Entry<Face, byte[]>> it = PROGRAMS.entrySet().iterator();
+        while (it.hasNext()
+                && (PROGRAMS.size() > MAX_PROGRAMS || programBytes > MAX_PROGRAM_BYTES)) {
+            Map.Entry<Face, byte[]> eldest = it.next();
+            programBytes -= eldest.getValue().length;
+            it.remove();
+        }
     }
 
     private static byte[] singleFace(byte[] data, String name) {
