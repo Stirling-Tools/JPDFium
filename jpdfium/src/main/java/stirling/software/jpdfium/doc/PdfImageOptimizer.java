@@ -978,7 +978,7 @@ public final class PdfImageOptimizer {
             int pixels = width * height;
             MemorySegment buf = bufferSeg.reinterpret((long) stride * height);
 
-            // Fast path: an int-backed raster whose stride equals the width — ARGB is byte-identical
+            // Fast path: an int-backed raster whose stride equals the width -- ARGB is byte-identical
             // to little-endian BGRx, so rows copy directly.
             if (bpp == 4 && img.getType() != BufferedImage.TYPE_CUSTOM
                     && img.getRaster().getDataBuffer() instanceof DataBufferInt dbi
