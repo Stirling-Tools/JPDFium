@@ -365,10 +365,8 @@ public final class PdfFontEmbedder {
             throws IOException {
         List<PdfFontAuditor.FontResource> resources =
                 PdfFontAuditor.unembeddedResources(input);
-        Set<String> names = new LinkedHashSet<>();
         Map<String, Boolean> substitutable = new HashMap<>();
         for (PdfFontAuditor.FontResource resource : resources) {
-            names.add(resource.baseName());
             substitutable.merge(resource.baseName(), safeToSubstitute(resource), Boolean::logicalAnd);
         }
         List<String> allMissing = resources.stream()
