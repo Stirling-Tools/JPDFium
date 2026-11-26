@@ -13,43 +13,68 @@ def hex4(value: str) -> int:
     return int(value, 16)
 
 
+def reject_inherited_cmap(path: Path, text: str):
+    if re.search(r"(?m)^\s*\S+\s+usecmap\b", text):
+        raise SystemExit(f"{path}: inherited CMaps (usecmap) are not supported")
+
+
 def parse_cid_ranges(path: Path):
     text = path.read_text(encoding="latin-1")
+    reject_inherited_cmap(path, text)
     ranges = []
     for block in re.finditer(r"begincidrange(.*?)endcidrange", text, re.S):
         for line in block.group(1).splitlines():
             m = re.match(r"\s*<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]+)>\s+(\d+)", line)
             if m:
-                ranges.append((hex4(m.group(1)), hex4(m.group(2)), int(m.group(3))))
+                lo, hi = hex4(m.group(1)), hex4(m.group(2))
+                if lo > 0xFFFF or hi > 0xFFFF or hi < lo:
+                    raise SystemExit(f"{path}: source code outside the 16-bit table")
+                ranges.append((lo, hi, int(m.group(3))))
     for block in re.finditer(r"begincidchar(.*?)endcidchar", text, re.S):
         for line in block.group(1).splitlines():
             m = re.match(r"\s*<([0-9a-fA-F]+)>\s+(\d+)", line)
             if m:
                 code = hex4(m.group(1))
+                if code > 0xFFFF:
+                    raise SystemExit(f"{path}: source code outside the 16-bit table")
                 ranges.append((code, code, int(m.group(2))))
     return ranges
 
 
+def decode_utf16be(value: int):
+    if value <= 0xFFFF:
+        return value
+    if value <= 0xFFFFFFFF:
+        high, low = value >> 16, value & 0xFFFF
+        if 0xD800 <= high <= 0xDBFF and 0xDC00 <= low <= 0xDFFF:
+            return 0x10000 + ((high - 0xD800) << 10) + (low - 0xDC00)
+    return None
+
+
 def parse_unicode_ranges(path: Path):
     text = path.read_text(encoding="latin-1")
+    reject_inherited_cmap(path, text)
     pairs = []
     for block in re.finditer(r"beginbfchar(.*?)endbfchar", text, re.S):
         for line in block.group(1).splitlines():
             m = re.match(r"\s*<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]+)>", line)
             if m:
-                pairs.append((hex4(m.group(1)), hex4(m.group(2))))
+                pairs.append((hex4(m.group(1)), decode_utf16be(hex4(m.group(2)))))
     for block in re.finditer(r"beginbfrange(.*?)endbfrange", text, re.S):
         for line in block.group(1).splitlines():
             m = re.match(
                 r"\s*<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]+)>", line
             )
             if m:
-                lo, hi, start = hex4(m.group(1)), hex4(m.group(2)), hex4(m.group(3))
+                lo, hi = hex4(m.group(1)), hex4(m.group(2))
+                start = decode_utf16be(hex4(m.group(3)))
+                if start is None or hi < lo:
+                    continue
                 for offset in range(hi - lo + 1):
                     pairs.append((lo + offset, start + offset))
     merged = {}
     for cid, unicode in pairs:
-        if 0 <= unicode <= 0x10FFFF and not 0xD800 <= unicode <= 0xDFFF:
+        if unicode is not None and 0 <= unicode <= 0x10FFFF and not 0xD800 <= unicode <= 0xDFFF:
             merged[cid] = unicode
     return sorted(merged.items())
 
