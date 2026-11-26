@@ -55,7 +55,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
-      - uses: DavidAnson/markdownlint-cli2-action@af945fe9405afdb987c36b20a02429e7b8509fe4 # v24.2.0
+      - uses: DavidAnson/markdownlint-cli2-action@6a36cdda56ff94d520af0c222558b603f6610c3e # v24.2.0
         with:
           globs: 'README.md,CONTRIBUTING.md,docs/**/*.md'
 
