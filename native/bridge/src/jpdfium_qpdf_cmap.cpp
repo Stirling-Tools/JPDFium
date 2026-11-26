@@ -808,17 +808,15 @@ void scanContentStreamImpl(std::string_view data, QPDFObjectHandle const& resour
                     // Inherit caller resources when Form XObject omits its own /Resources.
                     auto formResources = form.getDict().getKey("/Resources");
                     if (!formResources.isDictionary()) formResources = resources;
-                    try {
-                        auto formData = form.getStreamData(qpdf_dl_generalized);
-                        if (formData && formData->getSize()) {
-                            std::string_view content(
-                                reinterpret_cast<char const*>(formData->getBuffer()),
-                                formData->getSize());
-                            scanContentStreamImpl(content, formResources, state, ctx, depth + 1);
-                            scanResourceStreamsImpl(formResources, ctx, depth + 1);
-                        }
-                    } catch (...) {
+                    auto formData = readStreamBufferBounded(form, qpdf_dl_generalized);
+                    if (!formData) {
                         ctx.complete = false;
+                    } else if (formData->getSize() > 0) {
+                        std::string_view content(
+                            reinterpret_cast<char const*>(formData->getBuffer()),
+                            formData->getSize());
+                        scanContentStreamImpl(content, formResources, state, ctx, depth + 1);
+                        scanResourceStreamsImpl(formResources, ctx, depth + 1);
                     }
                     if (tracked) ctx.seenStreams.erase(visitKey);
                 }
@@ -833,8 +831,9 @@ void scanContentStreamImpl(std::string_view data, QPDFObjectHandle const& resour
     if (lexer.malformed || lexer.pos < lexer.data.size()) ctx.complete = false;
 }
 
-void scanStreamWithResources(QPDFObjectHandle stream, QPDFObjectHandle const& fallbackResources,
-                             FontScanContext& ctx, int depth) {
+void scanStreamWithResources(QPDFObjectHandle const& stream,
+                             QPDFObjectHandle const& fallbackResources, FontScanContext& ctx,
+                             int depth) {
     if (!stream.isStream() || ctx.budget <= 0) {
         if (ctx.budget <= 0) ctx.complete = false;
         return;
@@ -845,16 +844,13 @@ void scanStreamWithResources(QPDFObjectHandle stream, QPDFObjectHandle const& fa
     if (!ctx.tryEnterStream(emptyState, stream, visitKey, tracked)) return;
     auto streamResources = stream.getDict().getKey("/Resources");
     if (!streamResources.isDictionary()) streamResources = fallbackResources;
-    try {
-        auto data = stream.getStreamData(qpdf_dl_generalized);
-        if (data && data->getSize()) {
-            std::string_view content(reinterpret_cast<char const*>(data->getBuffer()),
-                                     data->getSize());
-            scanContentStreamImpl(content, streamResources, emptyState, ctx, depth);
-            scanResourceStreamsImpl(streamResources, ctx, depth);
-        }
-    } catch (...) {
+    auto data = readStreamBufferBounded(stream, qpdf_dl_generalized);
+    if (!data) {
         ctx.complete = false;
+    } else if (data->getSize() > 0) {
+        std::string_view content(reinterpret_cast<char const*>(data->getBuffer()), data->getSize());
+        scanContentStreamImpl(content, streamResources, emptyState, ctx, depth);
+        scanResourceStreamsImpl(streamResources, ctx, depth);
     }
     if (tracked) ctx.seenStreams.erase(visitKey);
 }
@@ -920,15 +916,14 @@ void scanDocumentStreams(QPDF& qpdf, FontScanContext& ctx) {
 
             constexpr size_t kMaxPageContent = size_t{64} * 1024u * 1024u;
             if (streams.size() == 1 && streams[0].isStream()) {
-                try {
-                    auto data = streams[0].getStreamData(qpdf_dl_generalized);
-                    if (data && data->getSize()) {
-                        std::string_view content(reinterpret_cast<char const*>(data->getBuffer()),
-                                                 data->getSize());
-                        scanContentStreamImpl(content, resources, FontScanState{}, ctx, 0);
-                    }
-                } catch (...) {
+                auto data =
+                    readStreamBufferBounded(streams[0], qpdf_dl_generalized, kMaxPageContent);
+                if (!data) {
                     ctx.complete = false;
+                } else if (data->getSize() > 0) {
+                    std::string_view content(reinterpret_cast<char const*>(data->getBuffer()),
+                                             data->getSize());
+                    scanContentStreamImpl(content, resources, FontScanState{}, ctx, 0);
                 }
             } else {
                 std::string pageContent;
@@ -938,31 +933,31 @@ void scanDocumentStreams(QPDF& qpdf, FontScanContext& ctx) {
                         ctx.complete = false;
                         break;
                     }
-                    try {
-                        auto data = stream.getStreamData(qpdf_dl_generalized);
-                        if (data && data->getSize()) {
-                            size_t separator = pageContent.empty() ? 0 : 1;
-                            if (bytes > kMaxPageContent || separator > kMaxPageContent - bytes ||
-                                data->getSize() > kMaxPageContent - bytes - separator) {
-                                ctx.complete = false;
-                                break;
-                            }
-                            // PDFium joins a /Contents stream array by inserting
-                            // one space after each stream (CPDF_ContentParser::
-                            // PrepareContent). Match that byte exactly: a '\n'
-                            // here would terminate a comment early or place 0x0A
-                            // where the renderer places 0x20 inside a literal
-                            // string split across the seam, so the scan would
-                            // predict CIDs the renderer never draws and drop
-                            // drawn glyphs from subsets.
-                            if (separator) pageContent.push_back(' ');
-                            pageContent.append(reinterpret_cast<char const*>(data->getBuffer()),
-                                               data->getSize());
-                            bytes += data->getSize() + separator;
-                        }
-                    } catch (...) {
+                    auto data = readStreamBufferBounded(stream, qpdf_dl_generalized,
+                                                        kMaxPageContent - bytes);
+                    if (!data) {
                         ctx.complete = false;
                         break;
+                    }
+                    if (data->getSize() > 0) {
+                        size_t separator = pageContent.empty() ? 0 : 1;
+                        if (bytes > kMaxPageContent || separator > kMaxPageContent - bytes ||
+                            data->getSize() > kMaxPageContent - bytes - separator) {
+                            ctx.complete = false;
+                            break;
+                        }
+                        // PDFium joins a /Contents stream array by inserting
+                        // one space after each stream (CPDF_ContentParser::
+                        // PrepareContent). Match that byte exactly: a '\n'
+                        // here would terminate a comment early or place 0x0A
+                        // where the renderer places 0x20 inside a literal
+                        // string split across the seam, so the scan would
+                        // predict CIDs the renderer never draws and drop
+                        // drawn glyphs from subsets.
+                        if (separator) pageContent.push_back(' ');
+                        pageContent.append(reinterpret_cast<char const*>(data->getBuffer()),
+                                           data->getSize());
+                        bytes += data->getSize() + separator;
                     }
                 }
                 if (!pageContent.empty()) {
