@@ -39,25 +39,36 @@ namespace {
 // truncate the link target. O_EXCL|O_NOFOLLOW (and _O_EXCL on Windows, where
 // MSVCRT has no no-follow open flag) turns that into a failed open instead,
 // and every failure here fails the save closed via JPDFIUM_ERR_IO.
-FILE* safe_fopen_write(const char* path) {
+FILE* safe_fopen_write(const char* path, int* outErrno = nullptr) {
 #if defined(_WIN32)
     // _O_BINARY is required: the CRT default is text mode, and _fdopen's "wb"
     // does not switch an already-open descriptor, so every LF in the PDF got a
     // CR inserted. That shifted every offset past the first stream newline, so
     // readers mis-resolved objects and content streams came back empty.
     int fd = -1;
-    if (::_sopen_s(&fd, path, _O_WRONLY | _O_CREAT | _O_EXCL | _O_NOINHERIT | _O_BINARY, _SH_DENYRW,
-                   _S_IREAD | _S_IWRITE) != 0) {
+    errno_t err = ::_sopen_s(&fd, path, _O_WRONLY | _O_CREAT | _O_EXCL | _O_NOINHERIT | _O_BINARY,
+                             _SH_DENYRW, _S_IREAD | _S_IWRITE);
+    if (err != 0) {
+        if (outErrno) *outErrno = err;
         return nullptr;
     }
     FILE* f = ::_fdopen(fd, "wb");
-    if (!f) ::_close(fd);
+    if (!f) {
+        if (outErrno) *outErrno = errno;
+        ::_close(fd);
+    }
     return f;
 #else
     int fd = ::open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_TRUNC, 0600);
-    if (fd < 0) return nullptr;
+    if (fd < 0) {
+        if (outErrno) *outErrno = errno;  // NOLINT(clang-analyzer-unix.Errno)
+        return nullptr;
+    }
     FILE* f = ::fdopen(fd, "wb");
-    if (!f) ::close(fd);
+    if (!f) {
+        if (outErrno) *outErrno = errno;  // NOLINT(clang-analyzer-unix.Errno)
+        ::close(fd);
+    }
     return f;
 #endif
 }
@@ -94,9 +105,10 @@ constexpr int kStagingOpenAttempts = 32;
 FILE* open_staging_sibling(const char* path, std::string& stagingOut) {
     for (int attempt = 0; attempt < kStagingOpenAttempts; ++attempt) {
         stagingOut = staging_sibling(path);
-        FILE* f = safe_fopen_write(stagingOut.c_str());
+        int openErr = 0;
+        FILE* f = safe_fopen_write(stagingOut.c_str(), &openErr);
         if (f) return f;
-        if (errno != EEXIST) return nullptr;
+        if (openErr != EEXIST) return nullptr;
     }
     return nullptr;
 }
@@ -261,20 +273,23 @@ int32_t streamDocumentToStaging(FPDF_DOCUMENT doc, const char* path, int64_t max
 
 }  // namespace
 
-bool g_jpdfiumUseSkia = false;
+std::atomic<bool> g_jpdfiumUseSkia{false};
 
 namespace {
-bool g_libraryInitialized = false;
-}
+std::atomic<bool> g_libraryInitialized{false};
+std::mutex g_libraryInitMutex;
+}  // namespace
 
 int jpdfium_init_library(int renderer) {
     // Re-initialising would reset g_jpdfiumUseSkia while PDFium keeps the
     // renderer it was configured with, so the first selection wins.
-    if (g_libraryInitialized) return JPDFIUM_OK;
+    if (g_libraryInitialized.load(std::memory_order_acquire)) return JPDFIUM_OK;
     if (renderer != JPDFIUM_RENDERER_AUTO && renderer != JPDFIUM_RENDERER_AGG &&
         renderer != JPDFIUM_RENDERER_SKIA) {
         return JPDFIUM_ERR_INVALID;
     }
+    std::lock_guard<std::mutex> lock(g_libraryInitMutex);
+    if (g_libraryInitialized.load(std::memory_order_acquire)) return JPDFIUM_OK;
 #ifdef JPDFIUM_HAS_SKIA
     // AUTO (-1) and SKIA (1) both pick Skia; AGG (0) forces the legacy path.
     bool useSkia = renderer != JPDFIUM_RENDERER_AGG;
@@ -282,19 +297,19 @@ int jpdfium_init_library(int renderer) {
     config.version = 4;
     config.m_RendererType = useSkia ? FPDF_RENDERERTYPE_SKIA : FPDF_RENDERERTYPE_AGG;
     FPDF_InitLibraryWithConfig(&config);
-    g_jpdfiumUseSkia = useSkia;
+    g_jpdfiumUseSkia.store(useSkia, std::memory_order_release);
 #else
     // Selecting Skia from a build without it crashes PDFium, so refuse.
     if (renderer == JPDFIUM_RENDERER_SKIA) return JPDFIUM_ERR_INVALID;
     FPDF_InitLibrary();
-    g_jpdfiumUseSkia = false;
+    g_jpdfiumUseSkia.store(false, std::memory_order_release);
 #endif
-    g_libraryInitialized = true;
+    g_libraryInitialized.store(true, std::memory_order_release);
     return JPDFIUM_OK;
 }
 
 void jpdfium_ensure_library() {
-    if (!g_libraryInitialized) {
+    if (!g_libraryInitialized.load(std::memory_order_acquire)) {
         jpdfium_init_library(JPDFIUM_RENDERER_AUTO);
     }
 }
@@ -327,7 +342,7 @@ int64_t jpdfium_abi_query(int32_t query) JPDFIUM_NOEXCEPT {
             return static_cast<int64_t>(sizeof(FS_MATRIX));
         case JPDFIUM_ABI_QUERY_FILEWRITE_SIZE:
             return static_cast<int64_t>(sizeof(FPDF_FILEWRITE));
-        case JPDFIUM_ABI_QUERY_FILEWRITE_VERSION:
+        case JPDFIUM_ABI_QUERY_FILEWRITE_VERSION:  // NOLINT(bugprone-branch-clone)
             // FPDF_FILEWRITE.version must be 1 per fpdf_save.h; the save path
             // sets it explicitly and the handshake pins the expected value.
             return 1;
@@ -353,13 +368,17 @@ int32_t jpdfium_init_ex(int32_t renderer) noexcept {
 }
 
 int32_t jpdfium_active_renderer() noexcept {
-    return g_jpdfiumUseSkia ? JPDFIUM_RENDERER_SKIA : JPDFIUM_RENDERER_AGG;
+    return g_jpdfiumUseSkia.load(std::memory_order_acquire) ? JPDFIUM_RENDERER_SKIA
+                                                            : JPDFIUM_RENDERER_AGG;
 }
 
 void jpdfium_destroy() noexcept {
-    FPDF_DestroyLibrary();
-    g_libraryInitialized = false;
-    g_jpdfiumUseSkia = false;
+    std::lock_guard<std::mutex> lock(g_libraryInitMutex);
+    if (g_libraryInitialized.load(std::memory_order_acquire)) {
+        FPDF_DestroyLibrary();
+        g_libraryInitialized.store(false, std::memory_order_release);
+        g_jpdfiumUseSkia.store(false, std::memory_order_release);
+    }
 }
 
 int32_t jpdfium_doc_create(int64_t* handle) {
@@ -764,6 +783,7 @@ int32_t jpdfium_page_open(int64_t doc, int32_t idx, int64_t* handle) {
 
         auto* pw = new PageWrapper(page, w->core->doc, idx, w->core);
         PageHandleRegistry::instance().add(pw);
+        // NOLINTNEXTLINE(clang-analyzer-cplusplus.NewDeleteLeaks) -- owned by PageHandleRegistry
         *handle = encodeHandle(pw);
         return JPDFIUM_OK;
 
@@ -829,7 +849,8 @@ void jpdfium_page_close(int64_t page) noexcept {
         }
     }
     PageHandleRegistry::instance().remove(pw);
-    delete pw;
+    delete pw;  // NOLINT(clang-analyzer-cplusplus.NewDelete) -- validated via
+                // PageHandleRegistry::contains
 }
 
 // JSON report of the last sanitize stage ("" when none has run).

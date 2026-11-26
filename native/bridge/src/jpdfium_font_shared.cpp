@@ -312,7 +312,7 @@ std::string buildFormat4Cmap(std::map<uint32_t, uint16_t> const& mapping) {
 }
 
 struct SfntTable {
-    char tag[4];
+    char tag[4]{};
     std::string data;
 };
 
@@ -369,7 +369,7 @@ bool ensureSfntCmapSubtable(std::string& sfnt, uint16_t platform, uint16_t encod
     writeU16BE(c + 4, platform);
     writeU16BE(c + 6, encoding);
     writeU32BE(c + 8, 12);
-    std::memcpy(c + 12, subtable.data(), subtable.size());
+    std::copy(subtable.begin(), subtable.end(), cmap.begin() + 12);
 
     bool replaced = false;
     for (auto& t : tables) {
@@ -419,7 +419,8 @@ bool ensureSfntCmapSubtable(std::string& sfnt, uint16_t platform, uint16_t encod
         writeU32BE(o + entry + 12, static_cast<uint32_t>(tables[i].data.size()));
         if (std::memcmp(tables[i].tag, "head", 4) == 0) headOffset = offsets[i];
         if (!tables[i].data.empty())
-            std::memcpy(o + offsets[i], tables[i].data.data(), tables[i].data.size());
+            std::copy(tables[i].data.begin(), tables[i].data.end(),
+                      out.begin() + static_cast<std::ptrdiff_t>(offsets[i]));
     }
     if (headOffset && headOffset + 12 <= out.size()) writeU32BE(o + headOffset + 8, 0);
     for (size_t i = 0; i < n; ++i) {
@@ -1459,6 +1460,7 @@ std::string buildFormat4CmapTable(uint16_t numGlyphs,
 
     const size_t segCount = segs.size();
     const size_t fmt4Len = 16 + segCount * 8;
+    if (fmt4Len > 0xFFFFU) return {};
     std::string cmapTable(12 + fmt4Len, '\0');
     auto* cm = reinterpret_cast<uint8_t*>(cmapTable.data());
     writeU16BE(cm + 0, 0);
@@ -1765,31 +1767,40 @@ bool visitStreamDepth(std::map<QPDFObjGen, int>& seenStreams, QPDFObjectHandle c
     return true;
 }
 
-void collectResourceFonts(QPDFObjectHandle const& resources, int depth,
-                          std::set<QPDFObjGen>& seenResources, std::set<QPDFObjGen>& seenFonts,
-                          std::map<QPDFObjGen, int>& seenStreams,
-                          std::vector<QPDFObjectHandle>& fonts) {
-    if (!resources.isDictionary() || depth > 32) return;
+namespace {
+
+constexpr size_t kMaxFontResourceNodes = 65536;
+
+void collectResourceFontsBounded(QPDFObjectHandle const& resources, int depth,
+                                 std::set<QPDFObjGen>& seenResources,
+                                 std::set<QPDFObjGen>& seenFonts,
+                                 std::map<QPDFObjGen, int>& seenStreams,
+                                 std::vector<QPDFObjectHandle>& fonts, size_t& nodeCount) {
+    if (!resources.isDictionary() || depth > 32 || nodeCount >= kMaxFontResourceNodes) return;
     if (resources.isIndirect() && !seenResources.insert(resources.getObjGen()).second) return;
+    ++nodeCount;
 
     QPDFObjectHandle fontDict = resources.getKey("/Font");
     if (fontDict.isDictionary()) {
         for (auto const& name : fontDict.getKeys()) {
+            if (nodeCount >= kMaxFontResourceNodes) return;
             QPDFObjectHandle font = fontDict.getKey(name);
             if (!font.isDictionary()) continue;
             if (font.isIndirect() && !seenFonts.insert(font.getObjGen()).second) continue;
             fonts.push_back(font);
             if (font.getKey("/Subtype").isNameAndEquals("/Type3")) {
-                collectResourceFonts(font.getKey("/Resources"), depth + 1, seenResources, seenFonts,
-                                     seenStreams, fonts);
+                collectResourceFontsBounded(font.getKey("/Resources"), depth + 1, seenResources,
+                                            seenFonts, seenStreams, fonts, nodeCount);
                 QPDFObjectHandle charProcs = font.getKey("/CharProcs");
                 if (charProcs.isDictionary()) {
                     for (auto const& glyphName : charProcs.getKeys()) {
+                        if (nodeCount >= kMaxFontResourceNodes) return;
                         QPDFObjectHandle glyph = charProcs.getKey(glyphName);
                         if (!glyph.isStream() || !visitStreamDepth(seenStreams, glyph, depth + 1))
                             continue;
-                        collectResourceFonts(glyph.getDict().getKey("/Resources"), depth + 1,
-                                             seenResources, seenFonts, seenStreams, fonts);
+                        collectResourceFontsBounded(glyph.getDict().getKey("/Resources"), depth + 1,
+                                                    seenResources, seenFonts, seenStreams, fonts,
+                                                    nodeCount);
                     }
                 }
             }
@@ -1799,6 +1810,7 @@ void collectResourceFonts(QPDFObjectHandle const& resources, int depth,
     QPDFObjectHandle extGstates = resources.getKey("/ExtGState");
     if (extGstates.isDictionary()) {
         for (auto const& gsName : extGstates.getKeys()) {
+            if (nodeCount >= kMaxFontResourceNodes) return;
             QPDFObjectHandle gs = extGstates.getKey(gsName);
             if (!gs.isDictionary()) continue;
             QPDFObjectHandle gsFonts = gs.getKey("/Font");
@@ -1815,8 +1827,9 @@ void collectResourceFonts(QPDFObjectHandle const& resources, int depth,
             if (smask.isDictionary()) {
                 QPDFObjectHandle group = smask.getKey("/G");
                 if (group.isStream() && visitStreamDepth(seenStreams, group, depth + 1))
-                    collectResourceFonts(group.getDict().getKey("/Resources"), depth + 1,
-                                         seenResources, seenFonts, seenStreams, fonts);
+                    collectResourceFontsBounded(group.getDict().getKey("/Resources"), depth + 1,
+                                                seenResources, seenFonts, seenStreams, fonts,
+                                                nodeCount);
             }
         }
     }
@@ -1824,24 +1837,37 @@ void collectResourceFonts(QPDFObjectHandle const& resources, int depth,
     QPDFObjectHandle xobjects = resources.getKey("/XObject");
     if (xobjects.isDictionary()) {
         for (auto const& name : xobjects.getKeys()) {
+            if (nodeCount >= kMaxFontResourceNodes) return;
             QPDFObjectHandle xobject = xobjects.getKey(name);
             if (!xobject.isStream()) continue;
             if (!xobject.getDict().getKey("/Subtype").isNameAndEquals("/Form")) continue;
             if (!visitStreamDepth(seenStreams, xobject, depth + 1)) continue;
-            collectResourceFonts(xobject.getDict().getKey("/Resources"), depth + 1, seenResources,
-                                 seenFonts, seenStreams, fonts);
+            collectResourceFontsBounded(xobject.getDict().getKey("/Resources"), depth + 1,
+                                        seenResources, seenFonts, seenStreams, fonts, nodeCount);
         }
     }
 
     QPDFObjectHandle patterns = resources.getKey("/Pattern");
     if (patterns.isDictionary()) {
         for (auto const& name : patterns.getKeys()) {
+            if (nodeCount >= kMaxFontResourceNodes) return;
             QPDFObjectHandle pattern = patterns.getKey(name);
             if (!pattern.isStream() || !visitStreamDepth(seenStreams, pattern, depth + 1)) continue;
-            collectResourceFonts(pattern.getDict().getKey("/Resources"), depth + 1, seenResources,
-                                 seenFonts, seenStreams, fonts);
+            collectResourceFontsBounded(pattern.getDict().getKey("/Resources"), depth + 1,
+                                        seenResources, seenFonts, seenStreams, fonts, nodeCount);
         }
     }
+}
+
+}  // namespace
+
+void collectResourceFonts(QPDFObjectHandle const& resources, int depth,
+                          std::set<QPDFObjGen>& seenResources, std::set<QPDFObjGen>& seenFonts,
+                          std::map<QPDFObjGen, int>& seenStreams,
+                          std::vector<QPDFObjectHandle>& fonts) {
+    size_t nodeCount = 0;
+    collectResourceFontsBounded(resources, depth, seenResources, seenFonts, seenStreams, fonts,
+                                nodeCount);
 }
 
 std::vector<QPDFObjectHandle> collectPageFonts(QPDFObjectHandle const& page,
@@ -1849,6 +1875,7 @@ std::vector<QPDFObjectHandle> collectPageFonts(QPDFObjectHandle const& page,
                                                std::set<QPDFObjGen>& seenFonts) {
     std::vector<QPDFObjectHandle> fonts;
     std::map<QPDFObjGen, int> seenStreams;
+    size_t nodeCount = 0;
 
     QPDFObjectHandle resources = page.getKey("/Resources");
     if (!resources.isDictionary()) {
@@ -1859,12 +1886,13 @@ std::vector<QPDFObjectHandle> collectPageFonts(QPDFObjectHandle const& page,
             parent = parent.getKey("/Parent");
         }
     }
-    collectResourceFonts(resources, 0, seenResources, seenFonts, seenStreams, fonts);
+    collectResourceFontsBounded(resources, 0, seenResources, seenFonts, seenStreams, fonts,
+                                nodeCount);
 
     QPDFObjectHandle annots = page.getKey("/Annots");
     if (annots.isArray()) {
-        const int annotCount = annots.getArrayNItems();
-        for (int i = 0; i < annotCount; ++i) {
+        const int annotCount = std::min(annots.getArrayNItems(), 4096);
+        for (int i = 0; i < annotCount && nodeCount < kMaxFontResourceNodes; ++i) {
             QPDFObjectHandle annot = annots.getArrayItem(i);
             if (!annot.isDictionary()) continue;
             QPDFObjectHandle ap = annot.getKey("/AP");
@@ -1872,14 +1900,20 @@ std::vector<QPDFObjectHandle> collectPageFonts(QPDFObjectHandle const& page,
             for (auto const& key : ap.getKeys()) {
                 QPDFObjectHandle appearance = ap.getKey(key);
                 if (appearance.isStream()) {
-                    collectResourceFonts(appearance.getDict().getKey("/Resources"), 0,
-                                         seenResources, seenFonts, seenStreams, fonts);
+                    if (visitStreamDepth(seenStreams, appearance, 1)) {
+                        collectResourceFontsBounded(appearance.getDict().getKey("/Resources"), 1,
+                                                    seenResources, seenFonts, seenStreams, fonts,
+                                                    nodeCount);
+                    }
                 } else if (appearance.isDictionary()) {
                     for (auto const& stateKey : appearance.getKeys()) {
                         QPDFObjectHandle stateStream = appearance.getKey(stateKey);
                         if (!stateStream.isStream()) continue;
-                        collectResourceFonts(stateStream.getDict().getKey("/Resources"), 0,
-                                             seenResources, seenFonts, seenStreams, fonts);
+                        if (visitStreamDepth(seenStreams, stateStream, 1)) {
+                            collectResourceFontsBounded(stateStream.getDict().getKey("/Resources"),
+                                                        1, seenResources, seenFonts, seenStreams,
+                                                        fonts, nodeCount);
+                        }
                     }
                 }
             }

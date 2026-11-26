@@ -7,6 +7,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.StringReader;
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.CharacterCodingException;
@@ -81,8 +83,20 @@ public final class PdfFontEmbedder {
      */
     public record Result(
             byte[] pdf, List<String> embedded, List<String> unresolved, List<FontStatus> statuses) {
+        public Result {
+            pdf = pdf == null ? new byte[0] : pdf.clone();
+            embedded = embedded == null ? List.of() : List.copyOf(embedded);
+            unresolved = unresolved == null ? List.of() : List.copyOf(unresolved);
+            statuses = statuses == null ? List.of() : List.copyOf(statuses);
+        }
+
         public Result(byte[] pdf, List<String> embedded, List<String> unresolved) {
             this(pdf, embedded, unresolved, List.of());
+        }
+
+        @Override
+        public byte[] pdf() {
+            return pdf.clone();
         }
 
         /**
@@ -106,7 +120,12 @@ public final class PdfFontEmbedder {
             String baseName, String source, int fsType, boolean resolved, String reason) {}
 
     /** Outcome of the file-backed embedding pass. */
-    public record FileResult(List<String> embedded, List<String> unresolved) {}
+    public record FileResult(List<String> embedded, List<String> unresolved) {
+        public FileResult {
+            embedded = embedded == null ? List.of() : List.copyOf(embedded);
+            unresolved = unresolved == null ? List.of() : List.copyOf(unresolved);
+        }
+    }
 
     record Face(
             Path path,
@@ -300,8 +319,9 @@ public final class PdfFontEmbedder {
         if (pdf == null || pdf.length == 0) {
             return new Result(pdf == null ? new byte[0] : pdf, List.of(), List.of(), List.of());
         }
-        List<PdfFontAuditor.FontResource> resources = PdfFontAuditor.unembeddedResources(pdf);
-        Set<String> corrupt = new LinkedHashSet<>(PdfFontAuditor.corruptEmbeddedKeys(pdf));
+        PdfFontAuditor.FontInventorySnapshot before = PdfFontAuditor.inspectInventory(pdf);
+        List<PdfFontAuditor.FontResource> resources = before.unembeddedResources();
+        Set<String> corrupt = new LinkedHashSet<>(before.corruptEmbeddedKeys());
         Set<String> names = new LinkedHashSet<>(corrupt);
         Set<String> resourceOnly = new HashSet<>();
         Map<String, String> blockers = new HashMap<>();
@@ -431,10 +451,9 @@ public final class PdfFontEmbedder {
             }
             return new Result(pdf, List.of(), missing, failed);
         }
-        List<String> unresolved = PdfFontAuditor.unembeddedNames(out);
-        Set<String> stillCorrupt = new LinkedHashSet<>(PdfFontAuditor.corruptEmbeddedKeys(out));
-        Set<String> remaining = new LinkedHashSet<>(unresolved);
-        remaining.addAll(stillCorrupt);
+        PdfFontAuditor.FontInventorySnapshot after = PdfFontAuditor.inspectInventory(out);
+        Set<String> remaining = new LinkedHashSet<>(after.unembeddedNames());
+        remaining.addAll(after.corruptEmbeddedKeys());
         List<FontStatus> finalStatuses = new ArrayList<>(statuses.size());
         for (FontStatus status : statuses) {
             finalStatuses.add(status.resolved()
@@ -588,7 +607,7 @@ public final class PdfFontEmbedder {
         String extra = System.getProperty("jpdfium.font.path");
         if (extra == null || extra.isBlank()) extra = System.getenv("JPDFIUM_FONT_PATH");
         if (extra != null) {
-            for (String part : extra.split(java.util.regex.Pattern.quote(java.io.File.pathSeparator))) {
+            for (String part : extra.split(Pattern.quote(java.io.File.pathSeparator))) {
                 if (!part.isBlank()) dirs.add(Path.of(part));
             }
         }
@@ -628,15 +647,24 @@ public final class PdfFontEmbedder {
         Map<String, String> blockers = new HashMap<>();
         for (PdfFontAuditor.FontResource resource : resources) {
             String blocker = substitutionBlocker(resource);
-            if (blocker != null) blockers.putIfAbsent(resource.baseName(), blocker);        }
+            if (blocker != null) blockers.putIfAbsent(resource.baseName(), blocker);
+        }
         List<String> allMissing = resources.stream()
                 .map(PdfFontAuditor.FontResource::baseName)
                 .distinct()
                 .toList();
+        if (allMissing.isEmpty()) {
+            if (!Files.exists(output) || !Files.isSameFile(input, output)) {
+                Files.copy(input, output, StandardCopyOption.REPLACE_EXISTING);
+            }
+            return new FileResult(List.of(), List.of());
+        }
         Map<String, byte[]> found = programsFor(allMissing, blockers, fontDirs);
         if (found.isEmpty()
                 || !QpdfLib.embedFontsToFile(input, output, found, true, stripSignatures)) {
-            Files.copy(input, output, StandardCopyOption.REPLACE_EXISTING);
+            if (!Files.exists(output) || !Files.isSameFile(input, output)) {
+                Files.copy(input, output, StandardCopyOption.REPLACE_EXISTING);
+            }
             return new FileResult(List.of(), allMissing);
         }
         List<String> unresolved = nonEmbedded(output);
@@ -749,7 +777,6 @@ public final class PdfFontEmbedder {
         }
         StringBuilder normalized = new StringBuilder(end - start);
         for (int i = start; i < end; ) {
-            char c = name.charAt(i);
             if (name.regionMatches(true, i, "PS", 0, 2)
                     && (i + 2 == end || name.charAt(i + 2) == '-'
                             || (i + 4 == end && name.regionMatches(true, i + 2, "MT", 0, 2)))) {
@@ -934,7 +961,9 @@ public final class PdfFontEmbedder {
                             @Override
                             public FileVisitResult visitFile(
                                     Path file, BasicFileAttributes attrs) {
-                                String name = file.getFileName().toString().toLowerCase(Locale.ROOT);
+                                Path fileName = file.getFileName();
+                                if (fileName == null) return FileVisitResult.CONTINUE;
+                                String name = fileName.toString().toLowerCase(Locale.ROOT);
                                 if ((attrs.isRegularFile()
                                                 || (attrs.isSymbolicLink()
                                                     && Files.isRegularFile(file)))
@@ -1022,11 +1051,16 @@ public final class PdfFontEmbedder {
     }
 
     private static void indexFile(Path path, Map<String, Face> index) {
-        try (FileChannel channel = FileChannel.open(path)) {
+        try (FileChannel channel = FileChannel.open(path);
+                Arena arena = Arena.ofConfined()) {
             BasicFileAttributes attrs = Files.readAttributes(path, BasicFileAttributes.class);
             long size = attrs.size();
+            if (size <= 0 || size > MAX_PROGRAM_BYTES) {
+                return;
+            }
             long mtime = attrs.lastModifiedTime().toMillis();
-            ByteBuffer b = channel.map(FileChannel.MapMode.READ_ONLY, 0, channel.size());
+            MemorySegment mapped = channel.map(FileChannel.MapMode.READ_ONLY, 0, size, arena);
+            ByteBuffer b = mapped.asByteBuffer();
             if (b.getShort(0) == (short) 0x8001 || b.get(0) == '%') {
                 byte[] head = new byte[Math.min(b.capacity(), 8192)];
                 b.get(0, head);
@@ -1069,7 +1103,8 @@ public final class PdfFontEmbedder {
     }
 
     private static int fsType(ByteBuffer b, int face) {
-        for (int i = 0, n = b.getShort(face + 4) & 0xFFFF; i < n; i++) {
+        int n = b.getShort(face + 4) & 0xFFFF;
+        for (int i = 0; i < n; i++) {
             int record = face + 12 + 16 * i;
             if (b.getInt(record) == 0x4F532F32) {
                 int tableOffset = b.getInt(record + 8);
@@ -1082,12 +1117,14 @@ public final class PdfFontEmbedder {
 
     private static List<String> names(ByteBuffer b, int face) {
         List<String> names = new ArrayList<>();
-        for (int i = 0, n = b.getShort(face + 4) & 0xFFFF; i < n; i++) {
+        int n = b.getShort(face + 4) & 0xFFFF;
+        for (int i = 0; i < n; i++) {
             int record = face + 12 + 16 * i;
             if (b.getInt(record) != 0x6E616D65) continue;
             int table = b.getInt(record + 8);
             int strings = table + (b.getShort(table + 4) & 0xFFFF);
-            for (int j = 0, count = b.getShort(table + 2) & 0xFFFF; j < count; j++) {
+            int count = b.getShort(table + 2) & 0xFFFF;
+            for (int j = 0; j < count; j++) {
                 int q = table + 6 + 12 * j;
                 int platform = b.getShort(q) & 0xFFFF;
                 int id = b.getShort(q + 6);
@@ -1149,6 +1186,10 @@ public final class PdfFontEmbedder {
         Face key = face;
         if (face.resource() == null) {
             long size = Files.size(face.path());
+            if (size > MAX_PROGRAM_BYTES) {
+                throw new IOException(
+                        "font file exceeds " + MAX_PROGRAM_BYTES + " bytes: " + face.path());
+            }
             long mtime = Files.getLastModifiedTime(face.path()).toMillis();
             if (size != face.size() || mtime != face.mtime()) {
                 key = new Face(
@@ -1250,8 +1291,8 @@ public final class PdfFontEmbedder {
 
     private static boolean isSymbolicName(String name) {
         String n = name.toLowerCase(Locale.ROOT).replaceFirst("^[a-z]{6}\\+", "");
-        return n.equals("symbol") || n.equals("zapfdingbats") || n.startsWith("symbol,")
-                || n.startsWith("zapfdingbats,") || n.equals("dingbats") || n.startsWith("dingbats,");
+        return "symbol".equals(n) || "zapfdingbats".equals(n) || n.startsWith("symbol,")
+                || n.startsWith("zapfdingbats,") || "dingbats".equals(n) || n.startsWith("dingbats,");
     }
 
     private static byte[] sanitizeSymbolicTrueType(byte[] fontData) {
@@ -1375,7 +1416,8 @@ public final class PdfFontEmbedder {
             throw new IllegalArgumentException("font face is unreasonably large: " + size);
         }
         ByteBuffer out = ByteBuffer.allocate((int) size).put(0, collection, face, header);
-        for (int i = 0, pos = header; i < tables; i++) {
+        int pos = header;
+        for (int i = 0; i < tables; i++) {
             int record = 12 + 16 * i;
             int offset = in.getInt(face + record + 8);
             int length = in.getInt(face + record + 12);

@@ -1,7 +1,5 @@
 package stirling.software.jpdfium.doc;
 
-import stirling.software.jpdfium.panama.NativeRuntime;
-
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;

@@ -38,6 +38,22 @@ const JPDFIUM_ERR_GENERIC: i32 = -1;
 const JPDFIUM_ERR_ALLOC: i32 = -12;
 const JPDFIUM_REPAIR_FIXED: i32 = 1;
 const JPDFIUM_REPAIR_FAILED: i32 = -1;
+const MAX_DECOMPRESSED_STREAM_BYTES: usize = 64 * 1024 * 1024;
+const MAX_TOTAL_DECOMPRESSED_BYTES: usize = 256 * 1024 * 1024;
+const MAX_IMAGE_DIM: u32 = 16384;
+const MAX_IMAGE_PIXELS: u64 = (MAX_IMAGE_DIM as u64) * (MAX_IMAGE_DIM as u64);
+const MAX_RESIZE_BYTES: u64 = MAX_IMAGE_PIXELS * 4;
+const MAX_PNG_INPUT_BYTES: u64 = 128 * 1024 * 1024;
+
+struct MallocGuard(*mut u8);
+
+impl Drop for MallocGuard {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe { libc::free(self.0 as *mut libc::c_void) };
+        }
+    }
+}
 
 /// Allocate a buffer with libc::malloc and copy `data` into it.
 /// Returns null if malloc fails or data is empty.
@@ -53,31 +69,80 @@ unsafe fn malloc_copy(data: &[u8]) -> *mut u8 {
     ptr
 }
 
+fn read_bounded<R: Read>(mut reader: R, max_bytes: usize) -> Option<Vec<u8>> {
+    let mut output = Vec::new();
+    let limit = (max_bytes as u64).saturating_add(1);
+    if reader
+        .by_ref()
+        .take(limit)
+        .read_to_end(&mut output)
+        .is_err()
+    {
+        return None;
+    }
+    if output.len() > max_bytes {
+        return None;
+    }
+    Some(output)
+}
+
 /// Decompress ZLib (FlateDecode) bytes using flate2, falling back to raw
 /// DEFLATE when the zlib wrapper or Adler-32 trailer is corrupt or absent.
 fn flate2_decompress_zlib(data: &[u8]) -> Option<Vec<u8>> {
-    let mut output = Vec::new();
-    if ZlibDecoder::new(data).read_to_end(&mut output).is_ok() {
+    if let Some(output) = read_bounded(ZlibDecoder::new(data), MAX_DECOMPRESSED_STREAM_BYTES) {
         return Some(output);
     }
-    output.clear();
-    if DeflateDecoder::new(data).read_to_end(&mut output).is_ok() && !output.is_empty() {
-        return Some(output);
+    if let Some(output) = read_bounded(DeflateDecoder::new(data), MAX_DECOMPRESSED_STREAM_BYTES) {
+        if !output.is_empty() {
+            return Some(output);
+        }
     }
     if data.len() >= 6 && (data[0] & 0x0F) == 8 {
         let header = ((data[0] as u16) << 8) | (data[1] as u16);
-        if header % 31 == 0 {
-            output.clear();
-            if DeflateDecoder::new(&data[2..])
-                .read_to_end(&mut output)
-                .is_ok()
-                && !output.is_empty()
-            {
-                return Some(output);
+        if header.is_multiple_of(31) {
+            if let Some(output) = read_bounded(
+                DeflateDecoder::new(&data[2..]),
+                MAX_DECOMPRESSED_STREAM_BYTES,
+            ) {
+                if !output.is_empty() {
+                    return Some(output);
+                }
             }
         }
     }
     None
+}
+
+fn check_decompressed_size_budget(doc: &Document) -> Result<(), Box<dyn std::error::Error>> {
+    let mut total_bytes: usize = 0;
+    for obj in doc.objects.values() {
+        let lopdf::Object::Stream(stream) = obj else {
+            continue;
+        };
+        if stream.content.is_empty() || !is_plain_flate_filter(&stream.dict) {
+            continue;
+        }
+        let mut decoder = ZlibDecoder::new(stream.content.as_slice());
+        let mut buf = [0u8; 8192];
+        let mut stream_bytes: usize = 0;
+        loop {
+            match decoder.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    stream_bytes = stream_bytes.saturating_add(n);
+                    if stream_bytes > MAX_DECOMPRESSED_STREAM_BYTES {
+                        return Err("decompressed stream exceeds per-stream limit".into());
+                    }
+                    total_bytes = total_bytes.saturating_add(n);
+                    if total_bytes > MAX_TOTAL_DECOMPRESSED_BYTES {
+                        return Err("decompressed document exceeds total byte limit".into());
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    }
+    Ok(())
 }
 
 fn is_plain_flate_filter(dict: &lopdf::Dictionary) -> bool {
@@ -147,29 +212,35 @@ pub unsafe extern "C" fn jpdfium_rust_compress_pdf(
     *out_ptr = std::ptr::null_mut();
     *out_len = 0;
 
-    if input.is_null() || input_len <= 0 {
-        return JPDFIUM_ERR_GENERIC;
-    }
-
-    let input_slice = slice::from_raw_parts(input, input_len as usize);
-    let iterations = zopfli_iters.max(1) as u32;
-
-    match compress_pdf_impl(input_slice, iterations) {
-        Ok(bytes) => {
-            let ptr = malloc_copy(&bytes);
-            if ptr.is_null() {
-                return JPDFIUM_ERR_ALLOC;
-            }
-            *out_ptr = ptr;
-            *out_len = bytes.len() as i64;
-            JPDFIUM_OK
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if input.is_null() || input_len <= 0 || (input_len as u64) > (isize::MAX as u64) {
+            return JPDFIUM_ERR_GENERIC;
         }
-        Err(_) => JPDFIUM_ERR_GENERIC,
-    }
+
+        let input_slice = slice::from_raw_parts(input, input_len as usize);
+        let iterations = zopfli_iters.max(1) as u32;
+
+        match compress_pdf_impl(input_slice, iterations) {
+            Ok(bytes) => {
+                let ptr = malloc_copy(&bytes);
+                if ptr.is_null() {
+                    return JPDFIUM_ERR_ALLOC;
+                }
+                *out_ptr = ptr;
+                *out_len = bytes.len() as i64;
+                JPDFIUM_OK
+            }
+            Err(_) => JPDFIUM_ERR_GENERIC,
+        }
+    }))
+    .unwrap_or(JPDFIUM_ERR_GENERIC)
 }
 
 fn compress_pdf_impl(input: &[u8], iterations: u32) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let mut doc = Document::load_from(Cursor::new(input))?;
+
+    // Reject Flate bombs before lopdf allocates unbounded buffers inside decompress().
+    check_decompressed_size_budget(&doc)?;
 
     // lopdf's decompress() uses flate2 internally for all FlateDecode streams.
     doc.decompress();
@@ -250,37 +321,40 @@ pub unsafe extern "C" fn jpdfium_rust_repair_lopdf(
     *out_ptr = std::ptr::null_mut();
     *out_len = 0;
 
-    if input.is_null() || input_len <= 0 {
-        return JPDFIUM_REPAIR_FAILED;
-    }
-
-    let input_slice = slice::from_raw_parts(input, input_len as usize);
-
-    // Rewriting a signed document always breaks its /ByteRange digest. The
-    // Java repair pipeline refuses marker inputs before reaching this
-    // fallback, and the qpdf routes verify parsed signature dictionaries;
-    // this raw scan keeps direct native callers of the lopdf fallback from
-    // silently invalidating signatures.
-    const BYTE_RANGE: &[u8] = b"/ByteRange";
-    if input_slice
-        .windows(BYTE_RANGE.len())
-        .any(|w| w == BYTE_RANGE)
-    {
-        return JPDFIUM_REPAIR_FAILED;
-    }
-
-    match repair_lopdf_impl(input_slice) {
-        Ok(bytes) => {
-            let ptr = malloc_copy(&bytes);
-            if ptr.is_null() {
-                return JPDFIUM_REPAIR_FAILED;
-            }
-            *out_ptr = ptr;
-            *out_len = bytes.len() as i64;
-            JPDFIUM_REPAIR_FIXED
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if input.is_null() || input_len <= 0 || (input_len as u64) > (isize::MAX as u64) {
+            return JPDFIUM_REPAIR_FAILED;
         }
-        Err(_) => JPDFIUM_REPAIR_FAILED,
-    }
+
+        let input_slice = slice::from_raw_parts(input, input_len as usize);
+
+        // Rewriting a signed document always breaks its /ByteRange digest. The
+        // Java repair pipeline refuses marker inputs before reaching this
+        // fallback, and the qpdf routes verify parsed signature dictionaries;
+        // this raw scan keeps direct native callers of the lopdf fallback from
+        // silently invalidating signatures.
+        const BYTE_RANGE: &[u8] = b"/ByteRange";
+        if input_slice
+            .windows(BYTE_RANGE.len())
+            .any(|w| w == BYTE_RANGE)
+        {
+            return JPDFIUM_REPAIR_FAILED;
+        }
+
+        match repair_lopdf_impl(input_slice) {
+            Ok(bytes) => {
+                let ptr = malloc_copy(&bytes);
+                if ptr.is_null() {
+                    return JPDFIUM_REPAIR_FAILED;
+                }
+                *out_ptr = ptr;
+                *out_len = bytes.len() as i64;
+                JPDFIUM_REPAIR_FIXED
+            }
+            Err(_) => JPDFIUM_REPAIR_FAILED,
+        }
+    }))
+    .unwrap_or(JPDFIUM_REPAIR_FAILED)
 }
 
 fn repair_lopdf_impl(input: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
@@ -320,55 +394,80 @@ pub unsafe extern "C" fn jpdfium_rust_resize_pixels(
     *out_ptr = std::ptr::null_mut();
     *out_len = 0;
 
-    if src_pixels.is_null()
-        || src_len <= 0
-        || src_width <= 0
-        || src_height <= 0
-        || dst_width <= 0
-        || dst_height <= 0
-        || !(1..=4).contains(&components)
-    {
-        return JPDFIUM_ERR_GENERIC;
-    }
-
-    let Some(expected_len) = (src_width as u64)
-        .checked_mul(src_height as u64)
-        .and_then(|px| px.checked_mul(components as u64))
-    else {
-        return JPDFIUM_ERR_GENERIC;
-    };
-    if (src_len as u64) < expected_len || expected_len > (isize::MAX as u64) {
-        return JPDFIUM_ERR_GENERIC;
-    }
-
-    let src_slice = slice::from_raw_parts(src_pixels, src_len as usize);
-
-    let pixel_type = match components {
-        1 => fir::PixelType::U8,
-        3 => fir::PixelType::U8x3,
-        4 => fir::PixelType::U8x4,
-        _ => return JPDFIUM_ERR_GENERIC,
-    };
-
-    match resize_pixels_impl(
-        src_slice,
-        src_width as u32,
-        src_height as u32,
-        dst_width as u32,
-        dst_height as u32,
-        pixel_type,
-    ) {
-        Ok(bytes) => {
-            let ptr = malloc_copy(&bytes);
-            if ptr.is_null() {
-                return JPDFIUM_ERR_ALLOC;
-            }
-            *out_ptr = ptr;
-            *out_len = bytes.len() as i64;
-            JPDFIUM_OK
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if src_pixels.is_null()
+            || src_len <= 0
+            || (src_len as u64) > (isize::MAX as u64)
+            || src_width <= 0
+            || src_height <= 0
+            || dst_width <= 0
+            || dst_height <= 0
+            || (src_width as u32) > MAX_IMAGE_DIM
+            || (src_height as u32) > MAX_IMAGE_DIM
+            || (dst_width as u32) > MAX_IMAGE_DIM
+            || (dst_height as u32) > MAX_IMAGE_DIM
+            || !(1..=4).contains(&components)
+        {
+            return JPDFIUM_ERR_INVALID;
         }
-        Err(_) => JPDFIUM_ERR_GENERIC,
-    }
+
+        let Some(src_pixels_count) = (src_width as u64).checked_mul(src_height as u64) else {
+            return JPDFIUM_ERR_INVALID;
+        };
+        let Some(expected_len) = src_pixels_count.checked_mul(components as u64) else {
+            return JPDFIUM_ERR_INVALID;
+        };
+        if src_pixels_count > MAX_IMAGE_PIXELS
+            || expected_len > MAX_RESIZE_BYTES
+            || (src_len as u64) < expected_len
+            || expected_len > (isize::MAX as u64)
+        {
+            return JPDFIUM_ERR_INVALID;
+        }
+
+        let Some(dst_pixels_count) = (dst_width as u64).checked_mul(dst_height as u64) else {
+            return JPDFIUM_ERR_INVALID;
+        };
+        let Some(dst_bytes) = dst_pixels_count.checked_mul(components as u64) else {
+            return JPDFIUM_ERR_INVALID;
+        };
+        if dst_pixels_count > MAX_IMAGE_PIXELS
+            || dst_bytes > MAX_RESIZE_BYTES
+            || dst_bytes > (isize::MAX as u64)
+        {
+            return JPDFIUM_ERR_INVALID;
+        }
+
+        let src_slice = slice::from_raw_parts(src_pixels, expected_len as usize);
+
+        let pixel_type = match components {
+            1 => fir::PixelType::U8,
+            3 => fir::PixelType::U8x3,
+            4 => fir::PixelType::U8x4,
+            _ => return JPDFIUM_ERR_INVALID,
+        };
+
+        match resize_pixels_impl(
+            src_slice,
+            src_width as u32,
+            src_height as u32,
+            dst_width as u32,
+            dst_height as u32,
+            pixel_type,
+        ) {
+            Ok(bytes) => {
+                let ptr = malloc_copy(&bytes);
+                if ptr.is_null() {
+                    return JPDFIUM_ERR_ALLOC;
+                }
+                *out_ptr = ptr;
+                *out_len = bytes.len() as i64;
+                JPDFIUM_OK
+            }
+            Err(_) => JPDFIUM_ERR_INVALID,
+        }
+    }))
+    .unwrap_or(JPDFIUM_ERR_INVALID)
 }
 
 fn resize_pixels_impl(
@@ -379,12 +478,46 @@ fn resize_pixels_impl(
     dst_h: u32,
     pixel_type: fir::PixelType,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    if src_w == 0 || src_h == 0 || dst_w == 0 || dst_h == 0 {
-        return Err("dimensions must be non-zero".into());
+    if src_w == 0
+        || src_h == 0
+        || dst_w == 0
+        || dst_h == 0
+        || src_w > MAX_IMAGE_DIM
+        || src_h > MAX_IMAGE_DIM
+        || dst_w > MAX_IMAGE_DIM
+        || dst_h > MAX_IMAGE_DIM
+    {
+        return Err("dimensions out of bounds".into());
+    }
+    let components = match pixel_type {
+        fir::PixelType::U8 => 1u64,
+        fir::PixelType::U8x3 => 3u64,
+        fir::PixelType::U8x4 => 4u64,
+        _ => return Err("unsupported pixel type".into()),
+    };
+    let src_pixels = (src_w as u64)
+        .checked_mul(src_h as u64)
+        .ok_or("source pixel count overflow")?;
+    let src_bytes = src_pixels
+        .checked_mul(components)
+        .ok_or("source byte size overflow")?;
+    let dst_pixels = (dst_w as u64)
+        .checked_mul(dst_h as u64)
+        .ok_or("destination pixel count overflow")?;
+    let dst_bytes = dst_pixels
+        .checked_mul(components)
+        .ok_or("destination byte size overflow")?;
+    if src_pixels > MAX_IMAGE_PIXELS
+        || src_bytes > MAX_RESIZE_BYTES
+        || dst_pixels > MAX_IMAGE_PIXELS
+        || dst_bytes > MAX_RESIZE_BYTES
+        || (src.len() as u64) < src_bytes
+    {
+        return Err("image buffer exceeds resize limits".into());
     }
 
-    // from_slice_u8 requires &mut [u8]; clone so we own the data.
-    let mut src_buf = src.to_vec();
+    // from_slice_u8 requires &mut [u8]; clone only the exact source image bytes.
+    let mut src_buf = src[..src_bytes as usize].to_vec();
     let src_image = FirImage::from_slice_u8(src_w, src_h, &mut src_buf, pixel_type)?;
     let mut dst_image = FirImage::new(dst_w, dst_h, pixel_type);
 
@@ -413,7 +546,28 @@ pub unsafe extern "C" fn jpdfium_rust_unpack_pixels(
     dst: *mut u32,
     dst_len: i64,
 ) -> i32 {
-    if src.is_null() || dst.is_null() || width <= 0 || height <= 0 {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        unpack_pixels_impl(src, width, height, src_stride, format, dst, dst_len)
+    }))
+    .unwrap_or(JPDFIUM_ERR_GENERIC)
+}
+
+unsafe fn unpack_pixels_impl(
+    src: *const u8,
+    width: i32,
+    height: i32,
+    src_stride: i64,
+    format: i32,
+    dst: *mut u32,
+    dst_len: i64,
+) -> i32 {
+    if src.is_null()
+        || dst.is_null()
+        || width <= 0
+        || height <= 0
+        || (width as u32) > MAX_IMAGE_DIM
+        || (height as u32) > MAX_IMAGE_DIM
+    {
         return JPDFIUM_ERR_INVALID;
     }
     let bpp: i64 = match format {
@@ -422,8 +576,17 @@ pub unsafe extern "C" fn jpdfium_rust_unpack_pixels(
         3 | 5 => 4,
         _ => return JPDFIUM_ERR_INVALID,
     };
-    let pixels = (width as i64) * (height as i64);
-    if dst_len < pixels || src_stride < (width as i64) * bpp {
+    let Some(pixels) = (width as i64).checked_mul(height as i64) else {
+        return JPDFIUM_ERR_INVALID;
+    };
+    let Some(dst_bytes) = (pixels as u64).checked_mul(4) else {
+        return JPDFIUM_ERR_INVALID;
+    };
+    if (pixels as u64) > MAX_IMAGE_PIXELS
+        || dst_bytes > (isize::MAX as u64)
+        || dst_len < pixels
+        || src_stride < (width as i64) * bpp
+    {
         return JPDFIUM_ERR_INVALID;
     }
     // Reject strides whose row-major extent overflows or exceeds the addressable
@@ -536,27 +699,60 @@ pub unsafe extern "C" fn jpdfium_rust_compress_png(
     *out_ptr = std::ptr::null_mut();
     *out_len = 0;
 
-    if input.is_null() || input_len <= 0 {
-        return JPDFIUM_ERR_GENERIC;
-    }
-
-    let input_slice = slice::from_raw_parts(input, input_len as usize);
-    let preset = level.clamp(0, 6) as u8;
-
-    let options = oxipng::Options::from_preset(preset);
-    match oxipng::optimize_from_memory(input_slice, &options) {
-        Ok(optimized) if optimized.len() < input_slice.len() => {
-            let ptr = malloc_copy(&optimized);
-            if ptr.is_null() {
-                return JPDFIUM_ERR_ALLOC;
-            }
-            *out_ptr = ptr;
-            *out_len = optimized.len() as i64;
-            JPDFIUM_OK
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if input.is_null()
+            || input_len <= 0
+            || (input_len as u64) > MAX_PNG_INPUT_BYTES
+            || (input_len as u64) > (isize::MAX as u64)
+        {
+            return JPDFIUM_ERR_INVALID;
         }
-        Ok(_) => JPDFIUM_ERR_GENERIC,  // already optimal
-        Err(_) => JPDFIUM_ERR_GENERIC, // not a valid PNG
-    }
+
+        let input_slice = slice::from_raw_parts(input, input_len as usize);
+        const PNG_SIG: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
+        if input_slice.len() < 24 || &input_slice[..8] != PNG_SIG || &input_slice[12..16] != b"IHDR"
+        {
+            return JPDFIUM_ERR_INVALID;
+        }
+        let png_w = u32::from_be_bytes([
+            input_slice[16],
+            input_slice[17],
+            input_slice[18],
+            input_slice[19],
+        ]);
+        let png_h = u32::from_be_bytes([
+            input_slice[20],
+            input_slice[21],
+            input_slice[22],
+            input_slice[23],
+        ]);
+        if png_w == 0
+            || png_h == 0
+            || png_w > MAX_IMAGE_DIM
+            || png_h > MAX_IMAGE_DIM
+            || (png_w as u64) * (png_h as u64) > MAX_IMAGE_PIXELS
+        {
+            return JPDFIUM_ERR_INVALID;
+        }
+
+        let preset = level.clamp(0, 6) as u8;
+
+        let options = oxipng::Options::from_preset(preset);
+        match oxipng::optimize_from_memory(input_slice, &options) {
+            Ok(optimized) if optimized.len() < input_slice.len() => {
+                let ptr = malloc_copy(&optimized);
+                if ptr.is_null() {
+                    return JPDFIUM_ERR_ALLOC;
+                }
+                *out_ptr = ptr;
+                *out_len = optimized.len() as i64;
+                JPDFIUM_OK
+            }
+            Ok(_) => JPDFIUM_ERR_GENERIC,  // already optimal
+            Err(_) => JPDFIUM_ERR_GENERIC, // not a valid PNG
+        }
+    }))
+    .unwrap_or(JPDFIUM_ERR_GENERIC)
 }
 
 /// Encode 4-component DeviceCMYK sample data as a CMYK JPEG byte stream.
@@ -818,7 +1014,24 @@ pub unsafe extern "C" fn jpdfium_rust_svg_to_rgba(
     if !out_h.is_null() {
         *out_h = 0;
     }
-    if svg.is_null() || svg_len == 0 {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        svg_to_rgba_impl(svg, svg_len, width, height, out_ptr, out_len, out_w, out_h)
+    }))
+    .unwrap_or(JPDFIUM_ERR_GENERIC)
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe fn svg_to_rgba_impl(
+    svg: *const u8,
+    svg_len: usize,
+    width: i32,
+    height: i32,
+    out_ptr: *mut *mut u8,
+    out_len: *mut i64,
+    out_w: *mut i32,
+    out_h: *mut i32,
+) -> i32 {
+    if svg.is_null() || svg_len == 0 || svg_len > (isize::MAX as usize) {
         return JPDFIUM_ERR_GENERIC;
     }
     let data = slice::from_raw_parts(svg, svg_len);
@@ -881,14 +1094,12 @@ pub unsafe extern "C" fn jpdfium_rust_svg_to_rgba(
     if ptr.is_null() {
         return JPDFIUM_ERR_ALLOC;
     }
+    let mut ptr_guard = MallocGuard(ptr);
     std::ptr::write_bytes(ptr, 0, byte_len);
     let buf = slice::from_raw_parts_mut(ptr, byte_len);
     let mut pixmap = match tiny_skia::PixmapMut::from_bytes(buf, target_w, target_h) {
         Some(pixmap) => pixmap,
-        None => {
-            libc::free(ptr as *mut libc::c_void);
-            return JPDFIUM_ERR_GENERIC;
-        }
+        None => return JPDFIUM_ERR_GENERIC,
     };
     resvg::render(
         &tree,
@@ -908,6 +1119,7 @@ pub unsafe extern "C" fn jpdfium_rust_svg_to_rgba(
         }
     }
 
+    ptr_guard.0 = std::ptr::null_mut();
     *out_ptr = ptr;
     *out_len = byte_len as i64;
     if !out_w.is_null() {
@@ -1429,5 +1641,118 @@ mod tests {
             "Metadata stream must remain uncompressed for PDF/A-1 compliance"
         );
         assert_eq!(reloaded_meta.content, xmp);
+    }
+
+    #[test]
+    fn resize_and_png_caps_reject_oversized_dimensions() {
+        let mut out_ptr: *mut u8 = std::ptr::dangling_mut();
+        let mut out_len: i64 = 999;
+        let rgba = [255u8; 16];
+        unsafe {
+            assert!(
+                jpdfium_rust_resize_pixels(
+                    rgba.as_ptr(),
+                    16,
+                    2,
+                    2,
+                    4,
+                    1 << 20,
+                    1 << 20,
+                    &mut out_ptr,
+                    &mut out_len,
+                ) < 0
+            );
+            assert!(out_ptr.is_null());
+            assert_eq!(out_len, 0);
+
+            assert!(
+                jpdfium_rust_resize_pixels(
+                    rgba.as_ptr(),
+                    16,
+                    2,
+                    2,
+                    4,
+                    (MAX_IMAGE_DIM as i32) + 1,
+                    1,
+                    &mut out_ptr,
+                    &mut out_len,
+                ) < 0
+            );
+            assert!(out_ptr.is_null());
+            assert_eq!(out_len, 0);
+
+            let mut dst_px = [0u32; 4];
+            assert!(
+                jpdfium_rust_unpack_pixels(
+                    rgba.as_ptr(),
+                    1 << 20,
+                    1 << 20,
+                    4,
+                    5,
+                    dst_px.as_mut_ptr(),
+                    4,
+                ) < 0
+            );
+
+            let mut huge_png = Vec::new();
+            huge_png.extend_from_slice(b"\x89PNG\r\n\x1a\n");
+            huge_png.extend_from_slice(&13u32.to_be_bytes());
+            huge_png.extend_from_slice(b"IHDR");
+            huge_png.extend_from_slice(&(1u32 << 20).to_be_bytes());
+            huge_png.extend_from_slice(&(1u32 << 20).to_be_bytes());
+            huge_png.extend_from_slice(&[8, 6, 0, 0, 0]);
+            assert!(
+                jpdfium_rust_compress_png(
+                    huge_png.as_ptr(),
+                    huge_png.len() as i64,
+                    &mut out_ptr,
+                    &mut out_len,
+                    2,
+                ) < 0
+            );
+            assert!(out_ptr.is_null());
+            assert_eq!(out_len, 0);
+        }
+    }
+
+    #[test]
+    fn compress_pdf_impl_rejects_flate_bomb_within_budget() {
+        let mut zenc = ZlibEncoder::new(Vec::new(), Compression::fast());
+        let chunk = vec![0u8; 1024 * 1024];
+        for _ in 0..65 {
+            zenc.write_all(&chunk).unwrap();
+        }
+        let bomb_bytes = zenc.finish().unwrap();
+
+        let mut doc = Document::with_version("1.5");
+        let bomb_id = doc.add_object(Stream::new(
+            dictionary! { "Filter" => "FlateDecode" },
+            bomb_bytes,
+        ));
+        let pages_id = doc.new_object_id();
+        let page_id = doc.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+            "Contents" => bomb_id,
+        });
+        doc.objects.insert(
+            pages_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Pages",
+                "Kids" => vec![page_id.into()],
+                "Count" => 1,
+            }),
+        );
+        let catalog_id = doc.add_object(dictionary! {
+            "Type" => "Catalog",
+            "Pages" => pages_id,
+        });
+        doc.trailer.set("Root", catalog_id);
+
+        let mut input = Vec::new();
+        doc.save_to(&mut Cursor::new(&mut input)).unwrap();
+
+        assert!(compress_pdf_impl(&input, 1).is_err());
     }
 }

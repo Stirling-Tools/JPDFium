@@ -404,15 +404,54 @@ int32_t jpdfium_flashtext_add_keywords_json(int64_t handle, const char* json) {
                                 else
                                     return false;
                             }
-                            if (code < 0x80) {
-                                value.push_back(char(code));
-                            } else if (code < 0x800) {
-                                value.push_back(char(0xC0 | (code >> 6)));
-                                value.push_back(char(0x80 | (code & 0x3F)));
+                            auto appendUtf8 = [&](uint32_t cp) {
+                                if (cp < 0x80) {
+                                    value.push_back(char(cp));
+                                } else if (cp < 0x800) {
+                                    value.push_back(char(0xC0 | (cp >> 6)));
+                                    value.push_back(char(0x80 | (cp & 0x3F)));
+                                } else if (cp < 0x10000) {
+                                    value.push_back(char(0xE0 | (cp >> 12)));
+                                    value.push_back(char(0x80 | ((cp >> 6) & 0x3F)));
+                                    value.push_back(char(0x80 | (cp & 0x3F)));
+                                } else {
+                                    value.push_back(char(0xF0 | (cp >> 18)));
+                                    value.push_back(char(0x80 | ((cp >> 12) & 0x3F)));
+                                    value.push_back(char(0x80 | ((cp >> 6) & 0x3F)));
+                                    value.push_back(char(0x80 | (cp & 0x3F)));
+                                }
+                            };
+                            if (code >= 0xD800 && code <= 0xDBFF) {
+                                uint32_t low = 0;
+                                bool paired = false;
+                                if ((!limit || p + 6 <= limit) && p[0] == '\\' && p[1] == 'u') {
+                                    const char* q = p + 2;
+                                    for (int i = 0; i < 4; ++i) {
+                                        low <<= 4;
+                                        char c = *q++;
+                                        if (c >= '0' && c <= '9')
+                                            low |= uint32_t(c - '0');
+                                        else if (c >= 'a' && c <= 'f')
+                                            low |= uint32_t(c - 'a' + 10);
+                                        else if (c >= 'A' && c <= 'F')
+                                            low |= uint32_t(c - 'A' + 10);
+                                        else
+                                            break;
+                                        if (i == 3) paired = true;
+                                    }
+                                }
+                                if (paired && low >= 0xDC00 && low <= 0xDFFF) {
+                                    p += 6;
+                                    uint32_t cp =
+                                        0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
+                                    appendUtf8(cp);
+                                } else {
+                                    appendUtf8(0xFFFD);
+                                }
+                            } else if (code >= 0xDC00 && code <= 0xDFFF) {
+                                appendUtf8(0xFFFD);
                             } else {
-                                value.push_back(char(0xE0 | (code >> 12)));
-                                value.push_back(char(0x80 | ((code >> 6) & 0x3F)));
-                                value.push_back(char(0x80 | (code & 0x3F)));
+                                appendUtf8(code);
                             }
                             break;
                         }

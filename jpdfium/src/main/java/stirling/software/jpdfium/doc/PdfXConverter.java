@@ -1,7 +1,5 @@
 package stirling.software.jpdfium.doc;
 
-import java.awt.Color;
-import java.awt.Graphics2D;
 import java.awt.color.ColorSpace;
 import java.awt.color.ICC_Profile;
 import java.awt.image.BufferedImage;
@@ -9,13 +7,20 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.BitSet;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import javax.imageio.IIOImage;
 import javax.imageio.ImageIO;
 import javax.imageio.ImageWriteParam;
@@ -25,11 +30,11 @@ import javax.imageio.stream.MemoryCacheImageOutputStream;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.exception.JPDFiumException;
-import stirling.software.jpdfium.model.PdfVersion;
+import stirling.software.jpdfium.model.PageSize;
 import stirling.software.jpdfium.model.Rect;
-import stirling.software.jpdfium.model.RenderResult;
 import stirling.software.jpdfium.panama.ColorBindings;
 import stirling.software.jpdfium.panama.DocBindings;
+import stirling.software.jpdfium.panama.PdfiumRuntime;
 import stirling.software.jpdfium.panama.QpdfLib;
 
 /**
@@ -41,17 +46,24 @@ import stirling.software.jpdfium.panama.QpdfLib;
  * printable annotations are flattened, JavaScript is removed and missing fonts are
  * embedded from the system font directories unless {@code embedMissingFonts} is off.
  * PDF/X-1a and PDF/X-3 reject transparency, hidden optional content and JBIG2/JPX
- * images rather than flattening them. Signed documents are rejected, and the
- * conversion fails if the page count changes.
+ * images unless {@code flattenTransparency} is enabled. Signed documents are rejected,
+ * and the conversion fails if the page count changes.
  *
  * <p>This is <strong>not a PDF/X validator</strong>. A font that cannot be found is
  * left unembedded (rejected with {@code requireEmbeddedFonts}), and trapping is not
  * applied. veraPDF has no PDF/X profiles,
- * so use a PDF/X preflight such as Acrobat or callas before claiming conformance;
+ * so use a dedicated PDF/X preflight validator before claiming conformance;
  * {@link #checkMetadata(byte[], PdfXOptions)} only checks the intent/ICC/version
  * wiring written here.
  */
 public final class PdfXConverter {
+
+    private static final String PROP_MAX_FLATTEN_PAGE_PIXELS = "jpdfium.pdfx.maxFlattenPagePixels";
+    private static final String PROP_MAX_FLATTEN_TOTAL_PIXELS = "jpdfium.pdfx.maxFlattenTotalPixels";
+    private static final String PROP_MAX_FLATTEN_BYTES = "jpdfium.pdfx.maxFlattenBytes";
+    private static final long DEFAULT_MAX_FLATTEN_PAGE_PIXELS = 64_000_000L;
+    private static final long DEFAULT_MAX_FLATTEN_TOTAL_PIXELS = 512_000_000L;
+    private static final long DEFAULT_MAX_FLATTEN_BYTES = 512L * 1024 * 1024;
 
     private PdfXConverter() {}
 
@@ -76,30 +88,27 @@ public final class PdfXConverter {
         if (doc == null) {
             throw new JPDFiumException("PDF/X metadata application requires a document");
         }
-        try (PdfDocument copy = PdfDocument.open(doc.saveBytes())) {
+        if (doc.hasRawByteRangeMarker()) {
+            throw new JPDFiumException("PDF/X conversion rewrites the document and would invalidate"
+                    + " its digital signature; remove the signature first");
+        }
+        byte[] copyBytes = doc.saveBytes();
+        requireNotSignedByRawScan(copyBytes);
+        try (PdfDocument copy = PdfDocument.open(copyBytes)) {
             return applyMetadataToCopy(copy, options);
         }
     }
 
     private static PdfDocument applyMetadataToCopy(PdfDocument doc, PdfXOptions options) {
-        prepare(doc, options);
-        applyDocumentInfo(doc, options);
-        PdfXStandard standard = options.standard();
-        byte[] converted = PdfOutputIntent.applyPdfxMetadata(nativePrepareWithFlatten(doc, options),
-                options.outputIntentProfile(),
-                PdfOutputIntent.Spec.pdfx(options.conditionIdentifier(), options.info()),
-                standard.gtsVersion(), standard.gtsConformance());
-        if (!options.fontData().isEmpty()) {
-            converted = PdfFontEmbedder.embed(converted, options.fontData());
-        }
-        converted = embedMissingFonts(converted, options);
-        try (PdfDocument metadata = PdfDocument.open(converted)) {
-            requireSamePageCount(doc.pageCount(), metadata.pageCount());
-            applyPageBoxes(metadata);
-            requireEmbeddedFonts(metadata, options);
-            byte[] out = PdfVersionConverter.forceVersion(
-                    metadata.saveBytes(), versionFor(standard));
-            return PdfDocument.open(out);
+        int expectedPages = doc.pageCount();
+        byte[] out = convertOpenDocument(doc, options);
+        PdfDocument result = PdfDocument.open(out);
+        try {
+            requireSamePageCount(expectedPages, result.pageCount());
+            return result;
+        } catch (RuntimeException e) {
+            result.close();
+            throw e;
         }
     }
 
@@ -109,128 +118,153 @@ public final class PdfXConverter {
         if (input == null || output == null) {
             throw new IllegalArgumentException("input and output paths are required");
         }
+        if (Files.isRegularFile(input)) {
+            requireNotSignedByRawScan(input);
+        }
         requireSupported(options);
         Path staging = null;
-        Path metadata = null;
+        Path stagedOut = null;
         try {
-            staging = Files.createTempFile(
-                    output.toAbsolutePath().getParent(), "jpdfium-pdfx-", ".pdf");
-            metadata = Files.createTempFile(
-                    output.toAbsolutePath().getParent(), "jpdfium-pdfx-meta-", ".pdf");
+            Path parent = output.toAbsolutePath().getParent();
+            Path stagingDir = parent != null ? parent : Path.of(".");
+            staging = Files.createTempFile(stagingDir, "jpdfium-pdfx-", ".pdf");
+            stagedOut = Files.createTempFile(stagingDir, "jpdfium-pdfx-out-", ".pdf");
             int pages;
             try (PdfDocument source = PdfDocument.open(input)) {
                 pages = source.pageCount();
                 prepare(source, options);
                 applyDocumentInfo(source, options);
+                applyPageBoxes(source);
                 source.save(staging);
+                requireNotSignedByRawScan(staging);
+                nativePrepareFileWithFlatten(source, staging, options);
             }
-            nativePrepare(staging, options);
+            if (!options.fontData().isEmpty()) {
+                applyFontData(staging, options);
+            }
+            PdfFontAuditor.FontInventorySnapshot verifiedFonts = embedMissingFonts(staging, options);
+            requireEmbeddedFonts(staging, verifiedFonts, options);
             PdfXStandard standard = options.standard();
-            if (!PdfOutputIntent.applyPdfxMetadata(staging, metadata,
+            if (!PdfOutputIntent.applyPdfxMetadata(staging, stagedOut,
                     options.outputIntentProfile(),
                     PdfOutputIntent.Spec.pdfx(options.conditionIdentifier(), options.info()),
                     standard.gtsVersion(), standard.gtsConformance())) {
                 throw new JPDFiumException("PDF/X metadata application failed");
             }
-            if (!options.fontData().isEmpty()) {
-                applyFontData(metadata, options);
+            try (PdfDocument result = PdfDocument.open(stagedOut)) {
+                requireSamePageCount(pages, result.pageCount());
             }
-            embedMissingFonts(metadata, options);
-            try (PdfDocument document = PdfDocument.open(metadata)) {
-                requireSamePageCount(pages, document.pageCount());
-                applyPageBoxes(document);
-                requireEmbeddedFonts(document, options);
-                document.save(staging);
+            try {
+                Files.move(stagedOut, output,
+                        StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            } catch (AtomicMoveNotSupportedException ignored) {
+                Files.move(stagedOut, output, StandardCopyOption.REPLACE_EXISTING);
             }
-            if (!PdfVersionConverter.forceVersion(staging, output, versionFor(standard))) {
-                throw new JPDFiumException("PDF/X version rewrite failed");
-            }
+            stagedOut = null;
         } finally {
             deleteQuietly(staging);
-            deleteQuietly(metadata);
+            deleteQuietly(stagedOut);
         }
     }
 
-    private static byte[] embedMissingFonts(byte[] pdf, PdfXOptions options) {
-        if (!options.embedMissingFonts() || !PdfFontEmbedder.isAvailable()) return pdf;
+    private record FontStepResult(
+            byte[] pdf, PdfFontAuditor.FontInventorySnapshot verifiedSnapshot) {}
+
+    private static byte[] convertOpenDocument(PdfDocument source, PdfXOptions options) {
+        prepare(source, options);
+        applyDocumentInfo(source, options);
+        applyPageBoxes(source);
+        byte[] converted = nativePrepareWithFlatten(source, options);
+        if (!options.fontData().isEmpty()) {
+            converted = PdfFontEmbedder.embed(converted, options.fontData());
+        }
+        FontStepResult fontStep = embedMissingFonts(converted, options);
+        requireEmbeddedFonts(fontStep.pdf(), fontStep.verifiedSnapshot(), options);
+        PdfXStandard standard = options.standard();
+        return PdfOutputIntent.applyPdfxMetadata(
+                fontStep.pdf(),
+                options.outputIntentProfile(),
+                PdfOutputIntent.Spec.pdfx(options.conditionIdentifier(), options.info()),
+                standard.gtsVersion(),
+                standard.gtsConformance());
+    }
+
+    private static FontStepResult embedMissingFonts(byte[] pdf, PdfXOptions options) {
+        if (!options.embedMissingFonts()) {
+            return new FontStepResult(pdf, null);
+        }
+        if (QpdfLib.isFontInventorySupported()) {
+            PdfFontAuditor.FontInventorySnapshot snapshot = PdfFontAuditor.inspectInventory(pdf);
+            if (!snapshot.hasIssues()) {
+                return new FontStepResult(pdf, snapshot);
+            }
+        }
+        if (!PdfFontEmbedder.isAvailable()) {
+            return new FontStepResult(pdf, null);
+        }
         try {
-            return PdfFontEmbedder.embedMissing(pdf, options.fontDirectories().toArray(Path[]::new)).pdf();
+            PdfFontEmbedder.Result emb = PdfFontEmbedder.embedMissing(
+                    pdf, options.fontDirectories().toArray(Path[]::new));
+            return new FontStepResult(emb.pdf(), null);
         } catch (IOException | JPDFiumException e) {
             if (options.requireEmbeddedFonts()) {
                 throw new JPDFiumException("PDF/X font embedding failed: " + e.getMessage(), e);
             }
-            return pdf;
+            return new FontStepResult(pdf, null);
         }
     }
 
-    private static void embedMissingFonts(Path pdf, PdfXOptions options) {
-        if (!options.embedMissingFonts() || !PdfFontEmbedder.isAvailable()) return;
+    private static PdfFontAuditor.FontInventorySnapshot embedMissingFonts(
+            Path pdf, PdfXOptions options) throws IOException {
+        if (!options.embedMissingFonts()) {
+            return null;
+        }
+        if (QpdfLib.isFileFontInventorySupported()) {
+            PdfFontAuditor.FontInventorySnapshot snapshot = PdfFontAuditor.inspectInventory(pdf);
+            if (!snapshot.hasIssues()) {
+                return snapshot;
+            }
+        }
+        if (!PdfFontEmbedder.isAvailable()) {
+            return null;
+        }
         try {
             PdfFontEmbedder.embedMissingTo(
                     pdf, pdf, options.fontDirectories().toArray(Path[]::new));
+            return null;
         } catch (IOException | JPDFiumException e) {
             if (options.requireEmbeddedFonts()) {
                 throw new JPDFiumException("PDF/X font embedding failed: " + e.getMessage(), e);
             }
+            return null;
         }
     }
 
     private static boolean isSigned(PdfDocument doc) {
-        int count = PdfSignatures.count(doc.rawHandleForRead());
+        int count = doc.signatureCount();
         for (int i = 0; i < count; i++) {
-            if (PdfSignatures.details(doc.nativeHandle(), i).byteRange() != null) return true;
+            if (doc.signatureDetails(i).byteRange() != null) return true;
         }
         return false;
     }
 
-    /** ISO 32000 signature dictionaries announce themselves with /ByteRange. */
-    private static final byte[] BYTE_RANGE = "/ByteRange".getBytes(StandardCharsets.US_ASCII);
-
     /**
-     * Fails closed on a raw {@code /ByteRange} marker anywhere in the bytes.
+     * Fails closed on a raw {@code /ByteRange [...]} signature array anywhere in the bytes.
      * PDFium's signature enumeration only reports signatures it recognizes
      * (AcroForm signature fields); a dictionary it cannot see would let the
      * rewrite silently invalidate a real signature.
      */
     private static void requireNotSignedByRawScan(byte[] input) {
-        outer:
-        for (int i = 0; i + BYTE_RANGE.length <= input.length; i++) {
-            for (int j = 0; j < BYTE_RANGE.length; j++) {
-                if (input[i + j] != BYTE_RANGE[j]) continue outer;
-            }
-            if (!byteRangeArrayAt(input, i + BYTE_RANGE.length)) continue;
+        if (PdfDocument.containsByteRangeArray(input, input.length)) {
             throw new JPDFiumException("PDF/X conversion rewrites the document and would invalidate"
                     + " its digital signature; remove the signature first");
         }
     }
 
-    /** A signature /ByteRange is a direct array of four non-negative integers. */
-    private static boolean byteRangeArrayAt(byte[] input, int pos) {
-        pos = skipPdfSpace(input, pos);
-        if (pos >= input.length || input[pos] != '[') return false;
-        pos++;
-        for (int i = 0; i < 4; i++) {
-            pos = skipPdfSpace(input, pos);
-            if (pos >= input.length || input[pos] < '0' || input[pos] > '9') return false;
-            long value = 0;
-            while (pos < input.length && input[pos] >= '0' && input[pos] <= '9') {
-                value = value * 10 + (input[pos++] - '0');
-                if (value > Integer.MAX_VALUE) return false;
-            }
-        }
-        pos = skipPdfSpace(input, pos);
-        return pos < input.length && input[pos] == ']';
-    }
-
-    private static int skipPdfSpace(byte[] input, int pos) {
-        for (;;) {
-            while (pos < input.length
-                    && (input[pos] == ' ' || input[pos] == '\t' || input[pos] == '\r'
-                            || input[pos] == '\n' || input[pos] == '\f')) {
-                pos++;
-            }
-            if (pos >= input.length || input[pos] != '%') return pos;
-            while (pos < input.length && input[pos] != '\n' && input[pos] != '\r') pos++;
+    private static void requireNotSignedByRawScan(Path input) throws IOException {
+        if (PdfDocument.containsByteRangeArray(input)) {
+            throw new JPDFiumException("PDF/X conversion rewrites the document and would invalidate"
+                    + " its digital signature; remove the signature first");
         }
     }
 
@@ -326,27 +360,23 @@ public final class PdfXConverter {
         if (document.getTrapped() != DocBindings.PDFTRAPPED_TRUE) {
             document.setTrappedFalse();
         }
+        PdfMetadata metadata = PdfMetadata.of(document.rawHandleForRead());
         if (options.standard() == PdfXStandard.PDF_X_1A || options.standard() == PdfXStandard.PDF_X_3) {
             document.setMetadata("GTS_PDFXVersion", options.standard().gtsVersion());
             if (options.standard().gtsConformance() != null) {
                 document.setMetadata("GTS_PDFXConformance", options.standard().gtsConformance());
             }
-            if (options.title() == null || options.title().isBlank()) {
-                PdfMetadata meta = PdfMetadata.of(document.rawHandleForRead());
-                if (meta.title().isEmpty()) {
-                    throw new JPDFiumException("Title is required for " + options.standard().name());
-                }
+            if ((options.title() == null || options.title().isBlank())
+                    && metadata.title().isEmpty()) {
+                throw new JPDFiumException("Title is required for " + options.standard().name());
             }
         }
         if (options.title() != null && !options.title().isBlank()) {
             document.setMetadata("Title", options.title());
-        } else if (options.standard() == PdfXStandard.PDF_X_4 || options.standard() == PdfXStandard.PDF_X_6) {
-            PdfMetadata meta = PdfMetadata.of(document.rawHandleForRead());
-            if (meta.title().isEmpty()) {
-                document.setMetadata("Title", "Untitled");
-            }
+        } else if ((options.standard() == PdfXStandard.PDF_X_4 || options.standard() == PdfXStandard.PDF_X_6)
+                && metadata.title().isEmpty()) {
+            document.setMetadata("Title", "Untitled");
         }
-        PdfMetadata metadata = PdfMetadata.of(document.rawHandleForRead());
         String now = DateTimeFormatter.ofPattern("'D:'yyyyMMddHHmmss'+00''00'''")
                 .format(Instant.now().atZone(ZoneOffset.UTC));
         if (metadata.creationDate().isEmpty()) {
@@ -436,19 +466,60 @@ public final class PdfXConverter {
         }
     }
 
-    private static void requireEmbeddedFonts(PdfDocument document, PdfXOptions options) {
-        if (options.requireEmbeddedFonts() && PdfFontAuditor.hasNonEmbeddedFonts(document)) {
-            throw new JPDFiumException(
-                    "PDF/X requires embedded fonts; conversion left a non-embedded font");
+    private static void requireEmbeddedFonts(
+            byte[] pdf,
+            PdfFontAuditor.FontInventorySnapshot verifiedSnapshot,
+            PdfXOptions options) {
+        if (!options.requireEmbeddedFonts()) return;
+        if (verifiedSnapshot != null) {
+            if (!verifiedSnapshot.unembeddedResources().isEmpty()) {
+                throw new JPDFiumException(
+                        "PDF/X requires embedded fonts; conversion left a non-embedded font");
+            }
+            return;
+        }
+        if (QpdfLib.isFontInventorySupported()) {
+            PdfFontAuditor.FontInventorySnapshot snapshot = PdfFontAuditor.inspectInventory(pdf);
+            if (!snapshot.unembeddedResources().isEmpty()) {
+                throw new JPDFiumException(
+                        "PDF/X requires embedded fonts; conversion left a non-embedded font");
+            }
+            return;
+        }
+        try (PdfDocument metadata = PdfDocument.open(pdf)) {
+            if (PdfFontAuditor.hasNonEmbeddedFonts(metadata)) {
+                throw new JPDFiumException(
+                        "PDF/X requires embedded fonts; conversion left a non-embedded font");
+            }
         }
     }
 
-    private static PdfVersion versionFor(PdfXStandard standard) {
-        return switch (standard) {
-            case PDF_X_1A, PDF_X_3 -> PdfVersion.V1_3;
-            case PDF_X_4 -> PdfVersion.V1_6;
-            case PDF_X_6 -> PdfVersion.V2_0;
-        };
+    private static void requireEmbeddedFonts(
+            Path pdf,
+            PdfFontAuditor.FontInventorySnapshot verifiedSnapshot,
+            PdfXOptions options) {
+        if (!options.requireEmbeddedFonts()) return;
+        if (verifiedSnapshot != null) {
+            if (!verifiedSnapshot.unembeddedResources().isEmpty()) {
+                throw new JPDFiumException(
+                        "PDF/X requires embedded fonts; conversion left a non-embedded font");
+            }
+            return;
+        }
+        if (QpdfLib.isFileFontInventorySupported()) {
+            PdfFontAuditor.FontInventorySnapshot snapshot = PdfFontAuditor.inspectInventory(pdf);
+            if (!snapshot.unembeddedResources().isEmpty()) {
+                throw new JPDFiumException(
+                        "PDF/X requires embedded fonts; conversion left a non-embedded font");
+            }
+            return;
+        }
+        try (PdfDocument document = PdfDocument.open(pdf)) {
+            if (PdfFontAuditor.hasNonEmbeddedFonts(document)) {
+                throw new JPDFiumException(
+                        "PDF/X requires embedded fonts; conversion left a non-embedded font");
+            }
+        }
     }
 
     /** Apply PDF/X metadata and return the new PDF bytes. */
@@ -458,27 +529,16 @@ public final class PdfXConverter {
         }
         requireNotSignedByRawScan(input);
         requireSupported(options);
+        int expectedPages;
+        byte[] out;
         try (PdfDocument source = PdfDocument.open(input)) {
-            prepare(source, options);
-            applyDocumentInfo(source, options);
-            PdfXStandard standard = options.standard();
-            byte[] converted = PdfOutputIntent.applyPdfxMetadata(nativePrepareWithFlatten(source, options),
-                    options.outputIntentProfile(),
-                    PdfOutputIntent.Spec.pdfx(options.conditionIdentifier(), options.info()),
-                    standard.gtsVersion(), standard.gtsConformance());
-            if (!options.fontData().isEmpty()) {
-                converted = PdfFontEmbedder.embed(converted, options.fontData());
-            }
-            converted = embedMissingFonts(converted, options);
-            byte[] out;
-            try (PdfDocument metadata = PdfDocument.open(converted)) {
-                requireSamePageCount(source.pageCount(), metadata.pageCount());
-                applyPageBoxes(metadata);
-                requireEmbeddedFonts(metadata, options);
-                out = metadata.saveBytes();
-            }
-            return PdfVersionConverter.forceVersion(out, versionFor(standard));
+            expectedPages = source.pageCount();
+            out = convertOpenDocument(source, options);
         }
+        try (PdfDocument result = PdfDocument.open(out)) {
+            requireSamePageCount(expectedPages, result.pageCount());
+        }
+        return out;
     }
 
     private static void prepare(PdfDocument doc, PdfXOptions options) {
@@ -515,31 +575,39 @@ public final class PdfXConverter {
     }
 
     private static byte[] nativePrepareWithFlatten(PdfDocument source, PdfXOptions options) {
+        byte[] sourceBytes = source.saveBytes();
+        requireNotSignedByRawScan(sourceBytes);
         if (!options.flattenTransparency() || options.standard().allowsTransparency()) {
-            return nativePrepare(source.saveBytes(), options);
+            return nativePrepare(sourceBytes, options);
         }
-        BitSet toFlatten = new BitSet();
-        int count = source.pageCount();
-        for (int i = 0; i < count; i++) {
-            try (PdfPage page = source.page(i)) {
-                if (PdfPageObjects.hasTransparencyStrict(page.rawHandleForRead())) {
-                    toFlatten.set(i);
-                }
-            }
-        }
-        byte[] current = toFlatten.isEmpty()
-                ? source.saveBytes()
-                : flattenSelectedPages(source, toFlatten, options);
         try {
-            return nativePrepare(current, options);
+            return nativePrepare(sourceBytes, options);
         } catch (JPDFiumException e) {
-            BitSet extra = parseIncompatiblePages(e.getMessage(), count);
-            if (extra.isEmpty()) {
+            BitSet toFlatten = parseIncompatiblePages(e.getMessage(), source.pageCount());
+            if (toFlatten.isEmpty()) {
                 throw e;
             }
-            toFlatten.or(extra);
             byte[] flattened = flattenSelectedPages(source, toFlatten, options);
             return nativePrepare(flattened, options);
+        }
+    }
+
+    private static void nativePrepareFileWithFlatten(
+            PdfDocument source, Path staging, PdfXOptions options) throws IOException {
+        if (!options.flattenTransparency() || options.standard().allowsTransparency()) {
+            nativePrepare(staging, options);
+            return;
+        }
+        try {
+            nativePrepare(staging, options);
+        } catch (JPDFiumException e) {
+            BitSet toFlatten = parseIncompatiblePages(e.getMessage(), source.pageCount());
+            if (toFlatten.isEmpty()) {
+                throw e;
+            }
+            byte[] flattened = flattenSelectedPages(source, toFlatten, options);
+            Files.write(staging, flattened);
+            nativePrepare(staging, options);
         }
     }
 
@@ -552,10 +620,28 @@ public final class PdfXConverter {
         if (end < 0) return pages;
         String list = msg.substring(start + 7, end);
         for (String tok : list.split(",")) {
+            String t = tok.trim();
+            if (t.isEmpty()) continue;
+            int dash = t.indexOf('-');
             try {
-                int p = Integer.parseInt(tok.trim()) - 1;
-                if (p >= 0 && p < pageCount) {
-                    pages.set(p);
+                if (dash > 0) {
+                    int lo = Integer.parseInt(t.substring(0, dash).trim()) - 1;
+                    int hi = Integer.parseInt(t.substring(dash + 1).trim()) - 1;
+                    if (lo > hi) {
+                        int tmp = lo;
+                        lo = hi;
+                        hi = tmp;
+                    }
+                    int startPage = Math.max(0, lo);
+                    int endPage = Math.min(pageCount - 1, hi);
+                    for (int p = startPage; p <= endPage; p++) {
+                        pages.set(p);
+                    }
+                } else {
+                    int p = Integer.parseInt(t) - 1;
+                    if (p >= 0 && p < pageCount) {
+                        pages.set(p);
+                    }
                 }
             } catch (NumberFormatException ignored) {
                 // Skip malformed token.
@@ -564,43 +650,75 @@ public final class PdfXConverter {
         return pages;
     }
 
+    private static long configCap(String property, long defaultValue) {
+        long value = Long.getLong(property, defaultValue);
+        if (value < 0) {
+            throw new IllegalArgumentException(property + " must be >= 0 (was " + value + ")");
+        }
+        return value;
+    }
+
     private static byte[] flattenSelectedPages(PdfDocument source, BitSet toFlatten, PdfXOptions options) {
         int count = source.pageCount();
         int dpi = options.flattenDpi();
-        try (PdfDocument out = PdfDocumentFactory.createNew()) {
+        long maxPagePixels = configCap(PROP_MAX_FLATTEN_PAGE_PIXELS, DEFAULT_MAX_FLATTEN_PAGE_PIXELS);
+        long maxTotalPixels = configCap(PROP_MAX_FLATTEN_TOTAL_PIXELS, DEFAULT_MAX_FLATTEN_TOTAL_PIXELS);
+        long maxFlattenBytes = configCap(PROP_MAX_FLATTEN_BYTES, DEFAULT_MAX_FLATTEN_BYTES);
+        long totalPixels = 0L;
+        long totalJpegBytes = 0L;
+        try (PdfDocument out = PdfDocument.open(source.saveBytes())) {
             for (int i = 0; i < count; i++) {
                 if (!toFlatten.get(i)) {
-                    PdfPageImporter.importPagesByIndex(
-                            out.rawHandle(), source.rawHandleForRead(), new int[]{i}, i);
                     continue;
                 }
-                Rect media;
-                BufferedImage rawImg;
+                PageSize visualSize;
+                BufferedImage img;
+                String pageText;
                 try (PdfPage page = source.page(i)) {
-                    media = page.getMediaBox();
-                    RenderResult rendered = page.renderAt(dpi, false, null);
-                    rawImg = rendered.toBufferedImage();
+                    visualSize = page.size();
+                    long lw = Math.max(1L,
+                            (long) Math.floor(Math.abs(visualSize.width()) * (double) dpi / 72.0));
+                    long lh = Math.max(1L,
+                            (long) Math.floor(Math.abs(visualSize.height()) * (double) dpi / 72.0));
+                    long pagePixels;
+                    try {
+                        pagePixels = Math.multiplyExact(lw, lh);
+                    } catch (ArithmeticException overflow) {
+                        throw new JPDFiumException("Flattened page " + (i + 1)
+                                + " pixel dimensions overflow: " + lw + "x" + lh, overflow);
+                    }
+                    if (maxPagePixels > 0 && pagePixels > maxPagePixels) {
+                        throw new JPDFiumException("Flattened page " + (i + 1) + " requires "
+                                + pagePixels + " pixels (" + lw + "x" + lh + " at " + dpi
+                                + " dpi), exceeding " + PROP_MAX_FLATTEN_PAGE_PIXELS
+                                + "=" + maxPagePixels);
+                    }
+                    if (maxTotalPixels > 0 && pagePixels > maxTotalPixels - totalPixels) {
+                        throw new JPDFiumException("Cumulative flattened pixel budget exceeded at page "
+                                + (i + 1) + " (" + PROP_MAX_FLATTEN_TOTAL_PIXELS
+                                + "=" + maxTotalPixels + ")");
+                    }
+                    totalPixels += pagePixels;
+                    pageText = page.extractText();
+                    img = page.renderImage(dpi, false);
                 }
-                // Strip alpha channel (TYPE_INT_ARGB -> TYPE_INT_RGB on white) so PdfDocument.fromImage
-                // never attaches an /SMask soft mask that PDF/X-1a/3 forbids.
-                BufferedImage img = new BufferedImage(
-                        rawImg.getWidth(), rawImg.getHeight(), BufferedImage.TYPE_INT_RGB);
-                Graphics2D g = img.createGraphics();
-                try {
-                    g.setColor(Color.WHITE);
-                    g.fillRect(0, 0, img.getWidth(), img.getHeight());
-                    g.drawImage(rawImg, 0, 0, null);
-                } finally {
-                    g.dispose();
+                float w = Math.max(1f, Math.abs(visualSize.width()));
+                float h = Math.max(1f, Math.abs(visualSize.height()));
+                byte[] singlePagePdf =
+                        buildOpaqueJpegPagePdf(img, w, h, options.jpegQuality(), pageText);
+                if (maxFlattenBytes > 0 && singlePagePdf.length > maxFlattenBytes - totalJpegBytes) {
+                    throw new JPDFiumException("Cumulative flattened PDF byte budget exceeded at page "
+                            + (i + 1) + " (" + PROP_MAX_FLATTEN_BYTES + "=" + maxFlattenBytes + ")");
                 }
-                float w = Math.max(1f, Math.abs(media.width()));
-                float h = Math.max(1f, Math.abs(media.height()));
-                byte[] singlePagePdf = buildOpaqueJpegPagePdf(img, w, h, options.jpegQuality());
+                totalJpegBytes += singlePagePdf.length;
                 try (PdfDocument imgDoc = PdfDocument.open(singlePagePdf)) {
                     PdfPageImporter.importPagesByIndex(
                             out.rawHandle(), imgDoc.rawHandleForRead(), new int[]{0}, i);
+                    final int oldPageIndex = i + 1;
+                    PdfiumRuntime.execute(() -> PdfPageEditor.deletePage(out.rawHandle(), oldPageIndex));
                 }
             }
+            applyPageBoxes(out);
             PdfMetadata srcMeta = PdfMetadata.of(source.rawHandleForRead());
             srcMeta.title().ifPresent(v -> out.setMetadata("Title", v));
             srcMeta.creator().ifPresent(v -> out.setMetadata("Creator", v));
@@ -612,11 +730,16 @@ public final class PdfXConverter {
         }
     }
 
-    private static byte[] buildOpaqueJpegPagePdf(BufferedImage rgb, float pageW, float pageH, int quality) {
+    private static byte[] buildOpaqueJpegPagePdf(
+            BufferedImage rgb, float pageW, float pageH, int quality, String pageText) {
         byte[] jpeg;
         try {
             ByteArrayOutputStream jb = new ByteArrayOutputStream();
-            ImageWriter writer = ImageIO.getImageWritersByFormatName("jpeg").next();
+            Iterator<ImageWriter> writers = ImageIO.getImageWritersByFormatName("jpeg");
+            if (!writers.hasNext()) {
+                throw new JPDFiumException("No JPEG ImageWriter available");
+            }
+            ImageWriter writer = writers.next();
             try (MemoryCacheImageOutputStream ios = new MemoryCacheImageOutputStream(jb)) {
                 writer.setOutput(ios);
                 ImageWriteParam param = writer.getDefaultWriteParam();
@@ -632,12 +755,38 @@ public final class PdfXConverter {
         } catch (IOException e) {
             throw new JPDFiumException("Failed to encode flattened PDF/X page image: " + e.getMessage(), e);
         }
+
+        // Preserve extractable invisible text (3 Tr) via an embedded synthetic Type0 font.
+        Map<Integer, Integer> cpToCid = new LinkedHashMap<>();
+        List<int[]> lines = extractInvisibleTextLines(pageText, cpToCid);
+        boolean hasText = !lines.isEmpty() && !cpToCid.isEmpty();
+
         String wStr = String.format(Locale.ROOT, "%.4f", pageW);
         String hStr = String.format(Locale.ROOT, "%.4f", pageH);
-        byte[] content = ("q " + wStr + " 0 0 " + hStr + " 0 0 cm /Im0 Do Q\n")
-                .getBytes(StandardCharsets.US_ASCII);
-        ByteArrayOutputStream pdf = new ByteArrayOutputStream(jpeg.length + 1024);
-        int[] off = new int[6];
+        StringBuilder cs = new StringBuilder(256 + lines.size() * 64);
+        cs.append("q ").append(wStr).append(" 0 0 ").append(hStr).append(" 0 0 cm /Im0 Do Q\n");
+        if (hasText) {
+            float lineStep = Math.min(10f, Math.max(0.1f, (pageH - 16f) / Math.max(1, lines.size())));
+            float fontSize = Math.min(8f, Math.max(0.08f, lineStep * 0.85f));
+            cs.append("BT\n/F0 ").append(String.format(Locale.ROOT, "%.4f", fontSize)).append(" Tf\n3 Tr\n");
+            for (int li = 0; li < lines.size(); li++) {
+                int[] cps = lines.get(li);
+                if (cps.length == 0) continue;
+                float y = Math.max(2f, pageH - 10f - li * lineStep);
+                cs.append("1 0 0 1 10 ").append(String.format(Locale.ROOT, "%.4f", y)).append(" Tm\n<");
+                for (int cp : cps) {
+                    int cid = cpToCid.getOrDefault(cp, 1);
+                    cs.append(String.format(Locale.ROOT, "%04X", cid));
+                }
+                cs.append("> Tj\n");
+            }
+            cs.append("ET\n");
+        }
+        byte[] content = cs.toString().getBytes(StandardCharsets.US_ASCII);
+
+        int objCount = hasText ? 12 : 6;
+        ByteArrayOutputStream pdf = new ByteArrayOutputStream(jpeg.length + content.length + 4096);
+        int[] off = new int[objCount];
         try {
             pdf.write("%PDF-1.3\n%\u00E2\u00E3\u00CF\u00D3\n".getBytes(StandardCharsets.ISO_8859_1));
             off[1] = pdf.size();
@@ -645,9 +794,10 @@ public final class PdfXConverter {
             off[2] = pdf.size();
             pdf.write("2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n".getBytes(StandardCharsets.US_ASCII));
             off[3] = pdf.size();
+            String fontRes = hasText ? " /Font << /F0 6 0 R >>" : "";
             pdf.write(("3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 " + wStr + " " + hStr
-                    + "] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>\nendobj\n")
-                    .getBytes(StandardCharsets.US_ASCII));
+                    + "] /Resources << /XObject << /Im0 4 0 R >>" + fontRes
+                    + " >> /Contents 5 0 R >>\nendobj\n").getBytes(StandardCharsets.US_ASCII));
             off[4] = pdf.size();
             pdf.write(("4 0 obj\n<< /Type /XObject /Subtype /Image /Width " + rgb.getWidth()
                     + " /Height " + rgb.getHeight()
@@ -660,31 +810,328 @@ public final class PdfXConverter {
                     .getBytes(StandardCharsets.US_ASCII));
             pdf.write(content);
             pdf.write("endstream\nendobj\n".getBytes(StandardCharsets.US_ASCII));
+            if (hasText) {
+                int maxCid = cpToCid.size();
+                byte[] ttf = InvisibleTtfHolder.BYTES;
+                byte[] toUnicode = buildToUnicodeCmap(cpToCid);
+                byte[] cidToGid = new byte[(maxCid + 1) * 2];
+                for (int c = 1; c <= maxCid; c++) {
+                    cidToGid[c * 2] = 0;
+                    cidToGid[c * 2 + 1] = 1;
+                }
+
+                off[6] = pdf.size();
+                pdf.write(("6 0 obj\n<< /Type /Font /Subtype /Type0 /BaseFont /JpdfiumInvisibleOCR"
+                        + " /Encoding /Identity-H /DescendantFonts [7 0 R] /ToUnicode 10 0 R >>\nendobj\n")
+                        .getBytes(StandardCharsets.US_ASCII));
+                off[7] = pdf.size();
+                pdf.write(("7 0 obj\n<< /Type /Font /Subtype /CIDFontType2 /BaseFont /JpdfiumInvisibleOCR"
+                        + " /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >>"
+                        + " /FontDescriptor 8 0 R /DW 500 /W [0 " + maxCid
+                        + " 500] /CIDToGIDMap 11 0 R >>\nendobj\n").getBytes(StandardCharsets.US_ASCII));
+                off[8] = pdf.size();
+                pdf.write(("8 0 obj\n<< /Type /FontDescriptor /FontName /JpdfiumInvisibleOCR"
+                        + " /Flags 4 /FontBBox [0 -200 500 800] /ItalicAngle 0 /Ascent 800"
+                        + " /Descent -200 /CapHeight 700 /StemV 80 /FontFile2 9 0 R >>\nendobj\n")
+                        .getBytes(StandardCharsets.US_ASCII));
+                off[9] = pdf.size();
+                pdf.write(("9 0 obj\n<< /Length1 " + ttf.length + " /Length " + ttf.length
+                        + " >>\nstream\n").getBytes(StandardCharsets.US_ASCII));
+                pdf.write(ttf);
+                pdf.write("\nendstream\nendobj\n".getBytes(StandardCharsets.US_ASCII));
+                off[10] = pdf.size();
+                pdf.write(("10 0 obj\n<< /Length " + toUnicode.length + " >>\nstream\n")
+                        .getBytes(StandardCharsets.US_ASCII));
+                pdf.write(toUnicode);
+                pdf.write("\nendstream\nendobj\n".getBytes(StandardCharsets.US_ASCII));
+                off[11] = pdf.size();
+                pdf.write(("11 0 obj\n<< /Length " + cidToGid.length + " >>\nstream\n")
+                        .getBytes(StandardCharsets.US_ASCII));
+                pdf.write(cidToGid);
+                pdf.write("\nendstream\nendobj\n".getBytes(StandardCharsets.US_ASCII));
+            }
             int xref = pdf.size();
-            pdf.write("xref\n0 6\n0000000000 65535 f \n".getBytes(StandardCharsets.US_ASCII));
-            for (int i = 1; i <= 5; i++) {
-                pdf.write(String.format(Locale.ROOT, "%010d 00000 n \n", off[i])
+            pdf.write(("xref\n0 " + objCount + "\n0000000000 65535 f \n")
+                    .getBytes(StandardCharsets.US_ASCII));
+            for (int i = 1; i < objCount; i++) {
+                pdf.write((String.format(Locale.ROOT, "%010d 00000 n ", off[i]) + "\n")
                         .getBytes(StandardCharsets.US_ASCII));
             }
-            pdf.write(("trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n" + xref + "\n%%EOF\n")
-                    .getBytes(StandardCharsets.US_ASCII));
+            pdf.write(("trailer\n<< /Size " + objCount + " /Root 1 0 R >>\nstartxref\n"
+                    + xref + "\n%%EOF\n").getBytes(StandardCharsets.US_ASCII));
         } catch (IOException e) {
             throw new JPDFiumException("Failed to build flattened page PDF: " + e.getMessage(), e);
         }
         return pdf.toByteArray();
     }
 
+    private static List<int[]> extractInvisibleTextLines(
+            String text, Map<Integer, Integer> cpToCid) {
+        if (text == null || text.isBlank()) return List.of();
+        List<int[]> lines = new ArrayList<>();
+        List<Integer> cur = new ArrayList<>();
+        int n = text.length();
+        for (int i = 0; i < n; ) {
+            int cp = text.codePointAt(i);
+            i += Character.charCount(cp);
+            if (cp == '\r') {
+                if (i < n && text.charAt(i) == '\n') i++;
+                if (!cur.isEmpty()) {
+                    lines.add(cur.stream().mapToInt(Integer::intValue).toArray());
+                    cur.clear();
+                }
+                continue;
+            }
+            if (cp == '\n') {
+                if (!cur.isEmpty()) {
+                    lines.add(cur.stream().mapToInt(Integer::intValue).toArray());
+                    cur.clear();
+                }
+                continue;
+            }
+            if (cp == 0 || Character.isSurrogate((char) Math.min(cp, 0xFFFF))) {
+                continue;
+            }
+            if (cp == '\t') cp = ' ';
+            Integer cid = cpToCid.get(cp);
+            if (cid == null) {
+                if (cpToCid.size() >= 65535) continue;
+                cid = cpToCid.size() + 1;
+                cpToCid.put(cp, cid);
+            }
+            cur.add(cp);
+        }
+        if (!cur.isEmpty()) {
+            lines.add(cur.stream().mapToInt(Integer::intValue).toArray());
+        }
+        return lines;
+    }
+
+    private static byte[] buildToUnicodeCmap(Map<Integer, Integer> cpToCid) {
+        StringBuilder sb = new StringBuilder(256 + cpToCid.size() * 20);
+        sb.append("/CIDInit /ProcSet findresource begin\n"
+                + "12 dict begin\n"
+                + "begincmap\n"
+                + "/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n"
+                + "/CMapName /Adobe-Identity-UCS def\n"
+                + "/CMapType 2 def\n"
+                + "1 begincodespacerange\n"
+                + "<0000> <FFFF>\n"
+                + "endcodespacerange\n");
+        List<Map.Entry<Integer, Integer>> entries = new ArrayList<>(cpToCid.entrySet());
+        for (int i = 0; i < entries.size(); i += 100) {
+            int end = Math.min(entries.size(), i + 100);
+            sb.append(end - i).append(" beginbfchar\n");
+            for (int k = i; k < end; k++) {
+                int cp = entries.get(k).getKey();
+                int cid = entries.get(k).getValue();
+                sb.append(String.format(Locale.ROOT, "<%04X> ", cid));
+                if (cp <= 0xFFFF) {
+                    sb.append(String.format(Locale.ROOT, "<%04X>", cp)).append('\n');
+                } else {
+                    int hi = Character.highSurrogate(cp);
+                    int lo = Character.lowSurrogate(cp);
+                    sb.append(String.format(Locale.ROOT, "<%04X%04X>", hi, lo)).append('\n');
+                }
+            }
+            sb.append("endbfchar\n");
+        }
+        sb.append("endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n");
+        return sb.toString().getBytes(StandardCharsets.US_ASCII);
+    }
+
+    private static final class InvisibleTtfHolder {
+        static final byte[] BYTES = buildMinimalTtf();
+
+        private static byte[] buildMinimalTtf() {
+            // 10-table minimal TrueType font (2 empty glyphs: GID 0 .notdef, GID 1 invisible advance 500)
+            byte[] os2 = new byte[86];
+            putU16(os2, 0, 1);      // version 1
+            putI16(os2, 2, 500);    // xAvgCharWidth
+            putU16(os2, 4, 400);    // usWeightClass
+            putU16(os2, 6, 5);      // usWidthClass
+            putI16(os2, 68, 800);   // sTypoAscender
+            putI16(os2, 70, -200);  // sTypoDescender
+            putU16(os2, 74, 800);   // usWinAscent
+            putU16(os2, 76, 200);   // usWinDescent
+
+            byte[] cmap = new byte[36];
+            putU16(cmap, 0, 0);     // version
+            putU16(cmap, 2, 1);     // numTables
+            putU16(cmap, 4, 3);     // platformID 3 (Windows)
+            putU16(cmap, 6, 1);     // encodingID 1 (Unicode BMP)
+            putU32(cmap, 8, 12);    // offset to subtable
+            putU16(cmap, 12, 4);    // format 4
+            putU16(cmap, 14, 24);   // length
+            putU16(cmap, 18, 4);    // segCountX2 = 4 (2 segments: 0x0020 and 0xFFFF)
+            putU16(cmap, 20, 4);    // searchRange
+            putU16(cmap, 22, 1);    // entrySelector
+            putU16(cmap, 24, 0);    // rangeShift
+            putU16(cmap, 26, 0x0020);
+            putU16(cmap, 28, 0xFFFF);
+            putU16(cmap, 30, 0);    // reservedPad
+            putU16(cmap, 32, 0x0020);
+            putU16(cmap, 34, 0xFFFF);
+            // Resize cmap to hold idDelta and idRangeOffset (total 44 bytes: 12 + 32)
+            byte[] cmapFull = new byte[44];
+            System.arraycopy(cmap, 0, cmapFull, 0, 36);
+            putU16(cmapFull, 14, 32); // subtable length = 32
+            putI16(cmapFull, 36, 1 - 0x0020); // idDelta[0]: 0x0020 -> GID 1
+            putI16(cmapFull, 38, 1);          // idDelta[1]: 0xFFFF -> GID 0
+            putU16(cmapFull, 40, 0);          // idRangeOffset[0]
+            putU16(cmapFull, 42, 0);          // idRangeOffset[1]
+
+            // GID 0 (.notdef) is empty; GID 1 has a 1-contour non-zero bbox so FPDFText preserves
+            // 1-char lines and consecutive identical lines while 3 Tr keeps rendering invisible.
+            byte[] glyf = new byte[32];
+            putI16(glyf, 0, 1);     // numberOfContours = 1
+            putI16(glyf, 2, 0);     // xMin
+            putI16(glyf, 4, 0);     // yMin
+            putI16(glyf, 6, 500);   // xMax
+            putI16(glyf, 8, 700);   // yMax
+            putU16(glyf, 10, 2);    // endPtsOfContours[0] = 2 (3 points)
+            putU16(glyf, 12, 0);    // instructionLength = 0
+            glyf[14] = 1;           // point 0: on-curve, 16-bit dx/dy
+            glyf[15] = 1;           // point 1: on-curve, 16-bit dx/dy
+            glyf[16] = 1;           // point 2: on-curve, 16-bit dx/dy
+            putI16(glyf, 17, 0);    // dx[0] = 0 -> x0 = 0
+            putI16(glyf, 19, 500);  // dx[1] = 500 -> x1 = 500
+            putI16(glyf, 21, -500); // dx[2] = -500 -> x2 = 0
+            putI16(glyf, 23, 0);    // dy[0] = 0 -> y0 = 0
+            putI16(glyf, 25, 0);    // dy[1] = 0 -> y1 = 0
+            putI16(glyf, 27, 700);  // dy[2] = 700 -> y2 = 700
+
+            byte[] head = new byte[54];
+            putU32(head, 0, 0x00010000);
+            putU32(head, 4, 0x00010000);
+            putU32(head, 12, 0x5F0F3CF5);
+            putU16(head, 16, 3);
+            putU16(head, 18, 1000);
+            putI16(head, 36, 0);
+            putI16(head, 38, -200);
+            putI16(head, 40, 500);
+            putI16(head, 42, 800);
+            putU16(head, 46, 8);
+            putI16(head, 48, 2);
+            putI16(head, 50, 0);
+
+            byte[] hhea = new byte[36];
+            putU32(hhea, 0, 0x00010000);
+            putI16(hhea, 4, 800);
+            putI16(hhea, 6, -200);
+            putU16(hhea, 10, 500);
+            putI16(hhea, 16, 500);
+            putI16(hhea, 18, 1);
+            putU16(hhea, 34, 2);
+
+            byte[] hmtx = new byte[8];
+            putU16(hmtx, 0, 500);
+            putU16(hmtx, 4, 500);
+
+            byte[] loca = new byte[6];
+            putU16(loca, 4, 16); // GID 1 spans [0, 32) in glyf
+
+            byte[] maxp = new byte[32];
+            putU32(maxp, 0, 0x00010000);
+            putU16(maxp, 4, 2);
+            putU16(maxp, 6, 3); // maxPoints
+            putU16(maxp, 8, 1); // maxContours
+
+            byte[] nameBytes = "JpdfiumInvisibleOCR".getBytes(StandardCharsets.UTF_16BE);
+            byte[] name = new byte[6 + 36 + nameBytes.length];
+            putU16(name, 2, 3); // 3 records (nameID 1, 4, 6)
+            putU16(name, 4, 6 + 36);
+            int[] nameIds = {1, 4, 6};
+            for (int r = 0; r < 3; r++) {
+                int rec = 6 + r * 12;
+                putU16(name, rec, 3);
+                putU16(name, rec + 2, 1);
+                putU16(name, rec + 4, 0x0409);
+                putU16(name, rec + 6, nameIds[r]);
+                putU16(name, rec + 8, nameBytes.length);
+                putU16(name, rec + 10, 0);
+            }
+            System.arraycopy(nameBytes, 0, name, 6 + 36, nameBytes.length);
+
+            byte[] post = new byte[32];
+            putU32(post, 0, 0x00030000);
+            putI16(post, 8, -100);
+            putI16(post, 10, 50);
+            putU32(post, 12, 1);
+
+            String[] tags = {"OS/2", "cmap", "glyf", "head", "hhea", "hmtx", "loca", "maxp", "name", "post"};
+            byte[][] data = {os2, cmapFull, glyf, head, hhea, hmtx, loca, maxp, name, post};
+            int headerSize = 12 + tags.length * 16;
+            int totalSize = headerSize;
+            for (byte[] t : data) totalSize += (t.length + 3) & ~3;
+
+            byte[] out = new byte[totalSize];
+            putU32(out, 0, 0x00010000);
+            putU16(out, 4, tags.length);
+            putU16(out, 6, 128);
+            putU16(out, 8, 3);
+            putU16(out, 10, tags.length * 16 - 128);
+
+            int cur = headerSize;
+            int headOff = 0;
+            for (int i = 0; i < tags.length; i++) {
+                byte[] tagBytes = tags[i].getBytes(StandardCharsets.US_ASCII);
+                int dir = 12 + i * 16;
+                System.arraycopy(tagBytes, 0, out, dir, 4);
+                int csum = tableChecksum(data[i]);
+                putU32(out, dir + 4, csum);
+                putU32(out, dir + 8, cur);
+                putU32(out, dir + 12, data[i].length);
+                System.arraycopy(data[i], 0, out, cur, data[i].length);
+                if ("head".equals(tags[i])) headOff = cur;
+                cur += (data[i].length + 3) & ~3;
+            }
+            int whole = tableChecksum(out);
+            putU32(out, headOff + 8, 0xB1B0AFBA - whole);
+            return out;
+        }
+
+        private static int tableChecksum(byte[] b) {
+            int sum = 0;
+            int n = b.length;
+            for (int i = 0; i < n; i += 4) {
+                int v = ((b[i] & 0xFF) << 24)
+                        | ((i + 1 < n ? b[i + 1] & 0xFF : 0) << 16)
+                        | ((i + 2 < n ? b[i + 2] & 0xFF : 0) << 8)
+                        | (i + 3 < n ? b[i + 3] & 0xFF : 0);
+                sum += v;
+            }
+            return sum;
+        }
+
+        private static void putU16(byte[] b, int o, int v) {
+            b[o] = (byte) (v >>> 8);
+            b[o + 1] = (byte) v;
+        }
+
+        private static void putI16(byte[] b, int o, int v) {
+            putU16(b, o, v);
+        }
+
+        private static void putU32(byte[] b, int o, int v) {
+            b[o] = (byte) (v >>> 24);
+            b[o + 1] = (byte) (v >>> 16);
+            b[o + 2] = (byte) (v >>> 8);
+            b[o + 3] = (byte) v;
+        }
+    }
+
     private static byte[] nativePrepare(byte[] pdf, PdfXOptions options) {
-        IccCmykTransform xform = new IccCmykTransform(options.outputIntentProfile());
-        return ColorBindings.pdfxPrepareBytes(pdf, nativeLevel(options.standard()),
-                xform.lutBytes(), IccCmykTransform.lutGrid(), nativeFlags(options),
+        IccCmykTransform xform = IccCmykTransform.cached(options.outputIntentProfile());
+        return ColorBindings.pdfxPrepareBytesSegment(pdf, nativeLevel(options.standard()),
+                xform.lutSegment(), IccCmykTransform.lutGrid(), nativeFlags(options),
                 options.jpegQuality());
     }
 
     private static void nativePrepare(Path pdf, PdfXOptions options) {
-        IccCmykTransform xform = new IccCmykTransform(options.outputIntentProfile());
-        ColorBindings.pdfxPrepareFile(pdf.toString(), pdf.toString(),
-                nativeLevel(options.standard()), xform.lutBytes(), IccCmykTransform.lutGrid(),
+        IccCmykTransform xform = IccCmykTransform.cached(options.outputIntentProfile());
+        ColorBindings.pdfxPrepareFileSegment(pdf.toString(), pdf.toString(),
+                nativeLevel(options.standard()), xform.lutSegment(), IccCmykTransform.lutGrid(),
                 nativeFlags(options), options.jpegQuality());
     }
 

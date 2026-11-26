@@ -21,6 +21,7 @@
 #include <qpdf/QPDFTokenizer.hh>
 #include <qpdf/QPDFWriter.hh>
 
+#include "jpdfium_qpdf_internal.h"
 #include "jpdfium_qpdf_writer_lock.h"
 
 #ifdef JPDFIUM_HAS_PUGIXML
@@ -125,7 +126,7 @@ void scanContentStream(const std::string& data, ContentScan& out) {
         if (tt == QPDFTokenizer::tt_space || tt == QPDFTokenizer::tt_comment) continue;
 
         if (tt == QPDFTokenizer::tt_word) {
-            std::string w = t.getValue();
+            const std::string& w = t.getValue();
             if (w == "Tf") {
                 // PDF syntax: <fontname> <size> Tf.
                 curFont = lastNonNumber;
@@ -134,7 +135,7 @@ void scanContentStream(const std::string& data, ContentScan& out) {
         } else if (tt == QPDFTokenizer::tt_name) {
             // Resource dict keys are stored without the leading slash; the
             // tokenizer includes it.
-            std::string nm = t.getValue();
+            const std::string& nm = t.getValue();
             lastNonNumber = (!nm.empty() && nm[0] == '/') ? nm.substr(1) : nm;
         } else if (tt == QPDFTokenizer::tt_string) {
             // PDF places the STRING BEFORE its show operator (Tj/'/"),
@@ -143,7 +144,7 @@ void scanContentStream(const std::string& data, ContentScan& out) {
             // deliberate superset: strings outside show operators only widen
             // the used set, and keeping an entry that is still used costs
             // nothing while dropping a live mapping breaks extraction.
-            std::string s = t.getValue();
+            const std::string& s = t.getValue();
             if (!curFont.empty()) {
                 out.fontStrings[curFont].push_back(s);
             }
@@ -151,13 +152,8 @@ void scanContentStream(const std::string& data, ContentScan& out) {
     }
 }
 
-std::shared_ptr<Buffer> streamData(QPDFObjectHandle obj) {
-    if (!obj.isStream()) return nullptr;
-    try {
-        return obj.getStreamData(qpdf_dl_generalized);
-    } catch (const QPDFExc&) {
-        return nullptr;
-    }
+std::shared_ptr<Buffer> streamData(QPDFObjectHandle const& obj) {
+    return jpdfium::qpdf_detail::readStreamBufferBounded(obj, qpdf_dl_generalized);
 }
 
 // ---- ToUnicode CMap parsing (bfchar / bfrange) ----
@@ -181,7 +177,7 @@ bool parseToUnicode(const std::shared_ptr<Buffer>& buf, std::vector<CmapEntry>& 
     // Entries are operand-counted, not line-counted: real-world CMaps put
     // several bfchar/bfrange entries on one line, and a line-index flush
     // silently drops every entry after the first of such a line.
-    enum class CmapSection { None, BfChar, BfRange };
+    enum class CmapSection : uint8_t { None, BfChar, BfRange };
     CmapSection section = CmapSection::None;
     std::vector<std::string> pendingHex;
     bool inArray = false;
@@ -190,8 +186,8 @@ bool parseToUnicode(const std::shared_ptr<Buffer>& buf, std::vector<CmapEntry>& 
     // "entry" amplifies into billions of CmapEntry pushes.
     constexpr uint64_t kMaxRangeSpan = 65536;
     // Overall ceiling so a multi-megabyte hostile CMap cannot exhaust memory.
-    constexpr size_t kMaxEntries = 1U << 20;
-    constexpr size_t kMaxTotalDestBytes = 16U * 1024U * 1024U;
+    constexpr size_t kMaxEntries = size_t{1} << 20;
+    constexpr size_t kMaxTotalDestBytes = size_t{16} * 1024U * 1024U;
     size_t totalDestBytes = 0;
 
     auto codeFromBytes = [](std::string const& bytes, uint64_t& code) -> bool {
@@ -283,7 +279,7 @@ bool parseToUnicode(const std::shared_ptr<Buffer>& buf, std::vector<CmapEntry>& 
         if (tt == QPDFTokenizer::tt_eof || tt == QPDFTokenizer::tt_bad) break;
         if (tt == QPDFTokenizer::tt_space || tt == QPDFTokenizer::tt_comment) continue;
         if (tt == QPDFTokenizer::tt_word) {
-            std::string w = t.getValue();
+            const std::string& w = t.getValue();
             if (w == "beginbfchar") {
                 flushBfRange();
                 inArray = false;
@@ -342,16 +338,19 @@ bool parseToUnicode(const std::shared_ptr<Buffer>& buf, std::vector<CmapEntry>& 
 
 // Rebuild a ToUnicode CMap keeping only entries whose charcode is in |used|.
 std::string rebuildCmap(const std::vector<CmapEntry>& entries, const std::set<int>& used) {
-    std::vector<const CmapEntry*> kept;
-    for (const auto& e : entries)
-        if (used.count(e.code)) kept.push_back(&e);
-    std::sort(kept.begin(), kept.end(), [](const CmapEntry* a, const CmapEntry* b) {
-        if (a->codeBytes != b->codeBytes) return a->codeBytes < b->codeBytes;
-        return a->code < b->code;
+    std::vector<size_t> keptIdx;
+    keptIdx.reserve(entries.size());
+    for (size_t i = 0; i < entries.size(); ++i)
+        if (used.count(entries[i].code)) keptIdx.push_back(i);
+    std::sort(keptIdx.begin(), keptIdx.end(), [&entries](size_t a, size_t b) {
+        if (entries[a].codeBytes != entries[b].codeBytes)
+            return entries[a].codeBytes < entries[b].codeBytes;
+        if (entries[a].code != entries[b].code) return entries[a].code < entries[b].code;
+        return a < b;
     });
     bool twoByte = false;
-    for (const auto* e : kept) {
-        if (e->codeBytes != 1) {
+    for (size_t i : keptIdx) {
+        if (entries[i].codeBytes != 1) {
             twoByte = true;
             break;
         }
@@ -364,20 +363,20 @@ std::string rebuildCmap(const std::vector<CmapEntry>& entries, const std::set<in
        << (twoByte ? "<0000> <FFFF>\n" : "<00> <FF>\n") << "endcodespacerange\n";
     static const char* hexd = "0123456789ABCDEF";
     // ISO 32000-1 §9.10.3 caps each beginbfchar section at 100 entries.
-    for (size_t start = 0; start < kept.size(); start += 100) {
-        size_t end = std::min(start + 100, kept.size());
+    for (size_t start = 0; start < keptIdx.size(); start += 100) {
+        size_t end = std::min(start + 100, keptIdx.size());
         os << (end - start) << " beginbfchar\n";
         for (size_t idx = start; idx < end; idx++) {
-            const auto* e = kept[idx];
+            const auto& e = entries[keptIdx[idx]];
             os << '<';
-            if (e->codeBytes == 1) {
-                os << hexd[(e->code >> 4) & 0xF] << hexd[e->code & 0xF];
+            if (e.codeBytes == 1) {
+                os << hexd[(e.code >> 4) & 0xF] << hexd[e.code & 0xF];
             } else {
-                os << hexd[(e->code >> 12) & 0xF] << hexd[(e->code >> 8) & 0xF]
-                   << hexd[(e->code >> 4) & 0xF] << hexd[e->code & 0xF];
+                os << hexd[(e.code >> 12) & 0xF] << hexd[(e.code >> 8) & 0xF]
+                   << hexd[(e.code >> 4) & 0xF] << hexd[e.code & 0xF];
             }
             os << "> <";
-            for (unsigned char c : e->utf16be) os << hexd[(c >> 4) & 0xF] << hexd[c & 0xF];
+            for (unsigned char c : e.utf16be) os << hexd[(c >> 4) & 0xF] << hexd[c & 0xF];
             os << ">\n";
         }
         os << "endbfchar\n";
@@ -404,27 +403,38 @@ void removeActionKeys(QPDFObjectHandle obj) {
     }
 }
 
-void walkOutlines(QPDFObjectHandle outline, const std::vector<std::string>& lits,
-                  SanitizeStats& st) {
-    if (!outline.isDictionary()) return;
+constexpr size_t kMaxSanitizeGraphNodes = 65536;
+
+void walkOutlines(QPDFObjectHandle const& outline, const std::vector<std::string>& lits,
+                  SanitizeStats& st, std::set<QPDFObjGen>& visited, size_t& nodeCount,
+                  int depth = 0) {
+    if (!outline.isDictionary() || depth > 64 || nodeCount >= kMaxSanitizeGraphNodes) return;
+    if (outline.isIndirect() && !visited.insert(outline.getObjGen()).second) return;
+    ++nodeCount;
     QPDFObjectHandle item = outline.getKey("/First");
     int guard = 0;
-    while (item.isDictionary() && guard++ < 100000) {
+    while (item.isDictionary() && guard++ < 100000 && nodeCount < kMaxSanitizeGraphNodes) {
+        if (item.isIndirect() && !visited.insert(item.getObjGen()).second) break;
+        ++nodeCount;
         blankStringValue(item, "/Title", lits, st.outlinesBlanked);
-        walkOutlines(item, lits, st);  // recurse into child item lists
+        walkOutlines(item, lits, st, visited, nodeCount, depth + 1);  // recurse into child items
         item = item.getKey("/Next");
     }
 }
 
-void walkFormFields(QPDFObjectHandle field, const std::vector<std::string>& lits,
-                    SanitizeStats& st) {
-    if (!field.isDictionary()) return;
+void walkFormFields(QPDFObjectHandle const& field, const std::vector<std::string>& lits,
+                    SanitizeStats& st, std::set<QPDFObjGen>& visited, size_t& nodeCount,
+                    int depth = 0) {
+    if (!field.isDictionary() || depth > 64 || nodeCount >= kMaxSanitizeGraphNodes) return;
+    if (field.isIndirect() && !visited.insert(field.getObjGen()).second) return;
+    ++nodeCount;
     blankStringValue(field, "/V", lits, st.fieldsBlanked);
     blankStringValue(field, "/RV", lits, st.fieldsBlanked);
     QPDFObjectHandle kids = field.getKey("/Kids");
     if (kids.isArray()) {
-        for (int i = 0; i < kids.getArrayNItems(); i++)
-            walkFormFields(kids.getArrayItem(i), lits, st);
+        const int nKids = std::min(kids.getArrayNItems(), 4096);
+        for (int i = 0; i < nKids && nodeCount < kMaxSanitizeGraphNodes; i++)
+            walkFormFields(kids.getArrayItem(i), lits, st, visited, nodeCount, depth + 1);
     }
 }
 
@@ -477,13 +487,14 @@ void scrubXmpXml(std::string& xml, const std::vector<std::string>& lits) {
 // different scopes (page vs. nested forms), and a name collision only
 // widens the used set - the safe direction (keeping a mapping that is
 // still used costs nothing; dropping one that survives breaks extraction).
-void scanResourceScope(QPDFObjectHandle res, ContentScan& globalScan,
+void scanResourceScope(QPDFObjectHandle const& res, ContentScan& globalScan,
                        std::set<std::string>& visitedObjs, int depth) {
     if (depth > 12 || !res.isDictionary()) return;
     // Form XObjects in this scope.
     if (res.hasKey("/XObject") && res.getKey("/XObject").isDictionary()) {
         QPDFObjectHandle xos = res.getKey("/XObject");
-        for (auto [name, xo] : xos.ditems()) {
+        for (auto const& [name, xo] : xos.ditems()) {
+            (void)name;
             if (!xo.isStream()) continue;
             std::string id = xo.getObjGen().unparse();
             if (visitedObjs.count(id)) continue;
@@ -495,7 +506,7 @@ void scanResourceScope(QPDFObjectHandle res, ContentScan& globalScan,
                 // resources when present, else the enclosing scope's.
                 QPDFObjectHandle formRes =
                     xoDict.hasKey("/Resources") ? xoDict.getKey("/Resources") : res;
-                auto scanBuf = [&](QPDFObjectHandle s) {
+                auto scanBuf = [&](QPDFObjectHandle const& s) {
                     auto b = streamData(s);
                     if (b)
                         scanContentStream(std::string(reinterpret_cast<const char*>(b->getBuffer()),
@@ -527,12 +538,13 @@ void scanResourceScope(QPDFObjectHandle res, ContentScan& globalScan,
 // Form child text objects promoted/fissioned to page level reference fonts
 // that were originally in the Form XObject's private /Resources. Ensure the
 // page-level /Resources /Font dictionary contains all reachable form fonts.
-void propagateFormFontsToPage(QPDFObjectHandle pageRes, QPDFObjectHandle scopeRes,
+void propagateFormFontsToPage(QPDFObjectHandle pageRes, QPDFObjectHandle const& scopeRes,
                               std::set<std::string>& visited, int depth) {
     if (depth > 12 || !scopeRes.isDictionary()) return;
     if (scopeRes.hasKey("/XObject") && scopeRes.getKey("/XObject").isDictionary()) {
         QPDFObjectHandle xos = scopeRes.getKey("/XObject");
-        for (auto [name, xo] : xos.ditems()) {
+        for (auto const& [name, xo] : xos.ditems()) {
+            (void)name;
             if (!xo.isStream()) continue;
             std::string id = xo.getObjGen().unparse();
             if (visited.count(id)) continue;
@@ -546,7 +558,7 @@ void propagateFormFontsToPage(QPDFObjectHandle pageRes, QPDFObjectHandle scopeRe
                     }
                     QPDFObjectHandle pageFonts = pageRes.getKey("/Font");
                     if (pageFonts.isDictionary()) {
-                        for (auto [fontName, fontDict] : formRes.getKey("/Font").ditems()) {
+                        for (auto const& [fontName, fontDict] : formRes.getKey("/Font").ditems()) {
                             if (!pageFonts.hasKey(fontName)) {
                                 pageFonts.replaceKey(fontName, fontDict);
                             }
@@ -640,11 +652,18 @@ int sanitizeRedactedPdf(const uint8_t* input, size_t inputLen, const DocCore& co
                 removeActionKeys(acro);
                 if (acro.hasKey("/Fields") && acro.getKey("/Fields").isArray()) {
                     QPDFObjectHandle fields = acro.getKey("/Fields");
-                    for (int i = 0; i < fields.getArrayNItems(); i++)
-                        walkFormFields(fields.getArrayItem(i), lits, st);
+                    std::set<QPDFObjGen> visitedFields;
+                    size_t fieldNodes = 0;
+                    const int nFields = std::min(fields.getArrayNItems(), 4096);
+                    for (int i = 0; i < nFields && fieldNodes < kMaxSanitizeGraphNodes; i++)
+                        walkFormFields(fields.getArrayItem(i), lits, st, visitedFields, fieldNodes);
                 }
             }
-            if (root.hasKey("/Outlines")) walkOutlines(root.getKey("/Outlines"), lits, st);
+            if (root.hasKey("/Outlines")) {
+                std::set<QPDFObjGen> visitedOutlines;
+                size_t outlineNodes = 0;
+                walkOutlines(root.getKey("/Outlines"), lits, st, visitedOutlines, outlineNodes);
+            }
         }
 
         // Pages: actions, PieceInfo, Thumbs, annotations, content scans.
@@ -709,7 +728,7 @@ int sanitizeRedactedPdf(const uint8_t* input, size_t inputLen, const DocCore& co
             // Content scan: page streams + form XObject streams.
             if (page.hasKey("/Contents")) {
                 QPDFObjectHandle contents = page.getKey("/Contents");
-                auto scanOne = [&](QPDFObjectHandle s) {
+                auto scanOne = [&](QPDFObjectHandle const& s) {
                     auto buf = streamData(s);
                     if (buf)
                         scanContentStream(
@@ -738,7 +757,7 @@ int sanitizeRedactedPdf(const uint8_t* input, size_t inputLen, const DocCore& co
         std::map<std::string, QPDFObjectHandle> fontDicts;                  // objgen -> font
         std::map<std::string, std::vector<std::string>> fontStringsByDict;  // objgen -> strings
         for (size_t pi = 0; pi < pages.size(); pi++) {
-            QPDFObjectHandle page = pages[pi];
+            QPDFObjectHandle const& page = pages[pi];
             if (!page.hasKey("/Resources")) continue;
             QPDFObjectHandle res = page.getKey("/Resources");
             if (!res.isDictionary() || !res.hasKey("/Font")) continue;

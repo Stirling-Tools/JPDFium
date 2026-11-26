@@ -187,7 +187,7 @@ public final class PdfXOptions {
         private String info = "JPDFium PDF/X output intent";
         private boolean convertColors = true;
         private boolean convertImages = true;
-        private boolean convertForms = false;
+        private boolean convertForms;
         private boolean convertSpecialColors;
         private Map<String, byte[]> fontData;
         private boolean convertSpotColors;
@@ -202,26 +202,40 @@ public final class PdfXOptions {
         private String title;
         private boolean flattenTransparency;
         private int flattenDpi = 200;
+        private boolean compactCmykSelected;
 
         private Builder() {}
 
         public Builder standard(PdfXStandard value) {
             this.standard = value == null ? PdfXStandard.PDF_X_4 : value;
+            if (this.compactCmykSelected) {
+                this.outputIntentProfile = selectsV2Profile(this.standard)
+                        ? PdfIccProfiles.compactCmykV2()
+                        : PdfIccProfiles.compactCmyk();
+            }
             return this;
         }
 
         /** ICC profile for the output intent and the vector conversion target. */
         public Builder outputIntentProfile(byte[] value) {
+            this.compactCmykSelected = false;
             this.outputIntentProfile = value == null ? null : value.clone();
             return this;
         }
 
         /** Use the bundled compact generic CMYK profile as an output-intent fallback. */
         public Builder useCompactCmyk() {
-            this.outputIntentProfile = PdfIccProfiles.compactCmyk();
+            this.compactCmykSelected = true;
+            this.outputIntentProfile = selectsV2Profile(this.standard)
+                    ? PdfIccProfiles.compactCmykV2()
+                    : PdfIccProfiles.compactCmyk();
             this.conditionIdentifier = PdfIccProfiles.COMPACT_CMYK_CONDITION;
             this.info = PdfIccProfiles.COMPACT_CMYK_CONDITION;
             return this;
+        }
+
+        private static boolean selectsV2Profile(PdfXStandard std) {
+            return std == PdfXStandard.PDF_X_1A || std == PdfXStandard.PDF_X_3;
         }
 
         public Builder conditionIdentifier(String value) {

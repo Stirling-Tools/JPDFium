@@ -460,7 +460,7 @@ class AuxHandleRegistry {
 // Renderer selected at library init (0 = AGG, 1 = Skia). Skia is only
 // selectable when the PDFium build includes it (JPDFIUM_HAS_SKIA); the
 // render paths read this to pick the bitmap format and draw call.
-extern bool g_jpdfiumUseSkia;
+extern std::atomic<bool> g_jpdfiumUseSkia;
 
 // Shared PDFium library init so every entry point that lazily initializes
 // uses the same renderer configuration. Returns JPDFIUM_OK, or

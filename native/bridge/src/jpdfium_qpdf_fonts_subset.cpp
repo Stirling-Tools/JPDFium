@@ -36,20 +36,16 @@ std::set<uint32_t> cidsPresentInProgram(QPDFObjectHandle const& target, FT_Face 
     std::set<uint32_t> cids;
     auto map = target.getKey("/CIDToGIDMap");
     if (map.isStream()) {
-        try {
-            std::shared_ptr<Buffer> data = map.getStreamData(qpdf_dl_generalized);
-            if (data) {
-                const size_t entries = data->getSize() / 2;
-                auto const* bytes = reinterpret_cast<uint8_t const*>(data->getBuffer());
-                for (size_t i = 0; i < entries && i <= jpdfium::font::kMaxCid; ++i) {
-                    uint32_t gid = (uint32_t(bytes[2 * i]) << 8) | bytes[2 * i + 1];
-                    if (!face || gid < static_cast<uint32_t>(face->num_glyphs)) {
-                        cids.insert(static_cast<uint32_t>(i));
-                    }
+        std::shared_ptr<Buffer> data = readStreamBufferBounded(map, qpdf_dl_generalized);
+        if (data) {
+            const size_t entries = data->getSize() / 2;
+            auto const* bytes = reinterpret_cast<uint8_t const*>(data->getBuffer());
+            for (size_t i = 0; i < entries && i <= jpdfium::font::kMaxCid; ++i) {
+                uint32_t gid = (uint32_t(bytes[2 * i]) << 8) | bytes[2 * i + 1];
+                if (!face || gid < static_cast<uint32_t>(face->num_glyphs)) {
+                    cids.insert(static_cast<uint32_t>(i));
                 }
             }
-        } catch (...) {
-            cids.clear();
         }
         return cids;
     }
@@ -215,11 +211,7 @@ bool subsetEmbeddedCidFont(QPDF& qpdf, FT_Library lib, QPDFObjectHandle& font,
     std::shared_ptr<Buffer> mapBytes;
     if (!identity) {
         if (!cidMap.isStream()) return false;
-        try {
-            mapBytes = cidMap.getStreamData(qpdf_dl_generalized);
-        } catch (...) {
-            return false;
-        }
+        mapBytes = readStreamBufferBounded(cidMap, qpdf_dl_generalized);
         if (!mapBytes) return false;
     }
 
@@ -483,12 +475,7 @@ bool subsetEmbeddedFontResource(QPDF& qpdf, FT_Library lib, QPDFObjectHandle& fo
         if (it != streamUseCount.end() && it->second > 1) return false;
     }
 
-    std::shared_ptr<Buffer> data;
-    try {
-        data = stream.getStreamData(qpdf_dl_generalized);
-    } catch (...) {
-        return false;
-    }
+    std::shared_ptr<Buffer> data = readStreamBufferBounded(stream, qpdf_dl_generalized);
     if (!data || data->getSize() < 16) return false;
 
     FontProgram program;
@@ -945,13 +932,8 @@ void appendFontInventoryEntryJson(FontInventoryEntry const& entry, std::string& 
     auto target = cid ? descendants.getArrayItem(0) : font;
     auto targetDescriptor = target.getKey("/FontDescriptor");
 
-    auto tryReadStream = [](QPDFObjectHandle stream) -> std::shared_ptr<Buffer> {
-        if (!stream.isStream()) return nullptr;
-        try {
-            return stream.getStreamData(qpdf_dl_generalized);
-        } catch (...) {
-            return nullptr;
-        }
+    auto tryReadStream = [](QPDFObjectHandle const& stream) -> std::shared_ptr<Buffer> {
+        return readStreamBufferBounded(stream, qpdf_dl_generalized);
     };
     auto validProgram = [](std::shared_ptr<Buffer> const& data) {
         if (!data || data->getSize() < 4) return false;
@@ -1122,7 +1104,8 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_pdfa_part(const uint8_t* input, int64_t inpu
                                 static_cast<size_t>(inputLen));
         auto metadata = qpdf->getRoot().getKey("/Metadata");
         if (!metadata.isStream()) return 0;
-        auto data = metadata.getStreamData(qpdf_dl_generalized);
+        auto data = jpdfium::qpdf_detail::readStreamBufferBounded(metadata, qpdf_dl_generalized,
+                                                                  size_t{8} * 1024U * 1024U);
         if (!data || !data->getSize()) return 0;
         std::string_view xmp(reinterpret_cast<char const*>(data->getBuffer()), data->getSize());
         // Claim markers mirror the JVM-side PDFA_MARKERS: an actual

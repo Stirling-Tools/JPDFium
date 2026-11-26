@@ -47,6 +47,7 @@
 
 #ifdef JPDFIUM_HAS_QPDF
 #include <qpdf/Buffer.hh>
+#include <qpdf/Pipeline.hh>
 #include <qpdf/QPDF.hh>
 #include <qpdf/QPDFExc.hh>
 #include <qpdf/QPDFObjectHandle.hh>
@@ -727,6 +728,49 @@ std::string BuildPdfxXmp(const std::string& version, const std::string& conforma
 // Packets above the cap are replaced with a minimal valid PDF/X packet.
 constexpr size_t kMaxXmpBytes = size_t{8} * 1024 * 1024;
 constexpr int kMaxXmpDepth = 64;
+
+class BoundedStringPipeline final : public Pipeline {
+   public:
+    BoundedStringPipeline(const char* identifier, size_t maxBytes)
+        : Pipeline(identifier, nullptr), maxBytes_(maxBytes) {}
+
+    void write(unsigned char const* data, size_t len) override {
+        if (len > maxBytes_ - out_.size()) {
+            throw std::runtime_error("PDF/X metadata stream exceeds byte limit");
+        }
+        if (len > 0) {
+            out_.append(reinterpret_cast<const char*>(data), len);
+        }
+    }
+
+    void finish() override {}
+
+    std::string take() {
+        return std::move(out_);
+    }
+
+   private:
+    size_t maxBytes_;
+    std::string out_;
+};
+
+bool ReadStreamBounded(QPDFObjectHandle stream, std::string& out, qpdf_stream_decode_level_e dl,
+                       size_t maxBytes) {
+    out.clear();
+    if (!stream.isStream()) return false;
+    try {
+        BoundedStringPipeline sink("color-bounded", maxBytes);
+        bool filtered = false;
+        if (!stream.pipeStreamData(&sink, &filtered, 0, dl, true)) {
+            return false;
+        }
+        out = sink.take();
+        return true;
+    } catch (std::exception&) {
+        out.clear();
+        return false;
+    }
+}
 constexpr const char* kRdfNs = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 constexpr const char* kPdfxNs = "http://ns.adobe.com/pdfx/1.3/";
 constexpr const char* kPdfxIdNs = "http://www.npes.org/pdfx/ns/id/";
@@ -896,7 +940,8 @@ bool XmlHasProperty(const std::vector<pugi::xml_node>& descriptions, const std::
     return false;
 }
 
-void XmlNormalizeLegacyPrefixesNode(pugi::xml_node node) {
+void XmlNormalizeLegacyPrefixesNode(pugi::xml_node node, int depth = 0) {
+    if (depth > 64) return;
     static const std::pair<const char*, const char*> kLegacyPrefixes[] = {
         {"xapMM", "xmpMM"},
         {"xapRights", "xmpRights"},
@@ -948,7 +993,7 @@ void XmlNormalizeLegacyPrefixesNode(pugi::xml_node node) {
         }
     }
     for (pugi::xml_node child : node.children()) {
-        XmlNormalizeLegacyPrefixesNode(child);
+        XmlNormalizeLegacyPrefixesNode(child, depth + 1);
     }
 }
 
@@ -1163,6 +1208,135 @@ std::string PdfDateToXmp(const std::string& pdf) {
     return out;
 }
 
+std::string SanitizeXml10Value(const std::string& raw) {
+    std::string out;
+    out.reserve(raw.size());
+    const size_t n = raw.size();
+    size_t i = 0;
+    while (i < n) {
+        const unsigned char c = static_cast<unsigned char>(raw[i]);
+        if (c < 0x80) {
+            if (c >= 0x20 || c == '\t' || c == '\n' || c == '\r') {
+                out.push_back(static_cast<char>(c));
+            }
+            ++i;
+            continue;
+        }
+        size_t need = 0;
+        uint32_t cp = 0;
+        if ((c & 0xE0) == 0xC0 && c >= 0xC2) {
+            need = 1;
+            cp = c & 0x1F;
+        } else if ((c & 0xF0) == 0xE0) {
+            need = 2;
+            cp = c & 0x0F;
+        } else if ((c & 0xF8) == 0xF0 && c <= 0xF4) {
+            need = 3;
+            cp = c & 0x07;
+        } else {
+            ++i;
+            continue;
+        }
+        if (i + need >= n) break;
+        bool ok = true;
+        for (size_t k = 1; k <= need; ++k) {
+            const unsigned char cb = static_cast<unsigned char>(raw[i + k]);
+            if ((cb & 0xC0) != 0x80) {
+                ok = false;
+                break;
+            }
+            cp = (cp << 6) | (cb & 0x3F);
+        }
+        if (!ok) {
+            ++i;
+            continue;
+        }
+        const bool overlong =
+            (need == 2 && cp < 0x800) || (need == 3 && (cp < 0x10000 || cp > 0x10FFFF));
+        const bool forbidden =
+            (cp >= 0xD800 && cp <= 0xDFFF) || cp == 0xFFFD || cp == 0xFFFE || cp == 0xFFFF;
+        if (!overlong && !forbidden) {
+            out.append(raw, i, need + 1);
+        }
+        i += need + 1;
+    }
+    return out;
+}
+
+bool HasCleanXml10Xmp(const std::string& xml) {
+    const size_t n = xml.size();
+    size_t i = 0;
+    while (i < n) {
+        const unsigned char c = static_cast<unsigned char>(xml[i]);
+        if (c < 0x80) {
+            if (c < 0x20 && c != '\t' && c != '\n' && c != '\r') return false;
+            if (c == '&' && i + 2 < n && xml[i + 1] == '#') {
+                size_t j = i + 2;
+                bool hex = false;
+                if (j < n && (xml[j] == 'x' || xml[j] == 'X')) {
+                    hex = true;
+                    ++j;
+                }
+                uint64_t val = 0;
+                bool any = false;
+                while (j < n && xml[j] != ';' && j - i < 16) {
+                    const char d = xml[j];
+                    uint32_t digit = 0;
+                    if (d >= '0' && d <= '9') {
+                        digit = static_cast<uint32_t>(d - '0');
+                    } else if (hex && d >= 'a' && d <= 'f') {
+                        digit = static_cast<uint32_t>(d - 'a' + 10);
+                    } else if (hex && d >= 'A' && d <= 'F') {
+                        digit = static_cast<uint32_t>(d - 'A' + 10);
+                    } else {
+                        any = false;
+                        break;
+                    }
+                    any = true;
+                    val = val * (hex ? 16U : 10U) + digit;
+                    if (val > 0x10FFFFU) break;
+                    ++j;
+                }
+                if (any && j < n && xml[j] == ';') {
+                    if ((val < 0x20 && val != 0x09 && val != 0x0A && val != 0x0D) ||
+                        (val >= 0xD800 && val <= 0xDFFF) || val == 0xFFFD || val == 0xFFFE ||
+                        val == 0xFFFF || val > 0x10FFFFU) {
+                        return false;
+                    }
+                }
+            }
+            ++i;
+            continue;
+        }
+        size_t need = 0;
+        uint32_t cp = 0;
+        if ((c & 0xE0) == 0xC0 && c >= 0xC2) {
+            need = 1;
+            cp = c & 0x1F;
+        } else if ((c & 0xF0) == 0xE0) {
+            need = 2;
+            cp = c & 0x0F;
+        } else if ((c & 0xF8) == 0xF0 && c <= 0xF4) {
+            need = 3;
+            cp = c & 0x07;
+        } else {
+            return false;
+        }
+        if (i + need >= n) return false;
+        for (size_t k = 1; k <= need; ++k) {
+            const unsigned char cb = static_cast<unsigned char>(xml[i + k]);
+            if ((cb & 0xC0) != 0x80) return false;
+            cp = (cp << 6) | (cb & 0x3F);
+        }
+        if ((need == 2 && cp < 0x800) || (need == 3 && (cp < 0x10000 || cp > 0x10FFFF)) ||
+            (cp >= 0xD800 && cp <= 0xDFFF) || cp == 0xFFFD || cp == 0xFFFE || cp == 0xFFFF) {
+            return false;
+        }
+        i += need + 1;
+    }
+    return true;
+}
+
 void UpdateOrCreatePdfxMetadata(QPDF* qpdf, const char* version, const char* conformance) {
     const std::string ver = NormaliseString(version, "");
     if (ver.empty()) return;
@@ -1177,10 +1351,19 @@ void UpdateOrCreatePdfxMetadata(QPDF* qpdf, const char* version, const char* con
     std::string keywords;
     QPDFObjectHandle info_dict = qpdf->getTrailer().getKey("/Info");
     if (info_dict.isDictionary()) {
-        QPDFObjectHandle title_obj = info_dict.getKey("/Title");
-        if (title_obj.isString()) {
-            title = title_obj.getUTF8Value();
-        }
+        auto cleanInfoText = [&](const char* key, std::string* out) {
+            QPDFObjectHandle obj = info_dict.getKey(key);
+            if (!obj.isString()) return;
+            std::string raw = obj.getUTF8Value();
+            std::string clean = SanitizeXml10Value(raw);
+            if (clean.empty()) {
+                info_dict.removeKey(key);
+            } else if (clean != raw) {
+                info_dict.replaceKey(key, QPDFObjectHandle::newUnicodeString(clean));
+            }
+            *out = std::move(clean);
+        };
+        cleanInfoText("/Title", &title);
         QPDFObjectHandle trapped_obj = info_dict.getKey("/Trapped");
         if (trapped_obj.isName()) {
             std::string tr = trapped_obj.getName();
@@ -1191,7 +1374,7 @@ void UpdateOrCreatePdfxMetadata(QPDF* qpdf, const char* version, const char* con
         }
         QPDFObjectHandle mod_obj = info_dict.getKey("/ModDate");
         if (mod_obj.isString()) {
-            std::string rawMod = mod_obj.getUTF8Value();
+            std::string rawMod = SanitizeXml10Value(mod_obj.getUTF8Value());
             mod_date = PdfDateToXmp(rawMod);
             if (!mod_date.empty()) {
                 std::string normMod = (rawMod.rfind("D:", 0) == 0) ? rawMod : ("D:" + rawMod);
@@ -1199,14 +1382,14 @@ void UpdateOrCreatePdfxMetadata(QPDF* qpdf, const char* version, const char* con
                              normMod.find('+') != std::string::npos ||
                              normMod.find('-') != std::string::npos;
                 if (!hasTz) normMod.push_back('Z');
-                if (normMod != rawMod) {
+                if (normMod != rawMod || rawMod != mod_obj.getUTF8Value()) {
                     info_dict.replaceKey("/ModDate", QPDFObjectHandle::newString(normMod));
                 }
             }
         }
         QPDFObjectHandle create_obj = info_dict.getKey("/CreationDate");
         if (create_obj.isString()) {
-            std::string rawCreate = create_obj.getUTF8Value();
+            std::string rawCreate = SanitizeXml10Value(create_obj.getUTF8Value());
             create_date = PdfDateToXmp(rawCreate);
             if (!create_date.empty()) {
                 std::string normCreate =
@@ -1215,17 +1398,14 @@ void UpdateOrCreatePdfxMetadata(QPDF* qpdf, const char* version, const char* con
                              normCreate.find('+') != std::string::npos ||
                              normCreate.find('-') != std::string::npos;
                 if (!hasTz) normCreate.push_back('Z');
-                if (normCreate != rawCreate) {
+                if (normCreate != rawCreate || rawCreate != create_obj.getUTF8Value()) {
                     info_dict.replaceKey("/CreationDate", QPDFObjectHandle::newString(normCreate));
                 }
             }
         }
-        if (info_dict.getKey("/Creator").isString())
-            creator = info_dict.getKey("/Creator").getUTF8Value();
-        if (info_dict.getKey("/Producer").isString())
-            producer = info_dict.getKey("/Producer").getUTF8Value();
-        if (info_dict.getKey("/Keywords").isString())
-            keywords = info_dict.getKey("/Keywords").getUTF8Value();
+        cleanInfoText("/Creator", &creator);
+        cleanInfoText("/Producer", &producer);
+        cleanInfoText("/Keywords", &keywords);
         // Drop empty string /Info entries so /Info never has an empty field without a matching XMP
         // property.
         if (creator.empty() && info_dict.hasKey("/Creator")) info_dict.removeKey("/Creator");
@@ -1281,11 +1461,7 @@ void UpdateOrCreatePdfxMetadata(QPDF* qpdf, const char* version, const char* con
     if (root.hasKey("/Metadata")) {
         QPDFObjectHandle metadata = root.getKey("/Metadata");
         if (metadata.isStream()) {
-            std::shared_ptr<Buffer> buffer = metadata.getStreamData(qpdf_dl_all);
-            if (buffer && buffer->getSize() > 0) {
-                xml.assign(reinterpret_cast<const char*>(buffer->getBuffer()),
-                           static_cast<size_t>(buffer->getSize()));
-            }
+            ReadStreamBounded(metadata, xml, qpdf_dl_all, kMaxXmpBytes);
         }
     }
 
@@ -1310,8 +1486,9 @@ void UpdateOrCreatePdfxMetadata(QPDF* qpdf, const char* version, const char* con
                               pugi::encoding_utf8);
                 edited = serialized.str();
             }
-            xml =
-                edited.empty() ? BuildPdfxXmp(ver, conf, title, trapped, mod_date, extra) : edited;
+            xml = (edited.empty() || !HasCleanXml10Xmp(edited))
+                      ? BuildPdfxXmp(ver, conf, title, trapped, mod_date, extra)
+                      : edited;
         }
 #else
         xml = BuildPdfxXmp(ver, conf, title, trapped, mod_date, extra);
@@ -1369,20 +1546,17 @@ std::shared_ptr<Buffer> InjectPdfx(const uint8_t* input, size_t input_len, const
                 if (o.getKey("/Type").isNameAndEquals("/Page")) {
                     QPDFObjectHandle pm = o.getKey("/Metadata");
                     if (pm.isStream()) {
-                        try {
-                            auto mb = pm.getStreamData(qpdf_dl_all);
-                            if (mb && mb->getSize() > 0 && mb->getSize() < 1024 * 1024) {
-                                std::string s(reinterpret_cast<const char*>(mb->getBuffer()),
-                                              mb->getSize());
-                                if (s.find("rdf:RDF") != std::string::npos &&
-                                    s.find("xapMM:") == std::string::npos &&
-                                    s.find("xmlns:xap=") == std::string::npos &&
-                                    s.find("GTS_PDFX") == std::string::npos) {
-                                    keepPageXmp = true;
-                                }
+                        std::string s;
+                        if (ReadStreamBounded(pm, s, qpdf_dl_all, size_t{1024} * 1024 - 1) &&
+                            !s.empty()) {
+                            if (HasCleanXml10Xmp(s) && s.find("bytes=") == std::string::npos &&
+                                s.find("encoding=") == std::string::npos &&
+                                s.find("rdf:RDF") != std::string::npos &&
+                                s.find("xapMM:") == std::string::npos &&
+                                s.find("xmlns:xap=") == std::string::npos &&
+                                s.find("GTS_PDFX") == std::string::npos) {
+                                keepPageXmp = true;
                             }
-                        } catch (std::exception&) {
-                            keepPageXmp = false;
                         }
                     }
                 }

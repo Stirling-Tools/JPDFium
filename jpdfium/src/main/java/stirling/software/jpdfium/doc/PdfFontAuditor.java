@@ -5,7 +5,6 @@ import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.panama.AnnotationBindings;
 import stirling.software.jpdfium.panama.NativeRuntime;
-import stirling.software.jpdfium.panama.AnnotationBindings;
 import stirling.software.jpdfium.panama.PageEditBindings;
 import stirling.software.jpdfium.panama.QpdfLib;
 import stirling.software.jpdfium.util.NativeJsonParser;
@@ -67,7 +66,11 @@ public final class PdfFontAuditor {
             int italicAngle,      // Degrees counterclockwise from vertical
             long fontDataSize,    // Size of embedded font data in bytes (0 if not embedded)
             Set<Integer> pages    // Set of page indices where this font appears
-    ) {}
+    ) {
+        public FontInfo {
+            pages = pages == null ? Set.of() : Set.copyOf(pages);
+        }
+    }
 
     /** Font descriptor flag constants (ISO 32000-1:2008 table 123). */
     public static final int FLAG_FIXED_PITCH   = 1;
@@ -89,7 +92,12 @@ public final class PdfFontAuditor {
             int totalFontCount,
             int embeddedCount,
             int nonEmbeddedCount
-    ) {}
+    ) {
+        public AuditReport {
+            fonts = fonts == null ? List.of() : List.copyOf(fonts);
+            nonEmbeddedFonts = nonEmbeddedFonts == null ? List.of() : List.copyOf(nonEmbeddedFonts);
+        }
+    }
 
     /**
      * One font dictionary as stored in the PDF, independent of whether any page draws with it.
@@ -120,6 +128,10 @@ public final class PdfFontAuditor {
             Set<Integer> pages,
             String object
     ) {
+        public FontResource {
+            pages = pages == null ? Set.of() : Set.copyOf(pages);
+        }
+
         /** True when no page resource dictionary reaches this font. */
         public boolean resourceOnly() {
             return pages.isEmpty();
@@ -182,7 +194,7 @@ public final class PdfFontAuditor {
                 }
 
                 if (AnnotationBindings.FPDFPage_GetAnnotCount != null) {
-                    int annotCount = 0;
+                    int annotCount;
                     try {
                         annotCount = (int) AnnotationBindings.FPDFPage_GetAnnotCount.invokeExact(rawPage);
                     } catch (Throwable t) {
@@ -195,7 +207,7 @@ public final class PdfFontAuditor {
                             throw new JPDFiumException("Annotation font inspection is required but not supported by this PDFium build");
                         }
                         for (int a = 0; a < annotCount; a++) {
-                            MemorySegment annot = MemorySegment.NULL;
+                            MemorySegment annot;
                             try {
                                 annot = (MemorySegment) AnnotationBindings.FPDFPage_GetAnnot.invokeExact(rawPage, a);
                             } catch (Throwable t) {
@@ -210,9 +222,11 @@ public final class PdfFontAuditor {
                                     if (obj.equals(MemorySegment.NULL)) continue;
                                     scanObject(obj, pageIdx, fontMap, seenOnPage, 0);
                                 }
+                            } catch (JPDFiumException jpe) {
+                                throw jpe;
                             } catch (Throwable t) {
                                 NativeRuntime.rethrowFatal(t);
-                                throw t instanceof JPDFiumException jpe ? jpe : new JPDFiumException(t);
+                                throw new JPDFiumException(t);
                             } finally {
                                 try {
                                     AnnotationBindings.FPDFPage_CloseAnnot.invokeExact(annot);
@@ -346,13 +360,92 @@ public final class PdfFontAuditor {
     }
 
     /**
+     * Single-parse font inventory snapshot combining unembedded resources and corrupt embedded
+     * font keys from one {@link QpdfLib#inspectFonts} pass.
+     */
+    record FontInventorySnapshot(
+            List<FontResource> allResources,
+            List<FontResource> unembeddedResources,
+            List<String> unembeddedNames,
+            List<String> corruptEmbeddedKeys,
+            boolean inventoryUsed) {
+        FontInventorySnapshot {
+            allResources = List.copyOf(allResources);
+            unembeddedResources = List.copyOf(unembeddedResources);
+            unembeddedNames = List.copyOf(unembeddedNames);
+            corruptEmbeddedKeys = List.copyOf(corruptEmbeddedKeys);
+        }
+
+        boolean hasIssues() {
+            return !unembeddedResources.isEmpty() || !corruptEmbeddedKeys.isEmpty();
+        }
+    }
+
+    private static final FontInventorySnapshot EMPTY_SNAPSHOT =
+            new FontInventorySnapshot(List.of(), List.of(), List.of(), List.of(), false);
+
+    /** Inspect unembedded and corrupt fonts in one QPDF inventory parse. */
+    static FontInventorySnapshot inspectInventory(byte[] pdf) {
+        if (pdf == null || pdf.length == 0) return EMPTY_SNAPSHOT;
+        if (QpdfLib.isFontInventorySupported()) {
+            String json = QpdfLib.inspectFonts(pdf);
+            if (json != null) {
+                return parseSnapshot(json);
+            }
+        }
+        try (PdfDocument doc = PdfDocument.open(pdf)) {
+            if (QpdfLib.isFontInventorySupported()) {
+                List<FontResource> all = inventory(doc);
+                if (!all.isEmpty()) {
+                    List<FontResource> nonEmb = nonEmbeddedResources(all);
+                    return new FontInventorySnapshot(
+                            all, nonEmb, uniqueNames(nonEmb), List.of(), false);
+                }
+            }
+            List<FontResource> fallback = auditFallback(doc);
+            return new FontInventorySnapshot(
+                    List.of(), fallback, uniqueNames(fallback), List.of(), false);
+        } catch (JPDFiumException jpe) {
+            throw jpe;
+        } catch (Exception e) {
+            throw new JPDFiumException(e);
+        }
+    }
+
+    /** File-backed single-parse inspection using native file inventory when available. */
+    static FontInventorySnapshot inspectInventory(Path pdf) {
+        if (pdf == null) return EMPTY_SNAPSHOT;
+        if (QpdfLib.isFileFontInventorySupported()) {
+            String json = QpdfLib.inspectFonts(pdf);
+            if (json != null) {
+                return parseSnapshot(json);
+            }
+        }
+        try (PdfDocument doc = PdfDocument.open(pdf)) {
+            if (QpdfLib.isFontInventorySupported()) {
+                List<FontResource> all = inventory(doc);
+                if (!all.isEmpty()) {
+                    List<FontResource> nonEmb = nonEmbeddedResources(all);
+                    return new FontInventorySnapshot(
+                            all, nonEmb, uniqueNames(nonEmb), List.of(), false);
+                }
+            }
+            List<FontResource> fallback = auditFallback(doc);
+            return new FontInventorySnapshot(
+                    List.of(), fallback, uniqueNames(fallback), List.of(), false);
+        } catch (JPDFiumException jpe) {
+            throw jpe;
+        } catch (Exception e) {
+            throw new JPDFiumException(e);
+        }
+    }
+
+    /**
      * Names of every non-embedded font resource, including unused resource dictionaries and
      * AcroForm {@code /DR}. Falls back to the page audit when resource inventory is unavailable.
      */
     static List<String> unembeddedNames(byte[] pdf) {
-        Set<String> names = new LinkedHashSet<>();
-        for (FontResource resource : unembeddedResources(pdf)) names.add(resource.baseName());
-        return List.copyOf(names);
+        return inspectInventory(pdf).unembeddedNames();
     }
 
     /**
@@ -360,23 +453,7 @@ public final class PdfFontAuditor {
      * when the native inventory is unavailable.
      */
     static List<FontResource> unembeddedResources(byte[] pdf) {
-        if (pdf == null || pdf.length == 0) return List.of();
-        if (QpdfLib.isFontInventorySupported()) {
-            String json = QpdfLib.inspectFonts(pdf);
-            if (json != null) {
-                List<FontResource> all = parseInventory(json);
-                if (!all.isEmpty()) return nonEmbeddedResources(all);
-            }
-        }
-        try (PdfDocument doc = PdfDocument.open(pdf)) {
-            if (QpdfLib.isFontInventorySupported()) {
-                List<FontResource> all = inventory(doc);
-                if (!all.isEmpty()) return nonEmbeddedResources(all);
-            }
-            return auditFallback(doc);
-        } catch (Exception e) {
-            throw e instanceof JPDFiumException jpe ? jpe : new JPDFiumException(e);
-        }
+        return inspectInventory(pdf).unembeddedResources();
     }
 
     /**
@@ -384,22 +461,49 @@ public final class PdfFontAuditor {
      * when available so the input is never materialized on the Java heap.
      */
     static List<FontResource> unembeddedResources(Path pdf) {
-        if (QpdfLib.isFileFontInventorySupported()) {
-            String json = QpdfLib.inspectFonts(pdf);
-            if (json != null) {
-                List<FontResource> all = parseInventory(json);
-                if (!all.isEmpty()) return nonEmbeddedResources(all);
+        return inspectInventory(pdf).unembeddedResources();
+    }
+
+    private static FontInventorySnapshot parseSnapshot(String json) {
+        if (json.length() <= 2) {
+            return new FontInventorySnapshot(List.of(), List.of(), List.of(), List.of(), true);
+        }
+        List<Map<String, String>> parsed = NativeJsonParser.parseArray(json);
+        List<FontResource> all = new ArrayList<>(parsed.size());
+        Set<String> corrupt = new LinkedHashSet<>();
+        for (Map<String, String> field : parsed) {
+            String baseName = field.getOrDefault("baseFont", "");
+            if (baseName.isEmpty()) continue;
+            all.add(toFontResource(baseName, field));
+            if ("true".equals(field.get("program"))
+                    && "false".equals(field.get("programValid"))) {
+                corrupt.add(baseName);
             }
         }
-        try (PdfDocument doc = PdfDocument.open(pdf)) {
-            if (QpdfLib.isFontInventorySupported()) {
-                List<FontResource> all = inventory(doc);
-                if (!all.isEmpty()) return nonEmbeddedResources(all);
-            }
-            return auditFallback(doc);
-        } catch (Exception e) {
-            throw e instanceof JPDFiumException jpe ? jpe : new JPDFiumException(e);
-        }
+        List<FontResource> unembedded = nonEmbeddedResources(all);
+        return new FontInventorySnapshot(
+                all, unembedded, uniqueNames(unembedded), List.copyOf(corrupt), true);
+    }
+
+    private static List<String> uniqueNames(List<FontResource> resources) {
+        if (resources.isEmpty()) return List.of();
+        Set<String> names = new LinkedHashSet<>();
+        for (FontResource resource : resources) names.add(resource.baseName());
+        return List.copyOf(names);
+    }
+
+    private static FontResource toFontResource(String baseName, Map<String, String> field) {
+        return new FontResource(
+                baseName,
+                field.getOrDefault("subtype", ""),
+                field.getOrDefault("encoding", ""),
+                "true".equals(field.get("program")),
+                "true".equals(field.get("descriptor")),
+                "true".equals(field.get("cid")),
+                "true".equals(field.get("toUnicode")),
+                field.getOrDefault("cidToGid", ""),
+                parsePages(field.get("pages")),
+                field.getOrDefault("object", ""));
     }
 
     private static List<FontResource> nonEmbeddedResources(List<FontResource> all) {
@@ -434,17 +538,7 @@ public final class PdfFontAuditor {
         for (Map<String, String> field : parsed) {
             String baseName = field.getOrDefault("baseFont", "");
             if (baseName.isEmpty()) continue;
-            resources.add(new FontResource(
-                    baseName,
-                    field.getOrDefault("subtype", ""),
-                    field.getOrDefault("encoding", ""),
-                    "true".equals(field.get("program")),
-                    "true".equals(field.get("descriptor")),
-                    "true".equals(field.get("cid")),
-                    "true".equals(field.get("toUnicode")),
-                    field.getOrDefault("cidToGid", ""),
-                    parsePages(field.get("pages")),
-                    field.getOrDefault("object", "")));
+            resources.add(toFontResource(baseName, field));
         }
         return resources;
     }
@@ -525,17 +619,21 @@ public final class PdfFontAuditor {
         int type;
         try {
             type = (int) PageEditBindings.FPDFPageObj_GetType.invokeExact(obj);
+        } catch (JPDFiumException jpe) {
+            throw jpe;
         } catch (Throwable t) {
             NativeRuntime.rethrowFatal(t);
-            throw t instanceof JPDFiumException jpe ? jpe : new JPDFiumException(t);
+            throw new JPDFiumException(t);
         }
         if (type == FPDF_PAGEOBJ_TEXT) {
             MemorySegment font;
             try {
                 font = (MemorySegment) PageEditBindings.FPDFTextObj_GetFont.invokeExact(obj);
+            } catch (JPDFiumException jpe) {
+                throw jpe;
             } catch (Throwable t) {
                 NativeRuntime.rethrowFatal(t);
-                throw t instanceof JPDFiumException jpe ? jpe : new JPDFiumException(t);
+                throw new JPDFiumException(t);
             }
             if (font.equals(MemorySegment.NULL)) return;
             long fontAddr = font.address();
@@ -565,9 +663,11 @@ public final class PdfFontAuditor {
         int children;
         try {
             children = (int) PageEditBindings.FPDFFormObj_CountObjects.invokeExact(obj);
+        } catch (JPDFiumException jpe) {
+            throw jpe;
         } catch (Throwable t) {
             NativeRuntime.rethrowFatal(t);
-            throw t instanceof JPDFiumException jpe ? jpe : new JPDFiumException(t);
+            throw new JPDFiumException(t);
         }
         for (int i = 0; i < children; i++) {
             MemorySegment child;
@@ -645,17 +745,7 @@ public final class PdfFontAuditor {
      */
     static List<String> corruptEmbeddedKeys(byte[] pdf) {
         if (pdf == null || pdf.length == 0 || !QpdfLib.isFontInventorySupported()) return List.of();
-        String json = QpdfLib.inspectFonts(pdf);
-        if (json == null || json.length() <= 2) return List.of();
-        Set<String> names = new LinkedHashSet<>();
-        for (Map<String, String> field : NativeJsonParser.parseArray(json)) {
-            if ("true".equals(field.get("program"))
-                    && "false".equals(field.get("programValid"))) {
-                String name = field.getOrDefault("baseFont", "");
-                if (!name.isEmpty()) names.add(name);
-            }
-        }
-        return List.copyOf(names);
+        return inspectInventory(pdf).corruptEmbeddedKeys();
     }
 
     private static void collectCorruptFonts(MemorySegment obj, Set<String> keys, int depth) {
@@ -712,8 +802,8 @@ public final class PdfFontAuditor {
         if (data[0] == 0x01 && data[1] == 0x00 && data[2] == 0x04 && data[3] == 0x04) return true;
         String head = new String(data, 0, Math.min(4, data.length), StandardCharsets.ISO_8859_1);
         if ("OTTO".equals(head) || "true".equals(head) || "ttcf".equals(head)) return true;
-        if (data.length >= 4 && data[0] == '%' && data[1] == '!') return true;
-        return data.length >= 2 && (data[0] & 0xFF) == 0x80 && data[1] == 0x01;
+        return (data[0] == '%' && data[1] == '!')
+                || ((data[0] & 0xFF) == 0x80 && data[1] == 0x01);
     }
 
     private static void collectVisibleFonts(MemorySegment obj, Set<String> keys, int depth) {
@@ -829,7 +919,7 @@ public final class PdfFontAuditor {
         }
     }
 
-    private static class FontBuilder {
+    private static final class FontBuilder {
         String baseName;
         String familyName;
         boolean embedded;
