@@ -123,7 +123,7 @@ public final class PdfFontEmbedder {
             List.of("carlito", "calibri"),
             List.of("caladea", "cambria"),
             List.of("dejavusans", "verdana", "tahoma", "centurygothic"),
-            List.of("dejavuserif", "bookantiqua"),
+            List.of("dejavuserif", "bookantiqua", "liberationserif"),
             List.of("liberationsans", "myriadpro", "franklingothic", "optima"),
             List.of("liberationserif", "minionpro"),
             List.of("notosanssc", "simsun", "stsong", "stsongtiscblack", "pmingliu",
