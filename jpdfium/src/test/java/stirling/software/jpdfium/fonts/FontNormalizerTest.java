@@ -240,6 +240,17 @@ class FontNormalizerTest {
     }
 
     @Test
+    void fixToUnicodeKeepsMappingAfterEmptyRangeSection() throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real native library");
+        byte[] pdf = withEmptyRangeSection(embeddedTrueTypePdf(false, false));
+
+        try (PdfDocument doc = PdfDocument.open(pdf)) {
+            assertEquals(0, FontNormalizer.fixToUnicode(doc, 0),
+                    "an empty first bfrange section must not hide a later mapping");
+        }
+    }
+
+    @Test
     void repairWidthsPreservesProducerWidthForUnresolvedCode() throws Exception {
         assumeTrue(NativeRuntime.isFull(), "needs real native library");
         byte[] pdf = unresolvedWidthPdf();
@@ -511,6 +522,40 @@ class FontNormalizerTest {
                         endcodespacerange
                         0 beginbfchar
                         endbfchar
+                        1 beginbfchar
+                        <20> <0020>
+                        endbfchar
+                        endcmap
+                        CMapName currentdict /CMap defineresource pop
+                        end
+                        end
+                        """.getBytes(StandardCharsets.US_ASCII));
+            }
+            font.setItem(COSName.TO_UNICODE, toUnicode);
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            doc.save(out);
+            return out.toByteArray();
+        }
+    }
+
+    private static byte[] withEmptyRangeSection(byte[] pdf) throws IOException {
+        try (PDDocument doc = Loader.loadPDF(pdf)) {
+            COSDictionary font = firstFontDictionary(doc);
+            assertNotNull(font, "fixture must contain a font");
+            COSStream toUnicode = new COSStream();
+            try (OutputStream out = toUnicode.createOutputStream()) {
+                out.write("""
+                        /CIDInit /ProcSet findresource begin
+                        12 dict begin
+                        begincmap
+                        /CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def
+                        /CMapName /Adobe-Identity-UCS def
+                        /CMapType 2 def
+                        1 begincodespacerange
+                        <00> <FF>
+                        endcodespacerange
+                        0 beginbfrange
+                        endbfrange
                         1 beginbfrange
                         <20> <7E> <0020>
                         endbfrange
