@@ -41,14 +41,23 @@ def parse_cid_ranges(path: Path):
     return ranges
 
 
-def decode_utf16be(value: int):
-    if value <= 0xFFFF:
-        return value
-    if value <= 0xFFFFFFFF:
-        high, low = value >> 16, value & 0xFFFF
-        if 0xD800 <= high <= 0xDBFF and 0xDC00 <= low <= 0xDFFF:
-            return 0x10000 + ((high - 0xD800) << 10) + (low - 0xDC00)
-    return None
+def decode_utf16be_hex(value: str):
+    """Return the first Unicode scalar encoded by a UTF-16BE hex string.
+
+    Adobe UCS2 CMaps occasionally map a CID to a base character followed by a
+    variation selector (for example ``0030FE00``), or to a surrogate pair. The
+    generated table stores one scalar per CID, so combine a valid surrogate
+    pair and otherwise keep the first code unit.
+    """
+    if not value or len(value) % 4:
+        return None
+    units = [int(value[i : i + 4], 16) for i in range(0, len(value), 4)]
+    first = units[0]
+    if 0xD800 <= first <= 0xDBFF and len(units) > 1 and 0xDC00 <= units[1] <= 0xDFFF:
+        return 0x10000 + ((first - 0xD800) << 10) + (units[1] - 0xDC00)
+    if 0xD800 <= first <= 0xDFFF:
+        return None
+    return first
 
 
 def parse_unicode_ranges(path: Path):
@@ -59,7 +68,7 @@ def parse_unicode_ranges(path: Path):
         for line in block.group(1).splitlines():
             m = re.match(r"\s*<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]+)>", line)
             if m:
-                pairs.append((hex4(m.group(1)), decode_utf16be(hex4(m.group(2)))))
+                pairs.append((hex4(m.group(1)), decode_utf16be_hex(m.group(2))))
     for block in re.finditer(r"beginbfrange(.*?)endbfrange", text, re.S):
         for line in block.group(1).splitlines():
             m = re.match(
@@ -67,7 +76,7 @@ def parse_unicode_ranges(path: Path):
             )
             if m:
                 lo, hi = hex4(m.group(1)), hex4(m.group(2))
-                start = decode_utf16be(hex4(m.group(3)))
+                start = decode_utf16be_hex(m.group(3))
                 if start is None or hi < lo:
                     continue
                 for offset in range(hi - lo + 1):
