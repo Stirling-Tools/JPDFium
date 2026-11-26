@@ -117,6 +117,17 @@ class PdfRepairTest {
     }
 
     @Test
+    void inspectIgnoresZeroAreaSequenceInsideInlineImage() {
+        Assumptions.assumeTrue(PdfRepair.isSupported(), "zero-area clip scan needs qpdf");
+        Assumptions.assumeTrue(NativeRuntime.isFull(), "zero-area clip scan needs real native qpdf");
+        String json = PdfRepair.inspect(singlePagePdf(
+                "q BI /W 13 /H 1 /BPC 8 /CS /G ID 0 0 0 0 re W n EI Q", false));
+        assertTrue(json.contains("\"zero_area_clip_pages\":[]"),
+                "binary inline-image bytes must not be scanned as operators: " + json);
+        assertFalse(json.contains("zero-area"), "inline image data is not a clipping path");
+    }
+
+    @Test
     void inspectReportsNoClipIssueForCleanContent() {
         Assumptions.assumeTrue(PdfRepair.isSupported(), "zero-area clip scan needs qpdf");
         Assumptions.assumeTrue(NativeRuntime.isFull(), "zero-area clip scan needs real native qpdf");

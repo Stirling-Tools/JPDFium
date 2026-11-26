@@ -4,6 +4,7 @@ import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.cos.COSArray;
 import org.apache.pdfbox.cos.COSDictionary;
 import org.apache.pdfbox.cos.COSFloat;
+import org.apache.pdfbox.cos.COSInteger;
 import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.cos.COSObject;
 import org.apache.pdfbox.cos.COSStream;
@@ -31,6 +32,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -888,6 +890,44 @@ class PdfXConverterTest {
     }
 
     @Test
+    void orphanSignatureDictionaryRefusesPathConversion() throws Exception {
+        assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
+        Path inputFile = Files.createTempFile("jpdfium-pdfx-sig-in-", ".pdf");
+        Path outputFile = Files.createTempFile("jpdfium-pdfx-sig-out-", ".pdf");
+        try {
+            Files.write(inputFile, pdfWithOrphanSignatureDictionary());
+            PdfXOptions options = PdfXOptions.builder()
+                    .standard(PdfXStandard.PDF_X_4)
+                    .useCompactCmyk()
+                    .title("Orphan Sig Path")
+                    .build();
+            JPDFiumException refused = assertThrows(JPDFiumException.class,
+                    () -> PdfXConverter.applyMetadata(inputFile, outputFile, options));
+            assertTrue(refused.getMessage().contains("signature"),
+                    "refusal must name the signature: " + refused.getMessage());
+        } finally {
+            Files.deleteIfExists(inputFile);
+            Files.deleteIfExists(outputFile);
+        }
+    }
+
+    @Test
+    void orphanSignatureDictionaryRefusesDocumentConversion() {
+        assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
+        PdfXOptions options = PdfXOptions.builder()
+                .standard(PdfXStandard.PDF_X_4)
+                .useCompactCmyk()
+                .title("Orphan Sig Document")
+                .build();
+        try (PdfDocument document = PdfDocument.open(pdfWithOrphanSignatureDictionary())) {
+            JPDFiumException refused = assertThrows(JPDFiumException.class,
+                    () -> PdfXConverter.applyMetadata(document, options));
+            assertTrue(refused.getMessage().contains("signature"),
+                    "refusal must name the signature: " + refused.getMessage());
+        }
+    }
+
+    @Test
     void markerTextIsNotTreatedAsSignature() throws Exception {
         assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
         byte[] input = Files.readAllBytes(resource("/pdfs/general/minimal.pdf"));
@@ -1419,6 +1459,287 @@ class PdfXConverterTest {
             String page0Text = stripper.getText(reopened).trim();
             assertTrue(page0Text.contains("Vector page stays searchable"),
                     "Clean page 0 must remain vector text, got: " + page0Text);
+        }
+    }
+
+    @Test
+    void rawByteRangeSignatureRejectedAcrossAllOverloads() throws Exception {
+        assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
+        byte[] base;
+        try (PDDocument doc = new PDDocument();
+                ByteArrayOutputStream bytes = new ByteArrayOutputStream()) {
+            PDPage page = new PDPage(PDRectangle.A4);
+            doc.addPage(page);
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.setNonStrokingColor(0.2f, 0.3f, 0.4f);
+                cs.addRect(72, 600, 100, 50);
+                cs.fill();
+            }
+            doc.save(bytes);
+            base = bytes.toByteArray();
+        }
+
+        String raw = new String(base, StandardCharsets.ISO_8859_1);
+        int eofIdx = raw.lastIndexOf("%%EOF");
+        assertTrue(eofIdx > 0);
+        // Pad enough comment bytes so /ByteRange also crosses the 64 KiB chunk boundary in Path scan.
+        String padding = "% " + "A".repeat(65_530) + "\n";
+        byte[] signedAtBoundary = (raw.substring(0, eofIdx)
+                + padding
+                + "% /ByteRange [0 1 2 3]\n"
+                + raw.substring(eofIdx)).getBytes(StandardCharsets.ISO_8859_1);
+
+        Path inputPath = Files.createTempFile("jpdfium-byterange-in-", ".pdf");
+        Path outputPath = Files.createTempFile("jpdfium-byterange-out-", ".pdf");
+        byte[] sentinel = "untouched".getBytes(StandardCharsets.US_ASCII);
+        try {
+            Files.write(inputPath, signedAtBoundary);
+            for (boolean embedMissingFonts : List.of(true, false)) {
+                PdfXOptions opts = PdfXOptions.builder()
+                        .standard(PdfXStandard.PDF_X_4)
+                        .useCompactCmyk()
+                        .embedMissingFonts(embedMissingFonts)
+                        .build();
+
+                assertThrows(JPDFiumException.class,
+                        () -> PdfXConverter.applyMetadata(signedAtBoundary, opts),
+                        "byte[] overload must reject /ByteRange with embedMissingFonts=" + embedMissingFonts);
+
+                try (PdfDocument docFromBytes = PdfDocument.open(signedAtBoundary)) {
+                    assertThrows(JPDFiumException.class,
+                            () -> PdfXConverter.applyMetadata(docFromBytes, opts),
+                            "PdfDocument(byte[]) must reject /ByteRange with embedMissingFonts=" + embedMissingFonts);
+                }
+
+                try (PdfDocument docFromPath = PdfDocument.open(inputPath)) {
+                    assertThrows(JPDFiumException.class,
+                            () -> PdfXConverter.applyMetadata(docFromPath, opts),
+                            "PdfDocument(Path) must reject /ByteRange with embedMissingFonts=" + embedMissingFonts);
+                }
+
+                Files.write(outputPath, sentinel);
+                assertThrows(JPDFiumException.class,
+                        () -> PdfXConverter.applyMetadata(inputPath, outputPath, opts),
+                        "Path overload must reject /ByteRange with embedMissingFonts=" + embedMissingFonts);
+                assertArrayEquals(sentinel, Files.readAllBytes(outputPath),
+                        "Rejected Path conversion must not overwrite destination");
+            }
+        } finally {
+            Files.deleteIfExists(inputPath);
+            Files.deleteIfExists(outputPath);
+        }
+    }
+
+    @Test
+    void rawByteRangeSignatureRejectedForInputStreamAndDirectByteBuffer() throws Exception {
+        assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
+        byte[] base;
+        try (PDDocument doc = new PDDocument();
+                ByteArrayOutputStream bytes = new ByteArrayOutputStream()) {
+            PDPage page = new PDPage(PDRectangle.A4);
+            doc.addPage(page);
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.setNonStrokingColor(0.2f, 0.3f, 0.4f);
+                cs.addRect(72, 600, 100, 50);
+                cs.fill();
+            }
+            doc.save(bytes);
+            base = bytes.toByteArray();
+        }
+
+        String raw = new String(base, StandardCharsets.ISO_8859_1);
+        int eofIdx = raw.lastIndexOf("%%EOF");
+        assertTrue(eofIdx > 0);
+        byte[] signedEarly = (raw.substring(0, eofIdx)
+                + "% /ByteRange [0 1 2 3]\n"
+                + raw.substring(eofIdx)).getBytes(StandardCharsets.ISO_8859_1);
+
+        int padChars = Math.max(0, 65_530 - eofIdx);
+        String boundaryPad = "% " + "A".repeat(padChars) + "\n";
+        byte[] signedAtBoundary = (raw.substring(0, eofIdx)
+                + boundaryPad
+                + "% /ByteRange [0 1 2 3]\n"
+                + raw.substring(eofIdx)).getBytes(StandardCharsets.ISO_8859_1);
+
+        for (byte[] candidate : List.of(signedEarly, signedAtBoundary)) {
+            for (boolean embedMissingFonts : List.of(true, false)) {
+                PdfXOptions opts = PdfXOptions.builder()
+                        .standard(PdfXStandard.PDF_X_4)
+                        .useCompactCmyk()
+                        .embedMissingFonts(embedMissingFonts)
+                        .build();
+
+                try (PdfDocument docFromStream =
+                        PdfDocument.open(new ByteArrayInputStream(candidate))) {
+                    assertTrue(docFromStream.hasRawByteRangeMarker());
+                    JPDFiumException ex = assertThrows(JPDFiumException.class,
+                            () -> PdfXConverter.applyMetadata(docFromStream, opts),
+                            "PdfDocument(InputStream) must reject /ByteRange with embedMissingFonts="
+                                    + embedMissingFonts);
+                    assertTrue(ex.getMessage().contains("signature"), ex.getMessage());
+                }
+
+                byte[] prefix = {0x00, 0x01, 0x02, 0x03};
+                ByteBuffer direct = ByteBuffer.allocateDirect(prefix.length + candidate.length);
+                direct.put(prefix);
+                direct.put(candidate);
+                direct.flip();
+                direct.position(prefix.length);
+                ByteBuffer slice = direct.slice();
+                int expectedLimit = slice.limit();
+                try (PdfDocument docFromDirect = PdfDocument.open(slice)) {
+                    assertEquals(expectedLimit, slice.position(),
+                            "Direct ByteBuffer position must advance to limit on open");
+                    assertEquals(expectedLimit, slice.limit(),
+                            "Direct ByteBuffer limit must remain unchanged on open");
+                    assertTrue(docFromDirect.hasRawByteRangeMarker());
+                    JPDFiumException ex = assertThrows(JPDFiumException.class,
+                            () -> PdfXConverter.applyMetadata(docFromDirect, opts),
+                            "PdfDocument(DirectByteBuffer) must reject /ByteRange with"
+                                    + " embedMissingFonts=" + embedMissingFonts);
+                    assertTrue(ex.getMessage().contains("signature"), ex.getMessage());
+                }
+            }
+        }
+    }
+
+    @Test
+    void objStmCompressedSignatureRejectedAcrossAllOverloads() throws Exception {
+        assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
+        byte[] objStmPdf;
+        try (PDDocument doc = new PDDocument();
+                ByteArrayOutputStream bytes = new ByteArrayOutputStream()) {
+            PDPage page = new PDPage(PDRectangle.A4);
+            doc.addPage(page);
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.setNonStrokingColor(0.2f, 0.3f, 0.4f);
+                cs.addRect(72, 600, 100, 50);
+                cs.fill();
+            }
+            COSDictionary sigDict = new COSDictionary();
+            sigDict.setItem(COSName.TYPE, COSName.SIG);
+            COSArray byteRange = new COSArray();
+            byteRange.add(COSInteger.ZERO);
+            byteRange.add(COSInteger.get(10));
+            byteRange.add(COSInteger.get(20));
+            byteRange.add(COSInteger.get(30));
+            sigDict.setItem(COSName.getPDFName("ByteRange"), byteRange);
+            sigDict.setString(COSName.CONTENTS, "deadbeef");
+            page.getCOSObject().setItem(COSName.getPDFName("CustomSig"), sigDict);
+            doc.save(bytes);
+            objStmPdf = bytes.toByteArray();
+        }
+
+        String rawText = new String(objStmPdf, StandardCharsets.ISO_8859_1);
+        assertTrue(rawText.contains("/ObjStm"),
+                "PDFBox 3 default save should compress objects into /ObjStm");
+        assertFalse(rawText.contains("/ByteRange"),
+                "/ByteRange must be compressed inside /ObjStm in raw bytes");
+
+        Path inputPath = Files.createTempFile("jpdfium-objstm-sig-in-", ".pdf");
+        Path outputPath = Files.createTempFile("jpdfium-objstm-sig-out-", ".pdf");
+        byte[] sentinel = "untouched".getBytes(StandardCharsets.US_ASCII);
+        try {
+            Files.write(inputPath, objStmPdf);
+            for (boolean embedMissingFonts : List.of(false, true)) {
+                PdfXOptions opts = PdfXOptions.builder()
+                        .standard(PdfXStandard.PDF_X_4)
+                        .useCompactCmyk()
+                        .embedMissingFonts(embedMissingFonts)
+                        .build();
+
+                JPDFiumException bytesEx = assertThrows(JPDFiumException.class,
+                        () -> PdfXConverter.applyMetadata(objStmPdf, opts),
+                        "byte[] overload must reject /ObjStm /Sig with embedMissingFonts="
+                                + embedMissingFonts);
+                assertTrue(bytesEx.getMessage().contains("signature"), bytesEx.getMessage());
+
+                Files.write(outputPath, sentinel);
+                JPDFiumException pathEx = assertThrows(JPDFiumException.class,
+                        () -> PdfXConverter.applyMetadata(inputPath, outputPath, opts),
+                        "Path overload must reject /ObjStm /Sig with embedMissingFonts="
+                                + embedMissingFonts);
+                assertTrue(pathEx.getMessage().contains("signature"), pathEx.getMessage());
+                assertArrayEquals(sentinel, Files.readAllBytes(outputPath),
+                        "Rejected /ObjStm Path conversion must leave destination untouched");
+
+                try (PdfDocument docFromBytes = PdfDocument.open(objStmPdf)) {
+                    assertThrows(JPDFiumException.class,
+                            () -> PdfXConverter.applyMetadata(docFromBytes, opts));
+                }
+                try (PdfDocument docFromStream =
+                        PdfDocument.open(new ByteArrayInputStream(objStmPdf))) {
+                    assertThrows(JPDFiumException.class,
+                            () -> PdfXConverter.applyMetadata(docFromStream, opts));
+                }
+                ByteBuffer direct = ByteBuffer.allocateDirect(objStmPdf.length);
+                direct.put(objStmPdf).flip();
+                try (PdfDocument docFromDirect = PdfDocument.open(direct)) {
+                    assertThrows(JPDFiumException.class,
+                            () -> PdfXConverter.applyMetadata(docFromDirect, opts));
+                }
+            }
+        } finally {
+            Files.deleteIfExists(inputPath);
+            Files.deleteIfExists(outputPath);
+        }
+    }
+
+    @Test
+    void pdfx1aFlattenPreservesRotatedPageAspectRatio() throws Exception {
+        assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
+        for (int rotation : List.of(90, 270)) {
+            byte[] input;
+            try (PDDocument doc = new PDDocument();
+                    ByteArrayOutputStream bytes = new ByteArrayOutputStream()) {
+                PDPage page = new PDPage(new PDRectangle(0, 0, 400, 600));
+                page.setRotation(rotation);
+                doc.addPage(page);
+                PDExtendedGraphicsState gs = new PDExtendedGraphicsState();
+                gs.setNonStrokingAlphaConstant(0.5f);
+                try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                    cs.setGraphicsStateParameters(gs);
+                    cs.setNonStrokingColor(0.2f, 0.5f, 0.8f);
+                    cs.addRect(40, 40, 200, 300);
+                    cs.fill();
+                }
+                doc.save(bytes);
+                input = bytes.toByteArray();
+            }
+
+            PdfXOptions flattenOpts = PdfXOptions.builder()
+                    .standard(PdfXStandard.PDF_X_1A)
+                    .outputIntentProfile(PdfIccProfiles.compactCmykV2())
+                    .title("Rotated Flatten " + rotation)
+                    .flattenTransparency(true)
+                    .flattenDpi(150)
+                    .build();
+            byte[] out = PdfXConverter.applyMetadata(input, flattenOpts);
+            try (PDDocument reopened = Loader.loadPDF(out)) {
+                assertEquals(1, reopened.getNumberOfPages());
+                PDPage outPage = reopened.getPage(0);
+                PDRectangle media = outPage.getMediaBox();
+                assertEquals(600f, media.getWidth(), 0.5f,
+                        "Visual width for /Rotate " + rotation + " must be 600pt");
+                assertEquals(400f, media.getHeight(), 0.5f,
+                        "Visual height for /Rotate " + rotation + " must be 400pt");
+                assertEquals(0, outPage.getRotation(),
+                        "Flattened raster page must be upright (Rotate 0)");
+
+                PDResources res = outPage.getResources();
+                assertNotNull(res);
+                var xobjNames = res.getXObjectNames().iterator();
+                assertTrue(xobjNames.hasNext(), "Expected flattened image XObject");
+                var imgXObj = (org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject)
+                        res.getXObject(xobjNames.next());
+                assertTrue(imgXObj.getWidth() > imgXObj.getHeight(),
+                        "Embedded raster must be landscape for rotated 400x600 page, got "
+                                + imgXObj.getWidth() + "x" + imgXObj.getHeight());
+                double pageAspect = media.getWidth() / (double) media.getHeight();
+                double imgAspect = imgXObj.getWidth() / (double) imgXObj.getHeight();
+                assertEquals(pageAspect, imgAspect, 0.02,
+                        "Page aspect ratio must match embedded raster aspect ratio");
+            }
         }
     }
 

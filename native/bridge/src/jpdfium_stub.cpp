@@ -1864,6 +1864,15 @@ int32_t jpdfium_qpdf_decrypt(const uint8_t* in, int64_t in_len, const char*, uin
     return -1;
 }
 
+int32_t jpdfium_qpdf_encrypt_file(const char*, const char*, const char*, const char*, int32_t,
+                                  int32_t) {
+    return JPDFIUM_ERR_NATIVE;
+}
+
+int32_t jpdfium_qpdf_decrypt_file(const char*, const char*, const char*) {
+    return JPDFIUM_ERR_NATIVE;
+}
+
 int32_t jpdfium_signature_count(int64_t, int32_t* count) {
     if (count) *count = 0;
     return JPDFIUM_ERR_NOT_FOUND;

@@ -720,6 +720,17 @@ if(JPDFIUM_BUILD_TESTS)
     endif()
     add_test(NAME native_smoke COMMAND native_smoke)
 
+    # Generated Adobe CJK CMap tables are large data artifacts; this keeps the
+    # surrogate-pair and variation-selector coverage pinned to the generator
+    # output instead of relying on visual inspection of the includes.
+    add_executable(cmap_tables bridge/tests/cmap_tables.cpp)
+    if(MSVC)
+        target_compile_options(cmap_tables PRIVATE /W4 /WX)
+    else()
+        target_compile_options(cmap_tables PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    endif()
+    add_test(NAME cmap_tables COMMAND cmap_tables)
+
     # Handle-safety and writer harness: regressions for the execution-domain
     # migration's native changes (handle validation, writer finalization).
     # Runs inside the bridge with no JVM, so ASan/UBSan does not have to

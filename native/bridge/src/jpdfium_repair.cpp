@@ -532,6 +532,9 @@ static bool content_has_zero_area_clip(const char* data, size_t len) {
     bool saw_area_path = false;     // any "re" with real area, or m/l/c/v/y/h
     bool clip_requested = false;    // W or W* seen, clip applies at next paint
     double nums[4] = {0, 0, 0, 0};  // most recent numbers, x y w h for a "re"
+    bool inInlineDict = false;      // between BI and ID
+    bool expectInlineLength = false;
+    size_t inlineLength = 0;
 
     size_t i = 0;
     while (i < len) {
@@ -598,6 +601,47 @@ static bool content_has_zero_area_clip(const char* data, size_t len) {
             continue;
         }
         std::string token(data + start, i - start);
+        if (token == "BI") {
+            inInlineDict = true;
+            expectInlineLength = false;
+            inlineLength = 0;
+            nums[0] = nums[1] = nums[2] = nums[3] = 0;
+            continue;
+        }
+        if (inInlineDict) {
+            if (token == "/L") {
+                expectInlineLength = true;
+            } else if (expectInlineLength && token != "ID") {
+                char* lenEnd = nullptr;
+                unsigned long long value = std::strtoull(token.c_str(), &lenEnd, 10);
+                if (lenEnd && *lenEnd == '\0' && lenEnd != token.c_str()) {
+                    inlineLength = static_cast<size_t>(value);
+                }
+                expectInlineLength = false;
+            } else if (token == "ID") {
+                // ID is followed by one whitespace byte, then binary image data
+                // that must never be tokenized as content-stream operators.
+                if (i < len && isPdfWs(data[i])) ++i;
+                if (inlineLength > 0 && inlineLength <= len - i) {
+                    i += inlineLength;
+                } else {
+                    while (i + 1 < len) {
+                        if (data[i] == 'E' && data[i + 1] == 'I' &&
+                            (i == 0 || isPdfWs(data[i - 1])) &&
+                            (i + 2 >= len || isPdfWs(data[i + 2]) || isPdfDelim(data[i + 2]))) {
+                            i += 2;
+                            break;
+                        }
+                        ++i;
+                    }
+                }
+                inInlineDict = false;
+                expectInlineLength = false;
+                inlineLength = 0;
+                nums[0] = nums[1] = nums[2] = nums[3] = 0;
+            }
+            continue;
+        }
         // Number: slide the last-four-operands window.
         char* end = nullptr;
         double value = std::strtod(token.c_str(), &end);
@@ -658,7 +702,8 @@ static void collect_zero_area_clip_pages(QPDF& pdf, std::vector<int>& out) {
         bool overflow = false;
         if (contents.isStream()) {
             try {
-                std::shared_ptr<Buffer> buf = contents.getStreamData(qpdf_dl_generalized);
+                std::shared_ptr<Buffer> buf = jpdfium::qpdf_detail::readStreamBufferBounded(
+                    contents, qpdf_dl_generalized, kMaxScanBytes);
                 if (buf && buf->getSize() <= kMaxScanBytes) {
                     combined.assign(reinterpret_cast<const char*>(buf->getBuffer()),
                                     buf->getSize());
@@ -669,17 +714,17 @@ static void collect_zero_area_clip_pages(QPDF& pdf, std::vector<int>& out) {
             }
         } else if (contents.isArray()) {
             try {
-                // getStreamData is non-const: iterate a copied vector.
                 for (auto& part : contents.getArrayAsVector()) {
                     if (!part.isStream()) continue;
-                    std::shared_ptr<Buffer> buf = part.getStreamData(qpdf_dl_generalized);
-                    if (!buf) continue;
-                    if (combined.size() + buf->getSize() > kMaxScanBytes) {
+                    std::shared_ptr<Buffer> buf = jpdfium::qpdf_detail::readStreamBufferBounded(
+                        part, qpdf_dl_generalized, kMaxScanBytes - combined.size());
+                    if (!buf || combined.size() + buf->getSize() > kMaxScanBytes) {
                         overflow = true;
                         break;
                     }
                     combined.append(reinterpret_cast<const char*>(buf->getBuffer()),
                                     buf->getSize());
+                    combined.push_back('\n');
                 }
             } catch (...) {
                 continue;
@@ -1039,13 +1084,13 @@ JPDFIUM_EXPORT int32_t jpdfium_repair_inspect(const uint8_t* input, int64_t inpu
             issues.resize(issues.size() - 1);  // drop the closing bracket
         }
         for (int page : zeroClipPages) {
-            if (issues.size() > 1) issues += ",";
+            if (issues.size() > 1) issues += ',';
             issues += "{\"message\":\"page " + std::to_string(page) +
                       ": zero-area clipping path applied (re with zero width or height"
                       " followed by W) - page content may be invisible\",\"page\":" +
                       std::to_string(page) + "}";
         }
-        issues += "]";
+        issues += ']';
 
         os << "\"xref_valid\":true,";
         os << "\"trailer_valid\":true,";

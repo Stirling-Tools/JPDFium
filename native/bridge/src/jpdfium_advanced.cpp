@@ -37,12 +37,12 @@
 namespace {
 
 struct ShapeEntry {
-    hb_codepoint_t glyph;
-    unsigned int cluster;
-    int32_t ax;
-    int32_t ay;
-    int32_t dx;
-    int32_t dy;
+    hb_codepoint_t glyph = 0;
+    unsigned int cluster = 0;
+    int32_t ax = 0;
+    int32_t ay = 0;
+    int32_t dx = 0;
+    int32_t dy = 0;
 };
 
 bool sameShaping(const ShapeEntry& x, const ShapeEntry& y) {

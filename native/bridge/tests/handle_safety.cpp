@@ -381,6 +381,7 @@ static void test_writer_rejects_bad_inputs(const std::vector<uint8_t>& pdf) {
 int main();  // defined at the end
 static void test_cross_type_handles_rejected(const std::vector<uint8_t>& pdf);
 static void test_aux_handles_validated();
+static void test_flashtext_json_labels();
 static void test_page_info_coarse(const std::vector<uint8_t>& pdf);
 static void test_abi_probes();
 
@@ -399,6 +400,7 @@ int main() {
     test_real_handle_lifecycle(pdf);
     test_cross_type_handles_rejected(pdf);
     test_aux_handles_validated();
+    test_flashtext_json_labels();
     test_page_info_coarse(pdf);
     test_abi_probes();
     test_writer_budget_and_failure(pdf);
@@ -481,6 +483,7 @@ static void test_aux_handles_validated() {
               "freed flashtext handle rejected on use");
         jpdfium_flashtext_free(ft);
     }
+
 #ifdef JPDFIUM_HAS_PCRE2
     int64_t pc = 0;
     if (jpdfium_pcre2_compile("hello", 0, &pc) == JPDFIUM_OK && pc != 0) {
@@ -512,6 +515,37 @@ static void test_aux_handles_validated() {
         }
 #endif
     }
+}
+
+// JSON keyword labels must stay scoped to their own object, and \\u escape
+// pairs (including surrogate pairs) must decode to one UTF-8 scalar.
+static void test_flashtext_json_labels() {
+    if (!kHasRealRegistries) {
+        std::printf("skip  flashtext JSON labels (stub build: no registry)\n");
+        return;
+    }
+    int64_t ft = 0;
+    if (jpdfium_flashtext_create(&ft) != JPDFIUM_OK || ft == 0) return;
+    const char* payload =
+        "[{\"keyword\":\"\\uD83D\\uDE00\",\"label\":\"EMOJI\"},"
+        "{\"keyword\":\"world\",\"label\":\"GREETING\"}]";
+    CHECK(jpdfium_flashtext_add_keywords_json(ft, payload) == JPDFIUM_OK,
+          "flashtext accepts JSON keyword array");
+    char* out = nullptr;
+    CHECK(jpdfium_flashtext_find(ft, "x \xF0\x9F\x98\x80 world", &out) == JPDFIUM_OK,
+          "flashtext finds escaped and plain keywords");
+    if (out) {
+        const std::string result(out);
+        const std::string emoji = "\xF0\x9F\x98\x80";
+        CHECK(result.find("\"keyword\":\"" + emoji + "\"") != std::string::npos,
+              "surrogate pair decoded to one UTF-8 keyword");
+        CHECK(result.find("\"label\":\"EMOJI\"") != std::string::npos,
+              "first keyword keeps its own label");
+        CHECK(result.find("\"label\":\"GREETING\"") != std::string::npos,
+              "second keyword keeps its own label");
+        jpdfium_free_string(out);
+    }
+    jpdfium_flashtext_free(ft);
 }
 
 // Coarse geometry: single validation returns both dimensions and agrees with
