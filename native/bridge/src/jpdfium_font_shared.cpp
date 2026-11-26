@@ -836,6 +836,9 @@ std::map<uint32_t, std::vector<uint32_t>> parseToUnicodeCmap(std::string_view ra
     std::map<uint32_t, std::vector<uint32_t>> result;
     if (rawCmap.empty()) return result;
     std::string text = stripCmapComments(rawCmap);
+    // Inherited mappings live outside this stream; rejecting the CMap keeps a
+    // substitution from dropping inherited CIDs.
+    if (text.find("usecmap") != std::string::npos) return {};
     ToUnicodeTokenReader reader{text};
 
     size_t pos = 0;
