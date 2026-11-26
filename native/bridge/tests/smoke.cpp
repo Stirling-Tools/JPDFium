@@ -968,27 +968,35 @@ void runConformanceSafetyChecks() {
 }  // namespace
 
 int main() {
-    // PDFium contract: FPDF_InitLibrary must run before any other FPDF_*
-    // call (the bridge relies on this from the JVM side too).
-    CHECK(jpdfium_init() == JPDFIUM_OK, "jpdfium_init");
+    try {
+        // PDFium contract: FPDF_InitLibrary must run before any other FPDF_*
+        // call (the bridge relies on this from the JVM side too).
+        CHECK(jpdfium_init() == JPDFIUM_OK, "jpdfium_init");
 
-    runFontEncodingChecks();
+        runFontEncodingChecks();
 
-    if (isRealBridge()) {
-        std::puts("native_smoke: real bridge detected, running boundary checks too");
-        runBoundaryChecks();
-        runRepairEdgeChecks();
-        runConformanceSafetyChecks();
-    } else {
-        std::puts("native_smoke: stub bridge detected");
-    }
-    runPositivePath();
-    jpdfium_destroy();
+        if (isRealBridge()) {
+            std::puts("native_smoke: real bridge detected, running boundary checks too");
+            runBoundaryChecks();
+            runRepairEdgeChecks();
+            runConformanceSafetyChecks();
+        } else {
+            std::puts("native_smoke: stub bridge detected");
+        }
+        runPositivePath();
+        jpdfium_destroy();
 
-    if (g_failures) {
-        std::fprintf(stderr, "native_smoke: %d check(s) FAILED\n", g_failures);
+        if (g_failures) {
+            std::fprintf(stderr, "native_smoke: %d check(s) FAILED\n", g_failures);
+            return 1;
+        }
+        std::puts("native_smoke: all checks passed");
+        return 0;
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "native_smoke: uncaught exception: %s\n", e.what());
+        return 1;
+    } catch (...) {
+        std::fputs("native_smoke: uncaught unknown exception\n", stderr);
         return 1;
     }
-    std::puts("native_smoke: all checks passed");
-    return 0;
 }
