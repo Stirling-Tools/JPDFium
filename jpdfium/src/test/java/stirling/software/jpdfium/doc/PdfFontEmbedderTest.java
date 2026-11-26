@@ -522,7 +522,7 @@ class PdfFontEmbedderTest {
 
     @Test
     void cidSubstituteMissingAUsedCidIsLeftUnresolved() throws Exception {
-        assertCidSubstituteUnresolvedForCode("<0001> <0041>", 2, 1, 2);
+        assertCidSubstituteUnresolvedForCode("<0001> <0041>", 2, 1);
     }
 
     @Test

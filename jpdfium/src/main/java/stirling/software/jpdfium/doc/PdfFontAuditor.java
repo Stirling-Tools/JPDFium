@@ -348,6 +348,10 @@ public final class PdfFontAuditor {
             }
         }
         try (PdfDocument doc = PdfDocument.open(pdf)) {
+            if (QpdfLib.isFontInventorySupported()) {
+                List<FontResource> all = inventory(doc);
+                if (!all.isEmpty()) return nonEmbeddedResources(all);
+            }
             return auditFallback(doc);
         } catch (Exception e) {
             throw e instanceof JPDFiumException jpe ? jpe : new JPDFiumException(e);
@@ -367,6 +371,10 @@ public final class PdfFontAuditor {
             }
         }
         try (PdfDocument doc = PdfDocument.open(pdf)) {
+            if (QpdfLib.isFontInventorySupported()) {
+                List<FontResource> all = inventory(doc);
+                if (!all.isEmpty()) return nonEmbeddedResources(all);
+            }
             return auditFallback(doc);
         } catch (Exception e) {
             throw e instanceof JPDFiumException jpe ? jpe : new JPDFiumException(e);

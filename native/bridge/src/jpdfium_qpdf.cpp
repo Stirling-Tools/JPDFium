@@ -2144,6 +2144,7 @@ inline bool isPdfDelimiter(unsigned char c) {
 struct ContentLexer {
     std::string const& data;
     size_t pos = 0;
+    int arrayDepth = 0;
 
     void skipSpace() {
         while (pos < data.size()) {
@@ -2207,6 +2208,10 @@ struct ContentLexer {
             } else if (c == ')') {
                 --depth;
                 if (depth > 0) out += c;
+            } else if (c == '\r') {
+                // PDF literal strings normalize an unescaped CR or CRLF to LF.
+                if (pos < data.size() && data[pos] == '\n') ++pos;
+                out += '\n';
             } else {
                 out += c;
             }
@@ -2259,6 +2264,8 @@ struct ContentLexer {
         pos += 2;
         int depth = 1;
         while (pos < data.size() && depth > 0) {
+            skipSpace();
+            if (pos >= data.size()) return false;
             if (data[pos] == '(') {
                 std::string ignored;
                 if (!literal(ignored)) return false;
@@ -2280,17 +2287,20 @@ struct ContentLexer {
 
     bool array(ContentOperand& out) {
         if (pos >= data.size() || data[pos] != '[') return false;
+        if (arrayDepth >= 64) return false;
+        ++arrayDepth;
         ++pos;
         out.kind = ContentOperand::Kind::Array;
         while (pos < data.size()) {
             skipSpace();
-            if (pos >= data.size()) return false;
+            if (pos >= data.size()) break;
             if (data[pos] == ']') {
                 ++pos;
+                --arrayDepth;
                 return true;
             }
             ContentToken token;
-            if (!next(token)) return false;
+            if (!next(token)) break;
             if (!token.word) {
                 if (token.operand.kind == ContentOperand::Kind::String) {
                     out.strings.push_back(token.operand.text);
@@ -2300,6 +2310,7 @@ struct ContentLexer {
                 }
             }
         }
+        --arrayDepth;
         return false;
     }
 
@@ -2397,13 +2408,12 @@ void collectStringCids(std::string const& bytes, std::set<uint32_t>& cids) {
 }
 
 void scanContentStream(std::string const& data, QPDFObjectHandle const& resources,
-                       QPDFObjectHandle const& target, std::set<uint32_t>& cids, int depth,
-                       std::set<QPDFObjGen>& seenForms) {
+                       QPDFObjectHandle const& target, std::set<uint32_t>& cids, bool& selected,
+                       int depth, std::set<QPDFObjGen>& seenForms) {
     if (depth > 16) return;
     ContentLexer lexer{data};
     std::vector<ContentOperand> operands;
     std::vector<bool> fontStack;
-    bool selected = false;
     ContentToken token;
     while (lexer.next(token)) {
         if (!token.word) {
@@ -2428,6 +2438,19 @@ void scanContentStream(std::string const& data, QPDFObjectHandle const& resource
                 if (fonts.isDictionary()) {
                     auto font = fonts.getKey("/" + fontName.text);
                     selected = sameFont(font, target);
+                }
+            }
+        } else if (op == "gs" && !operands.empty() &&
+                   operands.back().kind == ContentOperand::Kind::Name) {
+            if (resources.isDictionary()) {
+                auto states = resources.getKey("/ExtGState");
+                if (states.isDictionary()) {
+                    auto state = states.getKey("/" + operands.back().text);
+                    if (state.isDictionary() && state.hasKey("/Font")) {
+                        auto font = state.getKey("/Font");
+                        if (font.isArray()) font = font.getArrayItem(0);
+                        selected = sameFont(font, target);
+                    }
                 }
             }
         } else if (op == "Tj" && !operands.empty() &&
@@ -2461,8 +2484,9 @@ void scanContentStream(std::string const& data, QPDFObjectHandle const& resource
                                     std::string content(
                                         reinterpret_cast<char const*>(streamData->getBuffer()),
                                         streamData->getSize());
+                                    bool formSelected = selected;
                                     scanContentStream(content, formResources, target, cids,
-                                                      depth + 1, seenForms);
+                                                      formSelected, depth + 1, seenForms);
                                 }
                             } catch (...) {
                             }
@@ -2482,6 +2506,9 @@ std::set<uint32_t> usedCidsForFont(QPDF& qpdf, QPDFObjectHandle const& target) {
     std::set<QPDFObjGen> seenForms;
     try {
         for (auto& page : QPDFPageDocumentHelper{qpdf}.getAllPages()) {
+            // The /Contents array is one logical stream; font selection carries
+            // across its elements until an explicit Tf or Q changes it.
+            bool selected = false;
             auto pageObj = page.getObjectHandle();
             auto resources = pageObj.getKey("/Resources");
             if (!resources.isDictionary()) resources = page.getAttribute("/Resources", false);
@@ -2499,7 +2526,7 @@ std::set<uint32_t> usedCidsForFont(QPDF& qpdf, QPDFObjectHandle const& target) {
                     if (!data || !data->getSize()) continue;
                     std::string content(reinterpret_cast<char const*>(data->getBuffer()),
                                         data->getSize());
-                    scanContentStream(content, resources, target, cids, 0, seenForms);
+                    scanContentStream(content, resources, target, cids, selected, 0, seenForms);
                 } catch (...) {
                 }
             }
@@ -2733,8 +2760,9 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
                 // the Identity encodings this rewrite can remap.
                 if (!identityCidMap || !identityEncoding) continue;
                 cidUnicode = parseToUnicode(font);
+                if (cidUnicode.empty()) continue;
                 auto usedCids = usedCidsForFont(*qpdf, font);
-                if (cidUnicode.empty() || !coversWidthCids(target, cidUnicode, usedCids)) continue;
+                if (!coversWidthCids(target, cidUnicode, usedCids)) continue;
                 if (!cidGlyphOrderMatches(program.face, cidUnicode)) {
                     if (program.kind != ProgramKind::TrueType) continue;
                     // Every mapped CID must reach a glyph before the font is touched;
