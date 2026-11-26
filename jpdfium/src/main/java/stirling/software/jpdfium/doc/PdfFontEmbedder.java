@@ -563,8 +563,16 @@ public final class PdfFontEmbedder {
                     String postScriptName = columns[1].trim();
                     if (resource.isEmpty() || postScriptName.isEmpty()) continue;
                     int fsType = columns.length > 2 ? Integer.parseInt(columns[2].trim()) : -1;
-                    index.putIfAbsent(key(postScriptName),
-                            new Face(null, "/fonts/" + resource, -1, 0, true, fsType));
+                    Face face = new Face(null, "/fonts/" + resource, -1, 0, true, fsType);
+                    String faceKey = key(postScriptName);
+                    index.putIfAbsent(faceKey, face);
+                    for (List<String> group : METRIC_COMPATIBLE) {
+                        String family = group.stream().filter(faceKey::startsWith)
+                                .max((a, b) -> a.length() - b.length()).orElse(null);
+                        if (family == null) continue;
+                        String style = styleOf(faceKey.substring(family.length()));
+                        for (String member : group) index.putIfAbsent(member + style, face);
+                    }
                 }
             } catch (IOException ignored) {
                 // No bundled pack means the system directories are the only source.
