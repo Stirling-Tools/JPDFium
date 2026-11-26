@@ -832,6 +832,8 @@ static bool cmapFitsProgram(std::shared_ptr<Buffer> const& data, FT_Face face) {
     if (!cmapOff || cmapOff > n || cmapLen > n - cmapOff || cmapLen < 4) return false;
     const uint16_t subs = readU16BE(b + cmapOff + 2);
     const uint32_t maxGid = static_cast<uint32_t>(face->num_glyphs);
+    constexpr uint64_t kMaxCmapChecks = 4'000'000;
+    uint64_t work = 0;
     for (uint16_t i = 0; i < subs; ++i) {
         const size_t rec = cmapOff + 4 + static_cast<size_t>(i) * 8;
         if (rec + 8 > n) return true;
@@ -854,6 +856,7 @@ static bool cmapFitsProgram(std::shared_ptr<Buffer> const& data, FT_Face face) {
                 const uint16_t range = readU16BE(b + ranges + k * 2);
                 if (start > end) continue;
                 for (uint32_t c = start; c <= end; ++c) {
+                    if (++work > kMaxCmapChecks) return false;
                     uint32_t gid = 0;
                     if (range == 0) {
                         gid = (c + delta) & 0xFFFFU;
@@ -1185,10 +1188,14 @@ static void repairSimpleTrueTypeCmap(QPDF& pdf, QPDFObjectHandle& font,
             if (FT_Get_Glyph_Name(currentFace, gid, glyphName, sizeof(glyphName)) != 0 ||
                 glyphName[0] == '\0')
                 continue;
-            for (uint32_t scalar : unicodeSequenceForGlyphName(glyphName)) {
-                if (scalar <= 0xFFFF && !unicodeByGid.contains(scalar))
-                    unicodeByGid[scalar] = static_cast<uint16_t>(gid);
-            }
+            auto scalars = unicodeSequenceForGlyphName(glyphName);
+            // A multi-scalar name such as f_i describes a ligature, not a
+            // Unicode mapping for either component. Mapping the components to
+            // the ligature would make ordinary letters render as ligatures.
+            if (scalars.size() != 1) continue;
+            uint32_t scalar = scalars[0];
+            if (scalar <= 0xFFFF && !unicodeByGid.contains(scalar))
+                unicodeByGid[scalar] = static_cast<uint16_t>(gid);
         }
     }
     if (unicodeByGid.empty()) return;
@@ -1709,8 +1716,10 @@ static void processFont(QPDF& pdf, FT_Library ftLib, QPDFObjectHandle font, bool
 
     if (cid && full && descriptor.hasKey("/CIDSet")) {
         FT_Face cidSetFace = rawFace;
-        FtFaceGuard cidSetGuard;
+        // The reloaded face points into this buffer; keep the buffer alive until
+        // after the face guard runs on every exit path.
         std::string cidSetOwned;
+        FtFaceGuard cidSetGuard;
         QPDFObjectHandle finalStream = embeddedFontProgram(descriptor);
         if (finalStream.isStream()) {
             try {

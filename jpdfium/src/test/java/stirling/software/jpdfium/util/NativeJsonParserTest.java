@@ -45,7 +45,7 @@ class NativeJsonParserTest {
         List<Map<String, String>> rows =
                 NativeJsonParser.parseArray("[{\"match\":\"a\\\"b,c\",\"len\":5}]");
         assertEquals(1, rows.size());
-        assertEquals("a\\b,c", rows.get(0).get("match"));
+        assertEquals("a\"b,c", rows.get(0).get("match"));
     }
 
     @Test

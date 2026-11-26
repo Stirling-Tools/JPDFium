@@ -334,7 +334,26 @@ int32_t jpdfium_flashtext_add_keywords_json(int64_t handle, const char* json) {
         // bleed across adjacent array elements, and allow whitespace after ':'.
         auto findJsonStr = [](const char* from, const char* limit, const char* key,
                               std::string& value, const char** nextOut) -> bool {
-            const char* kpos = strstr(from, key);
+            const char* kpos = nullptr;
+            const char* search = from;
+            while ((search = strstr(search, key))) {
+                if (limit && search >= limit) break;
+                const char* before = search;
+                while (before > from && (before[-1] == ' ' || before[-1] == '\t' ||
+                                         before[-1] == '\r' || before[-1] == '\n')) {
+                    --before;
+                }
+                const char* colon = search + strlen(key);
+                while (colon < limit &&
+                       (*colon == ' ' || *colon == '\t' || *colon == '\r' || *colon == '\n')) {
+                    ++colon;
+                }
+                if (*colon == ':' && (before == from || before[-1] == '{' || before[-1] == ',')) {
+                    kpos = search;
+                    break;
+                }
+                search += strlen(key);
+            }
             if (!kpos || (limit && kpos >= limit)) return false;
             const char* p = kpos + strlen(key);
             while (p && (!limit || p < limit) &&
@@ -353,8 +372,56 @@ int32_t jpdfium_flashtext_add_keywords_json(int64_t handle, const char* json) {
             while (*p && (!limit || p < limit) && *p != '"') {
                 if (*p == '\\' && *(p + 1) && (!limit || p + 1 < limit)) {
                     ++p;
+                    char escaped = *p++;
+                    switch (escaped) {
+                        case 'n':
+                            value.push_back('\n');
+                            break;
+                        case 'r':
+                            value.push_back('\r');
+                            break;
+                        case 't':
+                            value.push_back('\t');
+                            break;
+                        case 'b':
+                            value.push_back('\b');
+                            break;
+                        case 'f':
+                            value.push_back('\f');
+                            break;
+                        case 'u': {
+                            if (limit && p + 4 > limit) return false;
+                            unsigned code = 0;
+                            for (int i = 0; i < 4; ++i) {
+                                char c = *p++;
+                                code <<= 4;
+                                if (c >= '0' && c <= '9')
+                                    code |= unsigned(c - '0');
+                                else if (c >= 'a' && c <= 'f')
+                                    code |= unsigned(c - 'a' + 10);
+                                else if (c >= 'A' && c <= 'F')
+                                    code |= unsigned(c - 'A' + 10);
+                                else
+                                    return false;
+                            }
+                            if (code < 0x80) {
+                                value.push_back(char(code));
+                            } else if (code < 0x800) {
+                                value.push_back(char(0xC0 | (code >> 6)));
+                                value.push_back(char(0x80 | (code & 0x3F)));
+                            } else {
+                                value.push_back(char(0xE0 | (code >> 12)));
+                                value.push_back(char(0x80 | ((code >> 6) & 0x3F)));
+                                value.push_back(char(0x80 | (code & 0x3F)));
+                            }
+                            break;
+                        }
+                        default:
+                            value.push_back(escaped);
+                    }
+                } else {
+                    value.push_back(*p++);
                 }
-                value.push_back(*p++);
             }
             if (*p != '"') return false;
             if (nextOut) *nextOut = p + 1;

@@ -242,48 +242,58 @@ public final class NativeJsonParser {
      * matches the original {@code replace("\"", "").trim()} ordering.
      */
     private static String keyText(String json, int start, int end) {
-        int quotes = 0;
-        for (int i = start; i < end; i++) {
-            if (json.charAt(i) == '"') quotes++;
+        while (start < end && json.charAt(start) <= ' ') start++;
+        while (end > start && json.charAt(end - 1) <= ' ') end--;
+        if (start < end && json.charAt(start) == '"' && json.charAt(end - 1) == '"') {
+            return decodeEscapes(json.substring(start + 1, end - 1)).trim();
         }
-        if (quotes == 0) {
-            int from = start;
-            int to = end;
-            while (from < to && json.charAt(from) <= ' ') from++;
-            while (to > from && json.charAt(to - 1) <= ' ') to--;
-            return json.substring(from, to);
-        }
-        char[] buffer = new char[end - start - quotes];
-        int size = 0;
-        for (int i = start; i < end; i++) {
-            char c = json.charAt(i);
-            if (c != '"') buffer[size++] = c;
-        }
-        int from = 0;
-        int to = size;
-        while (from < to && buffer[from] <= ' ') from++;
-        while (to > from && buffer[to - 1] <= ' ') to--;
-        return new String(buffer, from, to - from);
+        return json.substring(start, end);
     }
 
-    /**
-     * Extract a value slice, trimming whitespace before dropping quote characters,
-     * which matches the original {@code trim().replace("\"", "")} ordering.
-     */
+    /** Extract a value slice, decoding quoted JSON strings without dropping escapes. */
     private static String valueText(String json, int start, int end) {
         while (start < end && json.charAt(start) <= ' ') start++;
         while (end > start && json.charAt(end - 1) <= ' ') end--;
-        int quotes = 0;
-        for (int i = start; i < end; i++) {
-            if (json.charAt(i) == '"') quotes++;
+        if (start < end && json.charAt(start) == '"' && json.charAt(end - 1) == '"') {
+            return decodeEscapes(json.substring(start + 1, end - 1));
         }
-        if (quotes == 0) return json.substring(start, end);
-        char[] buffer = new char[end - start - quotes];
-        int size = 0;
-        for (int i = start; i < end; i++) {
-            char c = json.charAt(i);
-            if (c != '"') buffer[size++] = c;
+        return json.substring(start, end);
+    }
+
+    private static String decodeEscapes(String value) {
+        if (value.indexOf('\\') < 0) return value;
+        StringBuilder out = new StringBuilder(value.length());
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if (c != '\\' || i + 1 >= value.length()) {
+                out.append(c);
+                continue;
+            }
+            char escaped = value.charAt(++i);
+            switch (escaped) {
+                case '"' -> out.append('"');
+                case '\\' -> out.append('\\');
+                case '/' -> out.append('/');
+                case 'b' -> out.append('\b');
+                case 'f' -> out.append('\f');
+                case 'n' -> out.append('\n');
+                case 'r' -> out.append('\r');
+                case 't' -> out.append('\t');
+                case 'u' -> {
+                    if (i + 4 < value.length()) {
+                        try {
+                            out.append((char) Integer.parseInt(value.substring(i + 1, i + 5), 16));
+                            i += 4;
+                        } catch (NumberFormatException e) {
+                            out.append('u');
+                        }
+                    } else {
+                        out.append('u');
+                    }
+                }
+                default -> out.append(escaped);
+            }
         }
-        return new String(buffer, 0, size);
+        return out.toString();
     }
 }
