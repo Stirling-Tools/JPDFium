@@ -4,6 +4,8 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -152,6 +154,38 @@ bool isRealBridge() {
 }
 
 void runColorChecks();
+
+// Exercise the font conformance rewriter end to end on a real PDF with an
+// embedded TrueType program. This drives SFNT parsing, cmap/hmtx inspection,
+// CID/simple font enumeration, and the PDF/A structure passes under ASan.
+void runFontRewriterChecks() {
+    std::ifstream in("jpdfium/src/test/resources/pdfs/general/basic-text.pdf", std::ios::binary);
+    if (!in) {
+        std::puts("native_smoke: font rewriter fixture missing; skipping");
+        return;
+    }
+    std::string pdf((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    CHECK(!pdf.empty(), "font rewriter fixture is non-empty");
+
+    char* auditJson = nullptr;
+    int32_t rc = jpdfium_qpdf_audit_fonts(reinterpret_cast<const uint8_t*>(pdf.data()),
+                                          static_cast<int64_t>(pdf.size()), &auditJson);
+    CHECK(rc == JPDFIUM_OK, "font audit succeeds");
+    CHECK(auditJson != nullptr && auditJson[0] == '[', "font audit returns a JSON array");
+    if (auditJson) jpdfium_free_string(auditJson);
+
+    uint8_t* output = nullptr;
+    int64_t outputLen = 0;
+    char* report = nullptr;
+    const uint32_t flags = (1U << 1) | (1U << 2) | (1U << 3);  // widths, notdef, cmaps
+    rc = jpdfium_qpdf_rewrite_fonts(reinterpret_cast<const uint8_t*>(pdf.data()),
+                                    static_cast<int64_t>(pdf.size()), flags, nullptr, nullptr, 0,
+                                    nullptr, 0, &output, &outputLen, &report);
+    CHECK(rc == JPDFIUM_OK, "font rewrite succeeds");
+    CHECK(output != nullptr && outputLen > 0, "font rewrite returns bytes");
+    if (output) jpdfium_free_buffer(output);
+    if (report) jpdfium_free_string(report);
+}
 
 void runPositivePath() {
     int32_t rc = JPDFIUM_OK;
@@ -980,6 +1014,7 @@ int main() {
             runBoundaryChecks();
             runRepairEdgeChecks();
             runConformanceSafetyChecks();
+            runFontRewriterChecks();
         } else {
             std::puts("native_smoke: stub bridge detected");
         }

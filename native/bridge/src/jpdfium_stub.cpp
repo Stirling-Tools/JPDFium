@@ -2001,6 +2001,19 @@ JPDFIUM_EXPORT int FPDFText_CountChars(void* page) {
     return static_cast<int>(STUB_TEXT.size());
 }
 
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_audit_fonts(const uint8_t* /*input*/, int64_t /*inputLen*/,
+                                                char** /*jsonOut*/) JPDFIUM_NOEXCEPT {
+    return JPDFIUM_ERR_NATIVE;
+}
+
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_rewrite_fonts(
+    const uint8_t* /*input*/, int64_t /*inputLen*/, uint32_t /*flags*/, const char* /*donorDirs*/,
+    const uint8_t* /*srgbIcc*/, int64_t /*srgbIccLen*/, const uint8_t* /*cmykIcc*/,
+    int64_t /*cmykIccLen*/, uint8_t** /*output*/, int64_t* /*outputLen*/,
+    char** /*reportJsonOut*/) JPDFIUM_NOEXCEPT {
+    return JPDFIUM_ERR_NATIVE;
+}
+
 JPDFIUM_EXPORT int FPDFText_GetText(void* page, int start_index, int count,
                                     unsigned short* result) {
     if (!result || start_index < 0 || count < 0) return 0;

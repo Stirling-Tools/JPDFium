@@ -47,6 +47,7 @@ extern "C" {
 #define JPDFIUM_ERR_CONTENT_MUTATED (-10)     // operation modified content, then failed
 #define JPDFIUM_ERR_PDFX_NONCONFORMANT (-11)  // PDF/X preparation failed
 #define JPDFIUM_ERR_ALLOC (-12)               // native output allocation failed
+#define JPDFIUM_ERR_SIGNED (-13)              // document is digitally signed; refusing to rewrite
 #define JPDFIUM_ERR_NATIVE (-99)
 
 // Bridge ABI version and layout probe surface. Packaged Java/native
@@ -1032,6 +1033,18 @@ JPDFIUM_EXPORT int32_t jpdfium_signature_info(int64_t doc, int32_t index, char**
 // 2=SHA384, 3=SHA512). Caller frees with jpdfium_free_buffer.
 JPDFIUM_EXPORT int32_t jpdfium_signature_digest(int64_t doc, int32_t index, int32_t algorithm,
                                                 uint8_t** digest, int64_t* len);
+
+// Font conformance audit, normalization, and PDF/A structure rewriter.
+// Caller frees *jsonOut / *reportJsonOut with jpdfium_free_string and *output with
+// jpdfium_free_buffer.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_audit_fonts(const uint8_t* input, int64_t inputLen,
+                                                char** jsonOut) JPDFIUM_NOEXCEPT;
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_rewrite_fonts(const uint8_t* input, int64_t inputLen,
+                                                  uint32_t flags, const char* donorDirs,
+                                                  const uint8_t* srgbIcc, int64_t srgbIccLen,
+                                                  const uint8_t* cmykIcc, int64_t cmykIccLen,
+                                                  uint8_t** output, int64_t* outputLen,
+                                                  char** reportJsonOut) JPDFIUM_NOEXCEPT;
 
 // Rust-powered compression, repair, and image resize functions.
 // Declared in a separate header for clarity; included here so jextract and

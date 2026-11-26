@@ -204,6 +204,17 @@ if(JPDFIUM_USE_PDFIUM)
         bridge/src/jpdfium_pattern.cpp
         bridge/src/jpdfium_font_shared.cpp
         bridge/src/jpdfium_font_normalizer.cpp
+        bridge/src/jpdfium_font_rewriter.cpp
+        bridge/src/jpdfium_rewriter_fonts.cpp
+        bridge/src/jpdfium_rewriter_fonts_cid.cpp
+        bridge/src/jpdfium_rewriter_fonts_simple.cpp
+        bridge/src/jpdfium_rewriter_fonts_simple_widths.cpp
+        bridge/src/jpdfium_rewriter_pdfa_xmp.cpp
+        bridge/src/jpdfium_rewriter_pdfa_objects.cpp
+        bridge/src/jpdfium_rewriter_pdfa_profiles.cpp
+        bridge/src/jpdfium_rewriter_sfnt.cpp
+        bridge/src/jpdfium_rewriter_streams_codes.cpp
+        bridge/src/jpdfium_rewriter_streams_color.cpp
         bridge/src/jpdfium_image.cpp
         bridge/src/jpdfium_color.cpp
         bridge/src/jpdfium_pdfx.cpp
@@ -836,7 +847,7 @@ if(JPDFIUM_BUILD_TESTS)
     endif()
     # handle_safety reads a real PDF fixture by relative path, and CTest runs
     # from the build directory, so the path must be anchored at the repo root.
-    set_tests_properties(handle_safety PROPERTIES
+    set_tests_properties(native_smoke handle_safety PROPERTIES
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/..")
 endif()
 
