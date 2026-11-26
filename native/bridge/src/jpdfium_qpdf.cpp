@@ -1950,9 +1950,13 @@ std::map<uint32_t, uint32_t> parseToUnicode(QPDFObjectHandle const& font) {
     std::map<uint32_t, uint32_t> map;
     auto stream = font.getKey("/ToUnicode");
     if (!stream.isStream()) return map;
+    // Inherited mappings are not in this stream; substituting a program without
+    // resolving them would drop every inherited code from /CIDToGIDMap.
+    if (stream.getDict().hasKey("/UseCMap")) return {};
     std::shared_ptr<Buffer> data = stream.getStreamData(qpdf_dl_generalized);
     if (!data || !data->getSize()) return map;
     std::string text(reinterpret_cast<char const*>(data->getBuffer()), data->getSize());
+    if (text.find("usecmap") != std::string::npos) return {};
 
     // PDF hex strings may interleave whitespace and pad an odd final digit with
     // zero. The byte count decides whether the value can name a CID or a scalar.
@@ -1979,7 +1983,11 @@ std::map<uint32_t, uint32_t> parseToUnicode(QPDFObjectHandle const& font) {
         return bytes == 4 && UnicodeScalar::decode(value) != 0;
     };
     auto skipSpace = [&](size_t& pos) {
-        while (pos < text.size() && std::isspace(uint8_t(text[pos]))) ++pos;
+        for (;;) {
+            while (pos < text.size() && std::isspace(uint8_t(text[pos]))) ++pos;
+            if (pos >= text.size() || text[pos] != '%') return;
+            while (pos < text.size() && text[pos] != '\n' && text[pos] != '\r') ++pos;
+        }
     };
 
     auto parseChars = [&](size_t pos, size_t end) {
@@ -2258,6 +2266,7 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
             bool identityCidMap = cidMap.isNull() || cidMap.isNameAndEquals("/Identity");
             std::map<uint32_t, uint32_t> cidUnicode;
             bool cidRemap = false;
+            bool explicitCidMapping = false;
             if (cid && !hasProgram && onlyMissing) {
                 if (!identityCidMap) continue;
                 cidUnicode = parseToUnicode(font);
@@ -2265,6 +2274,10 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
                 bool sameOrder = cidGlyphOrderMatches(program.face, cidUnicode);
                 if (!sameOrder && program.kind != ProgramKind::TrueType) continue;
                 cidRemap = !sameOrder;
+            } else if (cid && !hasProgram && !onlyMissing && !font.hasKey("/ToUnicode")) {
+                // Explicit embedding has no source CMap to preserve. The donor's
+                // glyph order is recovered after the symbolic flag is known.
+                explicitCidMapping = true;
             }
             if (descriptor.isIndirect()) {
                 // A descriptor can be shared by a font that is not being
@@ -2282,6 +2295,10 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
             bool symbolic = flags.isInteger()
                                 ? (flags.getIntValue() & 4) != 0
                                 : targetName == "Symbol" || targetName == "ZapfDingbats";
+            if (explicitCidMapping) {
+                for (auto const& [gid, unicode] : unicodeByGlyph(program.face, symbolic))
+                    cidUnicode[gid] = unicode;
+            }
             if (!descriptor.isDictionary()) {
                 descriptor = newDescriptor(*qpdf, target, program.face, symbolic);
                 target.replaceKey("/FontDescriptor", descriptor);

@@ -403,6 +403,40 @@ class PdfFontEmbedderTest {
         assertCidRemap("<00 01> <00 41>");
     }
 
+    @Test
+    void cidRemapSkipsCmapComments() throws Exception {
+        assertCidRemap("1 beginbfchar\n% inherits nothing\n<0001> <0041>\nendbfchar");
+    }
+
+    @Test
+    void inheritedToUnicodeLeavesCidFontUnresolved() throws Exception {
+        assertCidSubstituteUnresolved("""
+                1 beginbfchar
+                <0001> <0041>
+                endbfchar
+                /Adobe-Identity-UCS usecmap
+                """);
+    }
+
+    @Test
+    void explicitEmbeddingGeneratesToUnicodeFromDonorGlyphs() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
+        FontProgram source = findEmbeddedFont(
+                Files.readAllBytes(Path.of(PdfFontEmbedderTest.class
+                        .getResource("/pdfs/general/basic-text.pdf").toURI())), "ArialMT");
+        assertNotNull(source, "fixture must contain ArialMT");
+        byte[] input = identityCidPdf(source.baseName(), null);
+        byte[] out = PdfFontEmbedder.embed(input, Map.of(source.baseName(), source.data()));
+        try (PDDocument pdf = Loader.loadPDF(out)) {
+            COSDictionary type0 = pdf.getPage(0)
+                    .getResources()
+                    .getFont(COSName.getPDFName("F1"))
+                    .getCOSObject();
+            assertTrue(type0.getDictionaryObject(COSName.TO_UNICODE) instanceof COSStream,
+                    "explicit embedding must generate a /ToUnicode CMap");
+        }
+    }
+
     private static void assertCidRemap(String toUnicodeBody) throws Exception {
         assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
         FontProgram source = findEmbeddedFont(
