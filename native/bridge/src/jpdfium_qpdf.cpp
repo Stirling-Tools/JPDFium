@@ -391,7 +391,7 @@ bool readBilevelImage(QPDFObjectHandle& image, BilevelImage& out) {
         widthValue * heightValue > kBilevelMaxPixels) {
         return false;
     }
-    auto decoded = image.getStreamData(qpdf_dl_all);
+    auto decoded = readStreamBufferBounded(image, qpdf_dl_all);
     if (!decoded) return false;
     size_t rowBytes = (static_cast<size_t>(widthValue) + 7) / 8;
     if (decoded->getSize() < rowBytes * static_cast<size_t>(heightValue)) return false;
@@ -743,8 +743,9 @@ int writeToFile(std::shared_ptr<QPDF> const& qpdf, const char* out_path,
         // extract are round-trip operations, and silently dropping the
         // source encryption would change the document's protection. QDF mode
         // opts out explicitly because readable output cannot stay encrypted.
+        // QPDFWriter::setOutputFile(..., true) takes ownership of `out` and closes it.
         w.setOutputFile("jpdfium-out", out, true);
-        writerOwnsFile = true;
+        writerOwnsFile = true;  // NOLINT(clang-analyzer-unix.Stream) -- owned by QPDFWriter
         configureWriter(w, options, jbig2Replaced);
         WriterLock lock{options.compressionLevel};
         w.write();

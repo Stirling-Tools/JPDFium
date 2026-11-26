@@ -693,6 +693,8 @@ struct FontInventoryEntry {
     std::set<int> pages;
 };
 
+constexpr size_t kMaxSubsetGraphNodes = 262144;
+
 struct FontUsageCollector {
     std::map<QPDFObjGen, std::set<int>>& indirectUse;
     std::map<std::string, std::set<int>>& directUse;
@@ -700,6 +702,8 @@ struct FontUsageCollector {
     std::set<std::string>& reachableDirect;
     std::vector<QPDFObjectHandle>& directFonts;
     std::set<QPDFObjGen>& seenForms;
+    std::set<QPDFObjGen>& seenResources;
+    size_t& nodeCount;
 
     void noteFont(QPDFObjectHandle const& font, int page) const {
         if (!font.isDictionary()) return;
@@ -724,6 +728,7 @@ struct FontUsageCollector {
             if (!fonts.isDictionary()) return;
             for (auto const& [name, entry] : fonts.getDictAsMap()) {
                 (void)name;
+                if (nodeCount >= kMaxSubsetGraphNodes) return;
                 noteFont(entry, page);
             }
         } catch (...) {
@@ -737,6 +742,7 @@ struct FontUsageCollector {
             if (!extgstates.isDictionary()) return;
             for (auto const& [name, entry] : extgstates.getDictAsMap()) {
                 (void)name;
+                if (nodeCount >= kMaxSubsetGraphNodes) return;
                 QPDFObjectHandle gs = entry;
                 if (!gs.isDictionary()) continue;
                 auto gsFonts = gs.getKey("/Font");
@@ -762,6 +768,7 @@ struct FontUsageCollector {
             if (!dict.isDictionary()) return;
             for (auto const& [name, entry] : dict.getDictAsMap()) {
                 (void)name;
+                if (nodeCount >= kMaxSubsetGraphNodes) return;
                 QPDFObjectHandle item = entry;
                 if (!item.isStream()) continue;
                 if (item.isIndirect() && !seenForms.insert(item.getObjGen()).second) continue;
@@ -773,7 +780,9 @@ struct FontUsageCollector {
     }
 
     void collectFromResources(QPDFObjectHandle const& resources, int page, int depth) const {
-        if (!resources.isDictionary() || depth > 32) return;
+        if (!resources.isDictionary() || depth > 32 || nodeCount >= kMaxSubsetGraphNodes) return;
+        if (resources.isIndirect() && !seenResources.insert(resources.getObjGen()).second) return;
+        ++nodeCount;
         collectDictFonts(resources, page);
         collectExtGStateFonts(resources, page, depth);
         collectNestedStreams(resources, "/XObject", page, depth);
@@ -781,13 +790,14 @@ struct FontUsageCollector {
     }
 
     void collectAppearance(QPDFObjectHandle const& appearance, int page, int depth) const {
-        if (depth > 8) return;
+        if (depth > 8 || nodeCount >= kMaxSubsetGraphNodes) return;
         if (appearance.isStream()) {
-            seenForms.clear();
+            if (appearance.isIndirect() && !seenForms.insert(appearance.getObjGen()).second) return;
             collectFromResources(appearance.getDict().getKey("/Resources"), page, 0);
         } else if (appearance.isDictionary()) {
             for (auto const& [state, entry] : appearance.getDictAsMap()) {
                 (void)state;
+                if (nodeCount >= kMaxSubsetGraphNodes) return;
                 collectAppearance(entry, page, depth + 1);
             }
         }
@@ -801,8 +811,10 @@ std::vector<FontInventoryEntry> collectReachableFontEntries(QPDF& qpdf) {
     std::set<std::string> reachableDirect;
     std::vector<QPDFObjectHandle> directFonts;
     std::set<QPDFObjGen> seenForms;
-    FontUsageCollector collector{indirectUse,     directUse,   reachableIndirect,
-                                 reachableDirect, directFonts, seenForms};
+    std::set<QPDFObjGen> seenResources;
+    size_t nodeCount = 0;
+    FontUsageCollector collector{indirectUse, directUse, reachableIndirect, reachableDirect,
+                                 directFonts, seenForms, seenResources,     nodeCount};
 
     std::vector<QPDFPageObjectHelper> pages;
     try {
@@ -810,7 +822,7 @@ std::vector<FontInventoryEntry> collectReachableFontEntries(QPDF& qpdf) {
     } catch (...) {
         pages.clear();
     }
-    for (size_t i = 0; i < pages.size(); ++i) {
+    for (size_t i = 0; i < pages.size() && nodeCount < kMaxSubsetGraphNodes; ++i) {
         auto pageObj = pages[i].getObjectHandle();
         // Look up inherited page /Resources (ISO 32000-1 §7.7.3.4) before falling back to local.
         QPDFObjectHandle resources;
@@ -820,12 +832,15 @@ std::vector<FontInventoryEntry> collectReachableFontEntries(QPDF& qpdf) {
             resources = pageObj.getKey("/Resources");
         }
         seenForms.clear();
+        seenResources.clear();
         collector.collectFromResources(resources, static_cast<int>(i), 0);
         // Annotation /AP appearance streams may embed form XObjects referencing extra fonts.
         try {
             auto annots = pageObj.getKey("/Annots");
             if (!annots.isArray()) continue;
-            for (auto& annot : annots.getArrayAsVector()) {
+            const int nAnnots = std::min(annots.getArrayNItems(), 4096);
+            for (int ai = 0; ai < nAnnots && nodeCount < kMaxSubsetGraphNodes; ++ai) {
+                auto annot = annots.getArrayItem(ai);
                 if (!annot.isDictionary()) continue;
                 auto ap = annot.getKey("/AP");
                 if (!ap.isDictionary()) continue;
@@ -844,23 +859,29 @@ std::vector<FontInventoryEntry> collectReachableFontEntries(QPDF& qpdf) {
         auto acroForm = qpdf.getRoot().getKey("/AcroForm");
         if (acroForm.isDictionary()) {
             seenForms.clear();
+            seenResources.clear();
             collector.collectFromResources(acroForm.getKey("/DR"), -1, 0);
         }
     } catch (...) {
         seenForms.clear();
+        seenResources.clear();
     }
+
+    // Single pass over indirect objects so Type3 fixpoint + final collection never rescan the file.
+    auto allObjects = qpdf.getAllObjects();
 
     // Type3 /CharProcs can host nested /Resources referencing further fonts.
     std::set<QPDFObjGen> scannedType3Indirect;
     std::set<std::string> scannedType3Direct;
-    for (;;) {
+    for (; nodeCount < kMaxSubsetGraphNodes;) {
         size_t before = reachableIndirect.size() + reachableDirect.size();
-        for (auto& object : qpdf.getAllObjects()) {
+        for (auto& object : allObjects) {
             if (!object.isIndirect() || !reachableIndirect.contains(object.getObjGen())) continue;
             auto subtype = object.getKey("/Subtype");
             if (!subtype.isNameAndEquals("/Type3")) continue;
             if (!scannedType3Indirect.insert(object.getObjGen()).second) continue;
             seenForms.clear();
+            seenResources.clear();
             auto const& p = indirectUse[object.getObjGen()];
             if (p.empty()) {
                 collector.collectFromResources(object.getKey("/Resources"), -1, 0);
@@ -870,13 +891,14 @@ std::vector<FontInventoryEntry> collectReachableFontEntries(QPDF& qpdf) {
             }
         }
         for (size_t directIndex = 0; directIndex < directFonts.size(); ++directIndex) {
-            QPDFObjectHandle directFont = directFonts[directIndex];
+            QPDFObjectHandle const& directFont = directFonts[directIndex];
             std::string key = directFont.unparse();
             if (!reachableDirect.contains(key)) continue;
             auto subtype = directFont.getKey("/Subtype");
             if (!subtype.isNameAndEquals("/Type3")) continue;
             if (!scannedType3Direct.insert(key).second) continue;
             seenForms.clear();
+            seenResources.clear();
             auto const& p = directUse[key];
             if (p.empty()) {
                 collector.collectFromResources(directFont.getKey("/Resources"), -1, 0);
@@ -901,7 +923,7 @@ std::vector<FontInventoryEntry> collectReachableFontEntries(QPDF& qpdf) {
         return !subtype.isName() ||
                (subtype.getName() != "/CIDFontType0" && subtype.getName() != "/CIDFontType2");
     };
-    for (auto& object : qpdf.getAllObjects()) {
+    for (auto& object : allObjects) {
         if (!object.isIndirect() || !eligible(object)) continue;
         auto objgen = object.getObjGen();
         if (!reachableIndirect.contains(objgen) || !seenFonts.insert(objgen).second) continue;

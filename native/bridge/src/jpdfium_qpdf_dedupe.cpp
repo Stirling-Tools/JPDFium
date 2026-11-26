@@ -381,7 +381,7 @@ int dedupeResources(QPDF& qpdf) {
         // Stream buckets keyed by 64-bit digest + raw size, confirmed byte-for-byte on hit.
         std::map<std::pair<uint64_t, size_t>, std::vector<StreamEntry>> streamPool;
         std::map<QPDFObjGen, QPDFObjectHandle> redirects;
-        constexpr size_t kMaxDedupeStreamBytes = 16u * 1024u * 1024u;
+        constexpr size_t kMaxDedupeStreamBytes = size_t{16} * 1024 * 1024;
 
         for (QPDFObjectHandle& obj : objects) {
             if (!obj.isInitialized() || !obj.isIndirect()) continue;

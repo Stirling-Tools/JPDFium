@@ -644,8 +644,10 @@ void populateEmbeddedFontProgram(QPDF& qpdf, FT_Library lib, QPDFObjectHandle& f
             pinTrueTypeMapping(qpdf, target, descriptor, program.face, symbolic);
         }
     }
-    // /OpenType font streams require PDF 1.6+, so older targets must keep a CFF-wrapped SFNT.
-    if (kind == ProgramKind::OpenType && !wrapped && qpdf.getPDFVersion() < std::string("1.6")) {
+    // A bare CFF /Type1C stream is valid in every PDF version and is the only
+    // CFF-flavoured option PDF/A-1 accepts. Prefer it over an /OpenType wrapper
+    // for simple fonts.
+    if (kind == ProgramKind::OpenType && !wrapped && !cid) {
         std::string cff = jpdfium::font::extractCffTableFromSfnt(lib, program.bytes);
         if (!cff.empty() && !cid) {
             auto enc = parseSimpleEncoding(target, descriptor);
@@ -1139,7 +1141,12 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_embed_fonts_file(const char* in_path, const 
         }
         FILE* raw = jpdfium::qpdf_detail::createOutputFile(out_path);
         if (!raw) return -1;
-        std::unique_ptr<FILE, decltype(&std::fclose)> out(raw, &std::fclose);
+        struct FileCloser {
+            void operator()(FILE* f) const noexcept {
+                if (f) std::fclose(f);
+            }
+        };
+        std::unique_ptr<FILE, FileCloser> out(raw);
         const bool onlyMissing = (flags & 1) != 0;
         const bool stripSignatures = (flags & 2) != 0;
         auto result = embedFonts([&](QPDF& qpdf) { qpdf.processFile(in_path); }, sources,
