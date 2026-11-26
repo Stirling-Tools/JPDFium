@@ -11,6 +11,7 @@
 #include <limits>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -29,6 +30,177 @@ int g_failures = 0;
             ++g_failures;                                                                         \
         }                                                                                         \
     } while (0)
+
+void pushBe16(std::vector<uint8_t>& out, uint16_t v) {
+    out.push_back(static_cast<uint8_t>((v >> 8U) & 0xFFU));
+    out.push_back(static_cast<uint8_t>(v & 0xFFU));
+}
+
+void pushBe32(std::vector<uint8_t>& out, uint32_t v) {
+    out.push_back(static_cast<uint8_t>((v >> 24U) & 0xFFU));
+    out.push_back(static_cast<uint8_t>((v >> 16U) & 0xFFU));
+    out.push_back(static_cast<uint8_t>((v >> 8U) & 0xFFU));
+    out.push_back(static_cast<uint8_t>(v & 0xFFU));
+}
+
+std::vector<uint8_t> buildMinimalTrueTypeFont(bool includeUnicodeCmap) {
+    struct Table {
+        const char* tag;
+        std::vector<uint8_t> data;
+    };
+
+    // Simple 1-contour glyph (18 bytes -> padded to 20 bytes)
+    std::vector<uint8_t> glyf;
+    pushBe16(glyf, 1);    // numberOfContours
+    pushBe16(glyf, 0);    // xMin
+    pushBe16(glyf, 0);    // yMin
+    pushBe16(glyf, 500);  // xMax
+    pushBe16(glyf, 700);  // yMax
+    pushBe16(glyf, 2);    // endPtsOfContours[0]
+    pushBe16(glyf, 0);    // instructionLength
+    // flags: 3 on-curve points with 1-byte unsigned deltas
+    glyf.push_back(0x33);
+    glyf.push_back(0x33);
+    glyf.push_back(0x33);
+    // x-coords (dx): 0, 200, 100
+    glyf.push_back(0);
+    glyf.push_back(200);
+    glyf.push_back(100);
+    // y-coords (dy): 0, 200, 100
+    glyf.push_back(0);
+    glyf.push_back(200);
+    glyf.push_back(100);
+    while (glyf.size() % 4 != 0) glyf.push_back(0);
+    const uint16_t glyfEndWords = static_cast<uint16_t>(glyf.size() / 2);
+
+    std::vector<uint8_t> loca;
+    pushBe16(loca, 0);             // glyph 0 offset = 0
+    pushBe16(loca, 0);             // glyph 1 offset = 0
+    pushBe16(loca, glyfEndWords);  // glyph 2 offset
+    pushBe16(loca, glyfEndWords);  // end
+
+    std::vector<uint8_t> head(54, 0);
+    // version = 1.0
+    head[0] = 0;
+    head[1] = 1;
+    // magicNumber = 0x5F0F3CF5 at offset 12
+    head[12] = 0x5F;
+    head[13] = 0x0F;
+    head[14] = 0x3C;
+    head[15] = 0xF5;
+    // flags = 3, unitsPerEm = 1000 at offset 18
+    head[17] = 3;
+    head[18] = static_cast<uint8_t>((1000U >> 8U) & 0xFFU);
+    head[19] = static_cast<uint8_t>(1000U & 0xFFU);
+    // xMax=500, yMax=700
+    head[40] = 0x01;
+    head[41] = 0xF4;
+    head[42] = 0x02;
+    head[43] = 0xBC;
+    // indexToLocFormat = 0 (offset 50)
+
+    std::vector<uint8_t> hhea(36, 0);
+    hhea[1] = 1;  // version 1.0
+    hhea[4] = 0x03;
+    hhea[5] = 0x20;  // ascender = 800
+    hhea[6] = 0xFF;
+    hhea[7] = 0x38;  // descender = -200
+    hhea[34] = 0;
+    hhea[35] = 3;  // numberOfHMetrics = 3
+
+    std::vector<uint8_t> maxp(32, 0);
+    maxp[1] = 1;  // version 1.0
+    maxp[4] = 0;
+    maxp[5] = 3;  // numGlyphs = 3
+    maxp[6] = 0;
+    maxp[7] = 3;  // maxPoints = 3
+    maxp[8] = 0;
+    maxp[9] = 1;  // maxContours = 1
+
+    std::vector<uint8_t> hmtx;
+    pushBe16(hmtx, 500);
+    pushBe16(hmtx, 0);
+    pushBe16(hmtx, 600);
+    pushBe16(hmtx, 0);
+    pushBe16(hmtx, 250);
+    pushBe16(hmtx, 0);
+
+    std::vector<uint8_t> cmap;
+    // Subtable format 4 for space (0x0020 -> GID 2) and 'A' (0x0041 -> GID 1)
+    std::vector<uint8_t> fmt4;
+    pushBe16(fmt4, 4);   // format
+    pushBe16(fmt4, 38);  // length
+    pushBe16(fmt4, 0);   // language
+    pushBe16(fmt4, 6);   // segCountX2 (3 segs: 0x20, 0x41, 0xFFFF)
+    pushBe16(fmt4, 4);   // searchRange
+    pushBe16(fmt4, 1);   // entrySelector
+    pushBe16(fmt4, 2);   // rangeShift
+    // endCode
+    pushBe16(fmt4, 0x0020);
+    pushBe16(fmt4, 0x0041);
+    pushBe16(fmt4, 0xFFFF);
+    pushBe16(fmt4, 0);  // reservedPad
+    // startCode
+    pushBe16(fmt4, 0x0020);
+    pushBe16(fmt4, 0x0041);
+    pushBe16(fmt4, 0xFFFF);
+    // idDelta (signed mod 65536): 0x20 + delta = 2 -> -30; 0x41 + delta = 1 -> -64; 0xFFFF + 1 = 0
+    pushBe16(fmt4, static_cast<uint16_t>(-30));
+    pushBe16(fmt4, static_cast<uint16_t>(-64));
+    pushBe16(fmt4, 1);
+    // idRangeOffset
+    pushBe16(fmt4, 0);
+    pushBe16(fmt4, 0);
+    pushBe16(fmt4, 0);
+
+    // cmap header: 1 subtable (3,1) or (1,0)
+    pushBe16(cmap, 0);
+    pushBe16(cmap, 1);
+    pushBe16(cmap, includeUnicodeCmap ? 3 : 1);
+    pushBe16(cmap, includeUnicodeCmap ? 1 : 0);
+    pushBe32(cmap, 12);
+    cmap.insert(cmap.end(), fmt4.begin(), fmt4.end());
+
+    std::vector<uint8_t> nameTbl(6, 0);
+    std::vector<uint8_t> postTbl(32, 0);
+    postTbl[1] = 3;  // format 3.0
+
+    std::vector<Table> tables = {
+        {"cmap", std::move(cmap)}, {"glyf", std::move(glyf)},    {"head", std::move(head)},
+        {"hhea", std::move(hhea)}, {"hmtx", std::move(hmtx)},    {"loca", std::move(loca)},
+        {"maxp", std::move(maxp)}, {"name", std::move(nameTbl)}, {"post", std::move(postTbl)},
+    };
+
+    const uint16_t numTables = static_cast<uint16_t>(tables.size());
+    std::vector<uint8_t> out;
+    pushBe32(out, 0x00010000U);
+    pushBe16(out, numTables);
+    pushBe16(out, 128);
+    pushBe16(out, 3);
+    pushBe16(out, 16);
+
+    const size_t dirStart = out.size();
+    out.resize(dirStart + static_cast<size_t>(numTables) * 16, 0);
+
+    for (size_t i = 0; i < numTables; ++i) {
+        while (out.size() % 4 != 0) out.push_back(0);
+        const uint32_t offset = static_cast<uint32_t>(out.size());
+        const uint32_t len = static_cast<uint32_t>(tables[i].data.size());
+        out.insert(out.end(), tables[i].data.begin(), tables[i].data.end());
+
+        const size_t rec = dirStart + i * 16;
+        std::memcpy(out.data() + rec, tables[i].tag, 4);
+        out[rec + 8] = static_cast<uint8_t>((offset >> 24U) & 0xFFU);
+        out[rec + 9] = static_cast<uint8_t>((offset >> 16U) & 0xFFU);
+        out[rec + 10] = static_cast<uint8_t>((offset >> 8U) & 0xFFU);
+        out[rec + 11] = static_cast<uint8_t>(offset & 0xFFU);
+        out[rec + 12] = static_cast<uint8_t>((len >> 24U) & 0xFFU);
+        out[rec + 13] = static_cast<uint8_t>((len >> 16U) & 0xFFU);
+        out[rec + 14] = static_cast<uint8_t>((len >> 8U) & 0xFFU);
+        out[rec + 15] = static_cast<uint8_t>(len & 0xFFU);
+    }
+    return out;
+}
 
 std::vector<uint8_t> buildMinimalCmykIcc() {
     std::vector<uint8_t> icc(148, 0);
@@ -74,6 +246,237 @@ std::string makeStreamObj(const std::string& dictExtra, const std::string& paylo
     if (!dictExtra.empty()) s += " " + dictExtra;
     s += " >>\nstream\n" + payload + "\nendstream";
     return s;
+}
+
+std::string bytesToString(const std::vector<uint8_t>& v) {
+    return std::string(reinterpret_cast<const char*>(v.data()), v.size());
+}
+
+std::string uncompressedPdfFromOutput(const uint8_t* data, int64_t len) {
+    uint8_t* out = nullptr;
+    int64_t outLen = 0;
+    const int32_t rc = jpdfium_qpdf_optimize(data, len, &out, &outLen, 0, -1, 0, 0, 1);
+    std::string res;
+    if ((rc == 0 || rc == 3) && out && outLen > 0) {
+        res.assign(reinterpret_cast<const char*>(out), static_cast<size_t>(outLen));
+    }
+    if (out) jpdfium_free_buffer(out);
+    return res;
+}
+
+void testSimpleTrueTypeUafPaths() {
+    // Path 1 & 3: Symbolic TrueType font without (3,0) cmap + mismatched /Widths ->
+    // triggers sfntEnsureCmap30 and sfntPatchHmtx on FontFile2 while FT_Face is open.
+    const std::vector<uint8_t> ttf = buildMinimalTrueTypeFont(false);
+    const std::string ttfStr = bytesToString(ttf);
+    const std::string ffDict = "/Length1 " + std::to_string(ttf.size());
+
+    std::vector<std::string> objs;
+    objs.push_back("<< /Type /Catalog /Pages 2 0 R >>");
+    objs.push_back("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+    objs.push_back(
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+        "/Resources << /Font << /F1 4 0 R >> >> /Contents 7 0 R >>");
+    objs.push_back(
+        "<< /Type /Font /Subtype /TrueType /BaseFont /TestSym "
+        "/FirstChar 65 /LastChar 65 /Widths [777] /FontDescriptor 5 0 R >>");
+    objs.push_back(
+        "<< /Type /FontDescriptor /FontName /TestSym /Flags 4 "
+        "/FontBBox [0 -200 500 700] /ItalicAngle 0 /Ascent 800 /Descent -200 "
+        "/CapHeight 700 /StemV 80 /FontFile2 6 0 R >>");
+    objs.push_back(makeStreamObj(ffDict, ttfStr));
+    objs.push_back(makeStreamObj("", "BT /F1 12 Tf 72 720 Td (A) Tj ET"));
+
+    const std::vector<uint8_t> pdf1 = assemblePdf(objs, 1);
+    uint8_t* out = nullptr;
+    int64_t outLen = 0;
+    char* rep = nullptr;
+    const uint32_t flags = (1U << 1) | (1U << 2) | (1U << 3) | (1U << 4) | (1U << 5);
+    const int32_t rc =
+        jpdfium_qpdf_rewrite_fonts(pdf1.data(), static_cast<int64_t>(pdf1.size()), flags, nullptr,
+                                   nullptr, 0, nullptr, 0, &out, &outLen, &rep);
+    CHECK(rc == 0 && out && outLen > 0, "symbolic TrueType cmap30 + hmtx rewrite succeeds");
+    if (out) jpdfium_free_buffer(out);
+    if (rep) jpdfium_free_string(rep);
+
+    // Path 2: Non-symbolic TrueType font with non-AGL /Differences (/uni0041) ->
+    // triggers sf.serialize() conversion to symbolic (3,0) in reconcileSimpleFontWidths.
+    const std::vector<uint8_t> ttfUni = buildMinimalTrueTypeFont(true);
+    objs[3] =
+        "<< /Type /Font /Subtype /TrueType /BaseFont /TestNonSym "
+        "/FirstChar 65 /LastChar 65 /Widths [600] "
+        "/Encoding << /Type /Encoding /BaseEncoding /WinAnsiEncoding /Differences [65 /uni0041] >> "
+        "/FontDescriptor 5 0 R >>";
+    objs[4] =
+        "<< /Type /FontDescriptor /FontName /TestNonSym /Flags 32 "
+        "/FontBBox [0 -200 500 700] /ItalicAngle 0 /Ascent 800 /Descent -200 "
+        "/CapHeight 700 /StemV 80 /FontFile2 6 0 R >>";
+    objs[5] = makeStreamObj("/Length1 " + std::to_string(ttfUni.size()), bytesToString(ttfUni));
+    const std::vector<uint8_t> pdf2 = assemblePdf(objs, 1);
+
+    out = nullptr;
+    outLen = 0;
+    rep = nullptr;
+    const int32_t rc2 =
+        jpdfium_qpdf_rewrite_fonts(pdf2.data(), static_cast<int64_t>(pdf2.size()), flags, nullptr,
+                                   nullptr, 0, nullptr, 0, &out, &outLen, &rep);
+    CHECK(rc2 == 0 && out && outLen > 0, "non-symbolic TrueType /Differences rewrite succeeds");
+    if (out) jpdfium_free_buffer(out);
+    if (rep) jpdfium_free_string(rep);
+}
+
+void testCidFontUafPaths() {
+    // Path 4 & 5: CIDFontType2 using CID 0 (<0000><0001>) + mismatched /W [1 [777]] ->
+    // triggers sfntAppendBlankGlyph and sfntPatchHmtx in rewriteType0Font.
+    const std::vector<uint8_t> ttfUni = buildMinimalTrueTypeFont(true);
+    std::vector<std::string> objs;
+    objs.push_back("<< /Type /Catalog /Pages 2 0 R >>");
+    objs.push_back("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+    objs.push_back(
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+        "/Resources << /Font << /F1 4 0 R >> >> /Contents 8 0 R >>");
+    objs.push_back(
+        "<< /Type /Font /Subtype /Type0 /BaseFont /TestCID /Encoding /Identity-H "
+        "/DescendantFonts [5 0 R] >>");
+    objs.push_back(
+        "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /TestCID "
+        "/CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> "
+        "/DW 1000 /W [1 [777]] /CIDToGIDMap /Identity /FontDescriptor 6 0 R >>");
+    objs.push_back(
+        "<< /Type /FontDescriptor /FontName /TestCID /Flags 4 "
+        "/FontBBox [0 -200 500 700] /ItalicAngle 0 /Ascent 800 /Descent -200 "
+        "/CapHeight 700 /StemV 80 /FontFile2 7 0 R >>");
+    objs.push_back(
+        makeStreamObj("/Length1 " + std::to_string(ttfUni.size()), bytesToString(ttfUni)));
+    objs.push_back(makeStreamObj("", "BT /F1 12 Tf 72 720 Td <00000001> Tj ET"));
+
+    const std::vector<uint8_t> pdf = assemblePdf(objs, 1);
+    uint8_t* out = nullptr;
+    int64_t outLen = 0;
+    char* rep = nullptr;
+    const uint32_t flags = (1U << 1) | (1U << 2) | (1U << 3) | (1U << 4) | (1U << 5);
+    const int32_t rc =
+        jpdfium_qpdf_rewrite_fonts(pdf.data(), static_cast<int64_t>(pdf.size()), flags, nullptr,
+                                   nullptr, 0, nullptr, 0, &out, &outLen, &rep);
+    CHECK(rc == 0 && out && outLen > 0, "CIDFontType2 blank glyph + hmtx rewrite succeeds");
+    if (out) jpdfium_free_buffer(out);
+    if (rep) jpdfium_free_string(rep);
+}
+
+void testToUnicodeCmapPreservesRangesAndSanitizesPua() {
+    const std::vector<uint8_t> ttfUni = buildMinimalTrueTypeFont(true);
+    const std::string tuBody =
+        "/CIDInit /ProcSet findresource begin\n"
+        "12 dict begin\n"
+        "begincmap\n"
+        "/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n"
+        "/CMapName /TestToUni def\n"
+        "/CMapType 2 def\n"
+        "1 begincodespacerange\n"
+        "<0000> <FFFF>\n"
+        "endcodespacerange\n"
+        "5 beginbfchar\n"
+        "<0041> <E000>\n"
+        "<0042> < E000 >\n"
+        "<0043> <DB80DC00>\n"
+        "<0044> <D800>\n"
+        "<0045> <D800DC00>\n"
+        "endbfchar\n"
+        "1 beginbfrange\n"
+        "<0000> <FFFF> <0020>\n"
+        "endbfrange\n"
+        "endcmap\n"
+        "CMapName currentdict /CMap defineresource pop\nend\nend\n";
+
+    std::vector<std::string> objs;
+    objs.push_back("<< /Type /Catalog /Pages 2 0 R >>");
+    objs.push_back("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+    objs.push_back(
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+        "/Resources << /Font << /F1 4 0 R >> >> /Contents 7 0 R >>");
+    objs.push_back(
+        "<< /Type /Font /Subtype /TrueType /BaseFont /TestUni /Encoding /WinAnsiEncoding "
+        "/FirstChar 65 /LastChar 65 /Widths [600] /ToUnicode 8 0 R /FontDescriptor 5 0 R >>");
+    objs.push_back(
+        "<< /Type /FontDescriptor /FontName /TestUni /Flags 32 "
+        "/FontBBox [0 -200 500 700] /ItalicAngle 0 /Ascent 800 /Descent -200 "
+        "/CapHeight 700 /StemV 80 /FontFile2 6 0 R >>");
+    objs.push_back(
+        makeStreamObj("/Length1 " + std::to_string(ttfUni.size()), bytesToString(ttfUni)));
+    objs.push_back(makeStreamObj("", "BT /F1 12 Tf 72 720 Td (A) Tj ET"));
+    objs.push_back(makeStreamObj("", tuBody));
+
+    const std::vector<uint8_t> pdf = assemblePdf(objs, 1);
+    uint8_t* out = nullptr;
+    int64_t outLen = 0;
+    char* rep = nullptr;
+    // PDF/A-2u: kFlagConvertPdfA2b (1<<5) | kFlagPdfALevelU (1<<9) | clean metadata
+    const uint32_t flags = (1U << 4) | (1U << 5) | (1U << 9);
+    const int32_t rc =
+        jpdfium_qpdf_rewrite_fonts(pdf.data(), static_cast<int64_t>(pdf.size()), flags, nullptr,
+                                   nullptr, 0, nullptr, 0, &out, &outLen, &rep);
+    CHECK(rc == 0 && out && outLen > 0, "PDF/A-2u ToUnicode rewrite succeeds");
+    if (out && outLen > 0) {
+        const std::string plain = uncompressedPdfFromOutput(out, outLen);
+        CHECK(plain.find("<0000> <FFFF>") != std::string::npos,
+              "ToUnicode begincodespacerange/bfrange <0000> <FFFF> preserved");
+        CHECK(plain.find("<0041> <0020>") != std::string::npos,
+              "ToUnicode PUA <E000> destination replaced with <0020>");
+        CHECK(plain.find("<0041> <E000>") == std::string::npos,
+              "ToUnicode PUA <E000> no longer present");
+        CHECK(plain.find("<0042> <0020>") != std::string::npos,
+              "ToUnicode whitespace-padded PUA < E000 > replaced with <0020>");
+        CHECK(plain.find("< E000 >") == std::string::npos,
+              "ToUnicode whitespace-padded PUA < E000 > no longer present");
+        CHECK(plain.find("<0043> <0020>") != std::string::npos,
+              "ToUnicode supplementary PUA <DB80DC00> replaced with <0020>");
+        CHECK(plain.find("<DB80DC00>") == std::string::npos,
+              "ToUnicode supplementary PUA <DB80DC00> no longer present");
+        CHECK(plain.find("<0044> <0020>") != std::string::npos,
+              "ToUnicode lone surrogate <D800> replaced with <0020>");
+        CHECK(plain.find("<0044> <D800>") == std::string::npos,
+              "ToUnicode lone surrogate <D800> no longer present");
+        CHECK(plain.find("<0045> <D800DC00>") != std::string::npos,
+              "ToUnicode valid non-PUA supplementary <D800DC00> preserved");
+    }
+    if (out) jpdfium_free_buffer(out);
+    if (rep) jpdfium_free_string(rep);
+}
+
+void testPdfA3bPreservesAfAndAttachments() {
+    const std::string payload = "HELLO_ATTACHMENT_DATA_12345";
+    std::vector<std::string> objs;
+    objs.push_back(
+        "<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(test.txt) 4 0 R] >> "
+        ">> /AF [4 0 R] >>");
+    objs.push_back("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+    objs.push_back("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>");
+    objs.push_back(
+        "<< /Type /Filespec /F (test.txt) /UF (test.txt) /AFRelationship /Data "
+        "/EF << /F 5 0 R >> >>");
+    objs.push_back(makeStreamObj("/Type /EmbeddedFile /Subtype /text#2Fplain", payload));
+
+    const std::vector<uint8_t> pdf = assemblePdf(objs, 1);
+    uint8_t* out = nullptr;
+    int64_t outLen = 0;
+    char* rep = nullptr;
+    // PDF/A-3b: kFlagConvertPdfA3b (1<<8) | kFlagCleanMetadata (1<<4)
+    const uint32_t flags = (1U << 4) | (1U << 8);
+    const int32_t rc =
+        jpdfium_qpdf_rewrite_fonts(pdf.data(), static_cast<int64_t>(pdf.size()), flags, nullptr,
+                                   nullptr, 0, nullptr, 0, &out, &outLen, &rep);
+    CHECK(rc == 0 && out && outLen > 0, "PDF/A-3b attachment rewrite succeeds");
+    if (out && outLen > 0) {
+        const std::string plain = uncompressedPdfFromOutput(out, outLen);
+        CHECK(plain.find("/AF ") != std::string::npos || plain.find("/AF[") != std::string::npos,
+              "PDF/A-3b preserves /Catalog /AF");
+        CHECK(plain.find("/EmbeddedFiles") != std::string::npos,
+              "PDF/A-3b preserves /Names /EmbeddedFiles");
+        CHECK(plain.find(payload) != std::string::npos,
+              "PDF/A-3b preserves attachment payload bytes");
+    }
+    if (out) jpdfium_free_buffer(out);
+    if (rep) jpdfium_free_string(rep);
 }
 
 void testCyclicGraphsDifferencesOverflowAndXmp() {
@@ -122,9 +525,26 @@ void testCyclicGraphsDifferencesOverflowAndXmp() {
 
     const std::vector<uint8_t> pdf = assemblePdf(objs, 1);
 
-    // 2) Sanitize with cyclic Outlines & AcroForm
+    // 1) Font rewriter + PDF/A-2b
     uint8_t* out = nullptr;
     int64_t outLen = 0;
+    char* rep = nullptr;
+    const uint32_t flags = (1U << 1) | (1U << 2) | (1U << 3) | (1U << 4) | (1U << 5);
+    const int32_t rc =
+        jpdfium_qpdf_rewrite_fonts(pdf.data(), static_cast<int64_t>(pdf.size()), flags, nullptr,
+                                   nullptr, 0, nullptr, 0, &out, &outLen, &rep);
+    CHECK(rc == 0 && out && outLen > 0, "cyclic graph + Differences overflow rewrite terminates");
+    if (out && outLen > 0) {
+        const std::string plain = uncompressedPdfFromOutput(out, outLen);
+        CHECK(plain.find("&amp;lt;") == std::string::npos,
+              "invalid XMP CreateDate rejected without corrupting XMP");
+    }
+    if (out) jpdfium_free_buffer(out);
+    if (rep) jpdfium_free_string(rep);
+
+    // 2) Sanitize with cyclic Outlines & AcroForm
+    out = nullptr;
+    outLen = 0;
     const int32_t rcSan = jpdfium_qpdf_sanitize(
         pdf.data(), static_cast<int64_t>(pdf.size()), &out, &outLen,
         JPDFIUM_SANITIZE_METADATA | JPDFIUM_SANITIZE_JAVASCRIPT | JPDFIUM_SANITIZE_ACROFORM);
@@ -152,6 +572,40 @@ void testCyclicGraphsDifferencesOverflowAndXmp() {
     CHECK(rcPdfx == 0 || rcPdfx == JPDFIUM_ERR_PDFX_NONCONFORMANT,
           "pdfx_prepare_bytes on cyclic actions + truncated BI..ID..EI completes safely");
     if (out) jpdfium_free_buffer(out);
+}
+
+void testStreamSizeCapRejectsFlateBomb() {
+    // Build a 66 MiB uncompressed zero stream, compress it via jpdfium_qpdf_optimize into a small
+    // FlateDecode PDF, then feed it into jpdfium_qpdf_rewrite_fonts to verify 64 MiB stream cap.
+    std::string bigPayload(size_t{66} * 1024U * 1024U, ' ');
+    std::vector<std::string> objs;
+    objs.push_back("<< /Type /Catalog /Pages 2 0 R >>");
+    objs.push_back("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+    objs.push_back("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>");
+    objs.push_back(makeStreamObj("", bigPayload));
+    bigPayload.clear();
+    bigPayload.shrink_to_fit();
+
+    const std::vector<uint8_t> rawPdf = assemblePdf(objs, 1);
+    objs.clear();
+    uint8_t* comp = nullptr;
+    int64_t compLen = 0;
+    const int32_t orc =
+        jpdfium_qpdf_optimize(rawPdf.data(), static_cast<int64_t>(rawPdf.size()), &comp, &compLen,
+                              JPDFIUM_QPDF_COMPRESS_STREAMS, 6, 0, 2, 1);
+    CHECK((orc == 0 || orc == 3) && comp && compLen > 0 && compLen < int64_t{1024} * 1024,
+          "66 MiB zero stream compresses to small Flate bomb PDF");
+    if (comp && compLen > 0) {
+        uint8_t* out = nullptr;
+        int64_t outLen = 0;
+        char* rep = nullptr;
+        const int32_t rc = jpdfium_qpdf_rewrite_fonts(comp, compLen, (1U << 2) | (1U << 5), nullptr,
+                                                      nullptr, 0, nullptr, 0, &out, &outLen, &rep);
+        CHECK(rc == 0, "rewrite_fonts safely caps 66 MiB Flate bomb without crash or OOM");
+        if (out) jpdfium_free_buffer(out);
+        if (rep) jpdfium_free_string(rep);
+    }
+    if (comp) jpdfium_free_buffer(comp);
 }
 
 void testPdfxAndColorFlateBombsBounded() {
@@ -287,7 +741,28 @@ void testRustResizePixelsDimensionCaps() {
     if (out) jpdfium_rust_free(out);
 }
 
-void testDeepXmlInColorPdfx() {
+void testDeepXmlAndConcurrentRewriter() {
+    // Deeply nested XML in XMP helper via jpdfium_color_pdfx_bytes + 8-thread concurrency stress.
+    const std::vector<uint8_t> ttfUni = buildMinimalTrueTypeFont(true);
+    std::vector<std::string> objs;
+    objs.push_back("<< /Type /Catalog /Pages 2 0 R >>");
+    objs.push_back("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+    objs.push_back(
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+        "/Resources << /Font << /F1 4 0 R >> >> /Contents 7 0 R >>");
+    objs.push_back(
+        "<< /Type /Font /Subtype /TrueType /BaseFont /ThreadFont /Encoding /WinAnsiEncoding "
+        "/FirstChar 65 /LastChar 65 /Widths [600] /FontDescriptor 5 0 R >>");
+    objs.push_back(
+        "<< /Type /FontDescriptor /FontName /ThreadFont /Flags 32 "
+        "/FontBBox [0 -200 500 700] /ItalicAngle 0 /Ascent 800 /Descent -200 "
+        "/CapHeight 700 /StemV 80 /FontFile2 6 0 R >>");
+    objs.push_back(
+        makeStreamObj("/Length1 " + std::to_string(ttfUni.size()), bytesToString(ttfUni)));
+    objs.push_back(makeStreamObj("", "BT /F1 12 Tf 72 720 Td (A) Tj ET"));
+
+    const std::vector<uint8_t> pdf = assemblePdf(objs, 1);
+
     // Deeply nested XML (>100 tags) in /Metadata routed through jpdfium_color_pdfx_bytes.
     std::string deepXmp =
         "<?xpacket begin=\"\xEF\xBB\xBF\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n"
@@ -315,6 +790,32 @@ void testDeepXmlInColorPdfx() {
     CHECK(xmpRc == 0 && xmpOut && xmpOutLen > 0,
           "jpdfium_color_pdfx_bytes handles 200-deep nested XMP XML safely");
     if (xmpOut) jpdfium_free_buffer(xmpOut);
+
+    std::vector<std::thread> workers;
+    workers.reserve(8);
+    std::array<int, 8> threadFailures{};
+    for (size_t tid = 0; tid < 8; ++tid) {
+        workers.emplace_back([&, tid]() {
+            for (int iter = 0; iter < 3; ++iter) {
+                uint8_t* out = nullptr;
+                int64_t outLen = 0;
+                char* rep = nullptr;
+                const uint32_t flags = (1U << 1) | (1U << 2) | (1U << 3) | (1U << 4) | (1U << 5);
+                const int32_t rc = jpdfium_qpdf_rewrite_fonts(
+                    pdf.data(), static_cast<int64_t>(pdf.size()), flags, nullptr, nullptr, 0,
+                    nullptr, 0, &out, &outLen, &rep);
+                if (rc != 0 || !out || outLen <= 0) {
+                    ++threadFailures[tid];
+                }
+                if (out) jpdfium_free_buffer(out);
+                if (rep) jpdfium_free_string(rep);
+            }
+        });
+    }
+    for (auto& th : workers) th.join();
+    int totalThreadFailures = 0;
+    for (int f : threadFailures) totalThreadFailures += f;
+    CHECK(totalThreadFailures == 0, "8-thread concurrent jpdfium_qpdf_rewrite_fonts succeeds");
 }
 
 }  // namespace
@@ -325,10 +826,15 @@ int main() {
             std::fprintf(stderr, "hardening_regression: jpdfium_init failed\n");
             return 1;
         }
+        testSimpleTrueTypeUafPaths();
+        testCidFontUafPaths();
+        testToUnicodeCmapPreservesRangesAndSanitizesPua();
+        testPdfA3bPreservesAfAndAttachments();
         testCyclicGraphsDifferencesOverflowAndXmp();
+        testStreamSizeCapRejectsFlateBomb();
         testPdfxAndColorFlateBombsBounded();
         testRustResizePixelsDimensionCaps();
-        testDeepXmlInColorPdfx();
+        testDeepXmlAndConcurrentRewriter();
         jpdfium_destroy();
         if (g_failures > 0) {
             std::fprintf(stderr, "hardening_regression: %d failure(s)\n", g_failures);
