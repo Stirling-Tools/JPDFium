@@ -53,6 +53,7 @@ import java.lang.invoke.MethodHandle;
 import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
 import java.nio.channels.WritableByteChannel;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
@@ -81,6 +82,12 @@ import java.util.function.ObjIntConsumer;
  * throughput ceiling is roughly one thread's worth of PDFium time.
  */
 public final class PdfDocument implements AutoCloseable {
+
+    private static final byte[] BYTE_RANGE_MARKER = "/ByteRange".getBytes(StandardCharsets.US_ASCII);
+    private static final int SCAN_CHUNK_SIZE = 64 * 1024;
+    private static final int RAW_BYTE_RANGE_UNCHECKED = 0;
+    private static final int RAW_BYTE_RANGE_ABSENT = 1;
+    private static final int RAW_BYTE_RANGE_PRESENT = 2;
 
     private final long handle;
     private volatile MemorySegment rawDocSegment;
@@ -116,6 +123,7 @@ public final class PdfDocument implements AutoCloseable {
      */
     private volatile Path sourcePath;
     private volatile byte[] sourceBytes;
+    private volatile int rawByteRangeState;
 
     PdfDocument(long handle) {
         this(handle, null);
@@ -414,9 +422,21 @@ public final class PdfDocument implements AutoCloseable {
             int remaining = buffer.remaining();
             MemorySegment seg = MemorySegment.ofBuffer(buffer.duplicate());
             long handle = JpdfiumLib.docOpenSegment(seg, seg.byteSize());
-            // Advance position to match the heap path (buffer.get(bytes) does the same).
-            buffer.position(buffer.position() + remaining);
-            return new PdfDocument(handle);
+            boolean ok = false;
+            try {
+                boolean hasByteRange = containsByteRange(seg);
+                PdfDocument doc = new PdfDocument(handle);
+                doc.rawByteRangeState =
+                        hasByteRange ? RAW_BYTE_RANGE_PRESENT : RAW_BYTE_RANGE_ABSENT;
+                // Advance position to match the heap path (buffer.get(bytes) does the same).
+                buffer.position(buffer.position() + remaining);
+                ok = true;
+                return doc;
+            } finally {
+                if (!ok) {
+                    JpdfiumLib.docClose(handle);
+                }
+            }
         }
         byte[] bytes = new byte[buffer.remaining()];
         buffer.get(bytes);
@@ -477,6 +497,145 @@ public final class PdfDocument implements AutoCloseable {
     public byte[] sourceBytes() {
         byte[] s = sourceBytes;
         return s == null ? null : s.clone();
+    }
+
+    /**
+     * Returns {@code true} if the pre-PDFium source opened by this document
+     * contains a raw {@code /ByteRange} dictionary marker.
+     *
+     * <p>Inspects retained open-time bytes, original file paths, stream-spooled
+     * temporary files, and direct {@link ByteBuffer} views without mutating the
+     * caller's buffer or materialising large sources on the Java heap.
+     *
+     * @return {@code true} when a raw {@code /ByteRange} marker is present
+     * @throws JPDFiumException if inspecting the underlying source file fails
+     */
+    public boolean hasRawByteRangeMarker() {
+        ensureOpen();
+        int state = rawByteRangeState;
+        if (state != RAW_BYTE_RANGE_UNCHECKED) {
+            return state == RAW_BYTE_RANGE_PRESENT;
+        }
+        boolean detected;
+        byte[] bytes = sourceBytes;
+        if (bytes != null) {
+            detected = containsByteRange(bytes, bytes.length);
+        } else {
+            Path file = sourcePath != null ? sourcePath : ownedTempFile;
+            if (file != null && Files.isRegularFile(file)) {
+                try {
+                    detected = containsByteRange(file);
+                } catch (IOException e) {
+                    throw new JPDFiumException(
+                            "Failed to inspect source PDF for signatures: " + e.getMessage(), e);
+                }
+            } else {
+                detected = false;
+            }
+        }
+        rawByteRangeState = detected ? RAW_BYTE_RANGE_PRESENT : RAW_BYTE_RANGE_ABSENT;
+        return detected;
+    }
+
+    /** Returns {@code true} when {@code data[0..length)} holds a {@code /ByteRange [...]} signature array. */
+    public static boolean containsByteRangeArray(byte[] data, int length) {
+        return containsByteRange(data, length);
+    }
+
+    /** Returns {@code true} when {@code file} holds a {@code /ByteRange [...]} signature array. */
+    public static boolean containsByteRangeArray(Path file) throws IOException {
+        return containsByteRange(file);
+    }
+
+    private static boolean containsByteRange(byte[] data, int length) {
+        outer:
+        for (int i = 0; i + BYTE_RANGE_MARKER.length <= length; i++) {
+            for (int j = 0; j < BYTE_RANGE_MARKER.length; j++) {
+                if (data[i + j] != BYTE_RANGE_MARKER[j]) {
+                    continue outer;
+                }
+            }
+            if (byteRangeArrayAt(data, length, i + BYTE_RANGE_MARKER.length)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** A signature /ByteRange is a direct array of four non-negative integers. */
+    private static boolean byteRangeArrayAt(byte[] input, int length, int pos) {
+        pos = skipPdfSpace(input, length, pos);
+        if (pos >= length || input[pos] != '[') return false;
+        pos++;
+        for (int i = 0; i < 4; i++) {
+            pos = skipPdfSpace(input, length, pos);
+            if (pos >= length || input[pos] < '0' || input[pos] > '9') return false;
+            long value = 0;
+            while (pos < length && input[pos] >= '0' && input[pos] <= '9') {
+                value = value * 10 + (input[pos++] - '0');
+                if (value > Integer.MAX_VALUE) return false;
+            }
+        }
+        pos = skipPdfSpace(input, length, pos);
+        return pos < length && input[pos] == ']';
+    }
+
+    private static int skipPdfSpace(byte[] input, int length, int pos) {
+        for (;;) {
+            while (pos < length
+                    && (input[pos] == ' ' || input[pos] == '\t' || input[pos] == '\r'
+                            || input[pos] == '\n' || input[pos] == '\f')) {
+                pos++;
+            }
+            if (pos >= length || input[pos] != '%') return pos;
+            while (pos < length && input[pos] != '\n' && input[pos] != '\r') pos++;
+        }
+    }
+
+    private static final int BYTE_RANGE_CARRY = 128;
+
+    private static boolean containsByteRange(Path file) throws IOException {
+        int overlap = BYTE_RANGE_CARRY;
+        byte[] buf = new byte[SCAN_CHUNK_SIZE + overlap];
+        int carry = 0;
+        try (InputStream in = Files.newInputStream(file)) {
+            int read;
+            while ((read = in.read(buf, carry, SCAN_CHUNK_SIZE)) != -1) {
+                if (read == 0) {
+                    continue;
+                }
+                int total = carry + read;
+                if (containsByteRange(buf, total)) {
+                    return true;
+                }
+                carry = Math.min(overlap, total);
+                System.arraycopy(buf, total - carry, buf, 0, carry);
+            }
+        }
+        return false;
+    }
+
+    private static boolean containsByteRange(MemorySegment seg) {
+        long size = seg.byteSize();
+        if (size < BYTE_RANGE_MARKER.length) {
+            return false;
+        }
+        int overlap = BYTE_RANGE_CARRY;
+        byte[] buf = new byte[SCAN_CHUNK_SIZE + overlap];
+        int carry = 0;
+        long offset = 0;
+        while (offset < size) {
+            int toRead = (int) Math.min(SCAN_CHUNK_SIZE, size - offset);
+            MemorySegment.copy(seg, ValueLayout.JAVA_BYTE, offset, buf, carry, toRead);
+            int total = carry + toRead;
+            if (containsByteRange(buf, total)) {
+                return true;
+            }
+            offset += toRead;
+            carry = Math.min(overlap, total);
+            System.arraycopy(buf, total - carry, buf, 0, carry);
+        }
+        return false;
     }
 
     /**

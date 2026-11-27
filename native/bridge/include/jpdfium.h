@@ -971,6 +971,7 @@ JPDFIUM_EXPORT int32_t jpdfium_color_pdfx_file(const char* in_path, const char* 
 #define JPDFIUM_PDFX_NEUTRALS_TO_BLACK (0x04)
 #define JPDFIUM_PDFX_CONVERT_SPECIAL (0x08)
 #define JPDFIUM_PDFX_STRICT_IMAGES (0x10)
+#define JPDFIUM_PDFX_ALLOW_STRIP_OC (0x20)
 
 JPDFIUM_EXPORT int32_t jpdfium_pdfx_prepare_bytes(const uint8_t* input, int64_t input_len,
                                                   int32_t level, const uint8_t* lut,

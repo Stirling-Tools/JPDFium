@@ -11,6 +11,49 @@
 #include "jpdfium.h"
 #include "jpdfium_internal.h"
 
+namespace {
+
+void appendJsonString(std::string& out, const char* data, size_t len) {
+    out.push_back('"');
+    for (size_t i = 0; i < len; ++i) {
+        auto c = static_cast<unsigned char>(data[i]);
+        switch (c) {
+            case '"':
+                out += "\\\"";
+                break;
+            case '\\':
+                out += "\\\\";
+                break;
+            case '\b':
+                out += "\\b";
+                break;
+            case '\f':
+                out += "\\f";
+                break;
+            case '\n':
+                out += "\\n";
+                break;
+            case '\r':
+                out += "\\r";
+                break;
+            case '\t':
+                out += "\\t";
+                break;
+            default:
+                if (c < 0x20) {
+                    char u[7];
+                    std::snprintf(u, sizeof(u), "\\u%04x", static_cast<unsigned int>(c));
+                    out += u;
+                } else {
+                    out.push_back(static_cast<char>(c));
+                }
+        }
+    }
+    out.push_back('"');
+}
+
+}  // namespace
+
 // PCRE2 JIT Pattern Engine
 
 #ifdef JPDFIUM_HAS_PCRE2
@@ -60,6 +103,7 @@ int32_t jpdfium_pcre2_compile(const char* pattern, uint32_t flags, int64_t* hand
 int32_t jpdfium_pcre2_match_all(int64_t pattern_handle, const char* text, char** json_result) {
     try {
         if (!text || !json_result) return JPDFIUM_ERR_INVALID;
+        *json_result = nullptr;
         auto* pw = reinterpret_cast<Pcre2Pattern8*>(pattern_handle);
         if (!pw || !Pcre2HandleRegistry::instance().contains(pw)) return JPDFIUM_ERR_INVALID;
         if (!pw->code) return JPDFIUM_ERR_INVALID;
@@ -81,40 +125,21 @@ int32_t jpdfium_pcre2_match_all(int64_t pattern_handle, const char* text, char**
             if (!first) json += ',';
             first = false;
 
-            std::string match_text(text + start, end - start);
-            std::string escaped;
-            for (char c : match_text) {
-                switch (c) {
-                    case '"':
-                        escaped += "\\\"";
-                        break;
-                    case '\\':
-                        escaped += "\\\\";
-                        break;
-                    case '\n':
-                        escaped += "\\n";
-                        break;
-                    case '\r':
-                        escaped += "\\r";
-                        break;
-                    case '\t':
-                        escaped += "\\t";
-                        break;
-                    default:
-                        escaped += c;
-                }
-            }
-
-            char buf[256];
-            snprintf(buf, sizeof(buf), "{\"start\":%zu,\"end\":%zu,\"match\":\"%s\"}",
-                     static_cast<size_t>(start), static_cast<size_t>(end), escaped.c_str());
-            json += buf;
+            json += "{\"start\":";
+            json += std::to_string(static_cast<size_t>(start));
+            json += ",\"end\":";
+            json += std::to_string(static_cast<size_t>(end));
+            json += ",\"match\":";
+            appendJsonString(json, text + start, static_cast<size_t>(end - start));
+            json.push_back('}');
 
             offset = (end > start) ? end : end + 1;
         }
 
         json += ']';
-        *json_result = strdup(json.c_str());
+        char* dup = strdup(json.c_str());
+        if (!dup) return JPDFIUM_ERR_NATIVE;
+        *json_result = dup;
         return JPDFIUM_OK;
 
     } catch (...) {
@@ -250,11 +275,15 @@ struct FlashTextProcessor {
             if (found) {
                 if (!first) result += ',';
                 first = false;
-                char buf[512];
-                snprintf(buf, sizeof(buf),
-                         "{\"start\":%zu,\"end\":%zu,\"keyword\":\"%s\",\"label\":\"%s\"}", i,
-                         matchEnd, matchKeyword.c_str(), matchLabel.c_str());
-                result += buf;
+                result += "{\"start\":";
+                result += std::to_string(i);
+                result += ",\"end\":";
+                result += std::to_string(matchEnd);
+                result += ",\"keyword\":";
+                appendJsonString(result, matchKeyword.data(), matchKeyword.size());
+                result += ",\"label\":";
+                appendJsonString(result, matchLabel.data(), matchLabel.size());
+                result.push_back('}');
                 i = matchEnd;
             } else {
                 ++i;
@@ -301,25 +330,169 @@ int32_t jpdfium_flashtext_add_keywords_json(int64_t handle, const char* json) {
         if (!json) return JPDFIUM_ERR_INVALID;
 
         // Simple JSON parser for: [{"keyword":"...","label":"..."}, ...]
+        // Scope each object strictly inside '{' .. '}' so optional labels never
+        // bleed across adjacent array elements, and allow whitespace after ':'.
+        auto findJsonStr = [](const char* from, const char* limit, const char* key,
+                              std::string& value, const char** nextOut) -> bool {
+            const char* kpos = nullptr;
+            const char* search = from;
+            while ((search = strstr(search, key))) {
+                if (limit && search >= limit) break;
+                const char* before = search;
+                while (before > from && (before[-1] == ' ' || before[-1] == '\t' ||
+                                         before[-1] == '\r' || before[-1] == '\n')) {
+                    --before;
+                }
+                const char* colon = search + strlen(key);
+                while (colon < limit &&
+                       (*colon == ' ' || *colon == '\t' || *colon == '\r' || *colon == '\n')) {
+                    ++colon;
+                }
+                if (*colon == ':' && (before == from || before[-1] == '{' || before[-1] == ',')) {
+                    kpos = search;
+                    break;
+                }
+                search += strlen(key);
+            }
+            if (!kpos || (limit && kpos >= limit)) return false;
+            const char* p = kpos + strlen(key);
+            while (p && (!limit || p < limit) &&
+                   (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')) {
+                ++p;
+            }
+            if (!p || (limit && p >= limit) || *p != ':') return false;
+            ++p;
+            while (p && (!limit || p < limit) &&
+                   (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')) {
+                ++p;
+            }
+            if (!p || (limit && p >= limit) || *p != '"') return false;
+            ++p;
+            value.clear();
+            while (*p && (!limit || p < limit) && *p != '"') {
+                if (*p == '\\' && *(p + 1) && (!limit || p + 1 < limit)) {
+                    ++p;
+                    char escaped = *p++;
+                    switch (escaped) {
+                        case 'n':
+                            value.push_back('\n');
+                            break;
+                        case 'r':
+                            value.push_back('\r');
+                            break;
+                        case 't':
+                            value.push_back('\t');
+                            break;
+                        case 'b':
+                            value.push_back('\b');
+                            break;
+                        case 'f':
+                            value.push_back('\f');
+                            break;
+                        case 'u': {
+                            if (limit && p + 4 > limit) return false;
+                            unsigned code = 0;
+                            for (int i = 0; i < 4; ++i) {
+                                char c = *p++;
+                                code <<= 4;
+                                if (c >= '0' && c <= '9')
+                                    code |= unsigned(c - '0');
+                                else if (c >= 'a' && c <= 'f')
+                                    code |= unsigned(c - 'a' + 10);
+                                else if (c >= 'A' && c <= 'F')
+                                    code |= unsigned(c - 'A' + 10);
+                                else
+                                    return false;
+                            }
+                            auto appendUtf8 = [&](uint32_t cp) {
+                                if (cp < 0x80) {
+                                    value.push_back(char(cp));
+                                } else if (cp < 0x800) {
+                                    value.push_back(char(0xC0 | (cp >> 6)));
+                                    value.push_back(char(0x80 | (cp & 0x3F)));
+                                } else if (cp < 0x10000) {
+                                    value.push_back(char(0xE0 | (cp >> 12)));
+                                    value.push_back(char(0x80 | ((cp >> 6) & 0x3F)));
+                                    value.push_back(char(0x80 | (cp & 0x3F)));
+                                } else {
+                                    value.push_back(char(0xF0 | (cp >> 18)));
+                                    value.push_back(char(0x80 | ((cp >> 12) & 0x3F)));
+                                    value.push_back(char(0x80 | ((cp >> 6) & 0x3F)));
+                                    value.push_back(char(0x80 | (cp & 0x3F)));
+                                }
+                            };
+                            if (code >= 0xD800 && code <= 0xDBFF) {
+                                uint32_t low = 0;
+                                bool paired = false;
+                                if ((!limit || p + 6 <= limit) && p[0] == '\\' && p[1] == 'u') {
+                                    const char* q = p + 2;
+                                    for (int i = 0; i < 4; ++i) {
+                                        low <<= 4;
+                                        char c = *q++;
+                                        if (c >= '0' && c <= '9')
+                                            low |= uint32_t(c - '0');
+                                        else if (c >= 'a' && c <= 'f')
+                                            low |= uint32_t(c - 'a' + 10);
+                                        else if (c >= 'A' && c <= 'F')
+                                            low |= uint32_t(c - 'A' + 10);
+                                        else
+                                            break;
+                                        if (i == 3) paired = true;
+                                    }
+                                }
+                                if (paired && low >= 0xDC00 && low <= 0xDFFF) {
+                                    p += 6;
+                                    uint32_t cp =
+                                        0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
+                                    appendUtf8(cp);
+                                } else {
+                                    appendUtf8(0xFFFD);
+                                }
+                            } else if (code >= 0xDC00 && code <= 0xDFFF) {
+                                appendUtf8(0xFFFD);
+                            } else {
+                                appendUtf8(code);
+                            }
+                            break;
+                        }
+                        default:
+                            value.push_back(escaped);
+                    }
+                } else {
+                    value.push_back(*p++);
+                }
+            }
+            if (*p != '"') return false;
+            if (nextOut) *nextOut = p + 1;
+            return true;
+        };
+
         const char* p = json;
         while (*p) {
-            const char* kw_start = strstr(p, "\"keyword\":\"");
-            if (!kw_start) break;
-            kw_start += 11;
-            const char* kw_end = strchr(kw_start, '"');
-            if (!kw_end) break;
-            std::string keyword(kw_start, static_cast<size_t>(kw_end - kw_start));
-
-            std::string label;
-            const char* lb_start = strstr(kw_end, "\"label\":\"");
-            if (lb_start) {
-                lb_start += 9;
-                const char* lb_end = strchr(lb_start, '"');
-                if (lb_end) label.assign(lb_start, static_cast<size_t>(lb_end - lb_start));
+            const char* objOpen = strchr(p, '{');
+            if (!objOpen) break;
+            // Find the matching closing brace outside string literals.
+            const char* objEnd = objOpen + 1;
+            bool inStr = false;
+            while (*objEnd) {
+                if (*objEnd == '\\' && inStr && *(objEnd + 1)) {
+                    objEnd += 2;
+                    continue;
+                }
+                if (*objEnd == '"') inStr = !inStr;
+                if (!inStr && *objEnd == '}') break;
+                ++objEnd;
             }
+            if (*objEnd != '}') break;
 
-            ft->addKeyword(keyword.c_str(), label.c_str());
-            p = kw_end + 1;
+            std::string keyword;
+            std::string label;
+            const char* afterKw = nullptr;
+            if (findJsonStr(objOpen, objEnd, "\"keyword\"", keyword, &afterKw)) {
+                findJsonStr(objOpen, objEnd, "\"label\"", label, nullptr);
+                ft->addKeyword(keyword.c_str(), label.c_str());
+            }
+            p = objEnd + 1;
         }
         return JPDFIUM_OK;
 
@@ -333,8 +506,11 @@ int32_t jpdfium_flashtext_find(int64_t handle, const char* text, char** json_res
         auto* ft = reinterpret_cast<FlashTextProcessor*>(handle);
         if (!ft || !FlashTextHandleRegistry::instance().contains(ft)) return JPDFIUM_ERR_INVALID;
         if (!json_result) return JPDFIUM_ERR_INVALID;
+        *json_result = nullptr;
         std::string result = ft->findAll(text);
-        *json_result = strdup(result.c_str());
+        char* dup = strdup(result.c_str());
+        if (!dup) return JPDFIUM_ERR_NATIVE;
+        *json_result = dup;
         return JPDFIUM_OK;
 
     } catch (...) {

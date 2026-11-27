@@ -26,49 +26,26 @@ using jpdfium_qpdf_internal::WriterLock;
 void updateCidSet(QPDF& qpdf, QPDFObjectHandle descriptor, std::set<uint32_t> const& activeCids) {
     if (!descriptor.isDictionary()) return;
     std::string bits = jpdfium::font::buildCidSetBits(activeCids);
-    if (!bits.empty()) descriptor.replaceKey("/CIDSet", QPDFObjectHandle::newStream(&qpdf, bits));
-}
-
-std::set<uint32_t> cidsForRetainedGlyphs(QPDFObjectHandle const& target,
-                                         std::string const& mapBytes,
-                                         std::set<FT_UInt> const& glyphs) {
-    std::set<uint32_t> cids{0};
-    auto map = target.getKey("/CIDToGIDMap");
-    if (map.isStream() && !mapBytes.empty()) {
-        const auto* bytes = reinterpret_cast<const uint8_t*>(mapBytes.data());
-        const size_t entries = mapBytes.size() / 2;
-        for (size_t c = 0; c < entries && c <= jpdfium::font::kMaxCid; ++c) {
-            const uint32_t gid = (static_cast<uint32_t>(bytes[2 * c]) << 8) | bytes[2 * c + 1];
-            if (glyphs.contains(static_cast<FT_UInt>(gid))) cids.insert(static_cast<uint32_t>(c));
-        }
-        return cids;
-    }
-    if (map.isNull() || map.isNameAndEquals("/Identity")) {
-        for (FT_UInt gid : glyphs) {
-            if (gid <= jpdfium::font::kMaxCid) cids.insert(static_cast<uint32_t>(gid));
-        }
-    }
-    return cids;
+    if (!bits.empty())
+        descriptor.replaceKey("/CIDSet", QPDFObjectHandle::newStream(&qpdf, bits));
+    else
+        descriptor.removeKey("/CIDSet");
 }
 
 std::set<uint32_t> cidsPresentInProgram(QPDFObjectHandle const& target, FT_Face face) {
     std::set<uint32_t> cids;
     auto map = target.getKey("/CIDToGIDMap");
     if (map.isStream()) {
-        try {
-            std::shared_ptr<Buffer> data = map.getStreamData(qpdf_dl_generalized);
-            if (data) {
-                const size_t entries = data->getSize() / 2;
-                auto const* bytes = reinterpret_cast<uint8_t const*>(data->getBuffer());
-                for (size_t i = 0; i < entries && i <= jpdfium::font::kMaxCid; ++i) {
-                    uint32_t gid = (uint32_t(bytes[2 * i]) << 8) | bytes[2 * i + 1];
-                    if (!face || gid < static_cast<uint32_t>(face->num_glyphs)) {
-                        cids.insert(static_cast<uint32_t>(i));
-                    }
+        std::shared_ptr<Buffer> data = readStreamBufferBounded(map, qpdf_dl_generalized);
+        if (data) {
+            const size_t entries = data->getSize() / 2;
+            auto const* bytes = reinterpret_cast<uint8_t const*>(data->getBuffer());
+            for (size_t i = 0; i < entries && i <= jpdfium::font::kMaxCid; ++i) {
+                uint32_t gid = (uint32_t(bytes[2 * i]) << 8) | bytes[2 * i + 1];
+                if (!face || gid < static_cast<uint32_t>(face->num_glyphs)) {
+                    cids.insert(static_cast<uint32_t>(i));
                 }
             }
-        } catch (...) {
-            cids.clear();
         }
         return cids;
     }
@@ -234,11 +211,7 @@ bool subsetEmbeddedCidFont(QPDF& qpdf, FT_Library lib, QPDFObjectHandle& font,
     std::shared_ptr<Buffer> mapBytes;
     if (!identity) {
         if (!cidMap.isStream()) return false;
-        try {
-            mapBytes = cidMap.getStreamData(qpdf_dl_generalized);
-        } catch (...) {
-            return false;
-        }
+        mapBytes = readStreamBufferBounded(cidMap, qpdf_dl_generalized);
         if (!mapBytes) return false;
     }
 
@@ -337,21 +310,23 @@ bool subsetEmbeddedCidFont(QPDF& qpdf, FT_Library lib, QPDFObjectHandle& font,
     descriptor.replaceKey(program.kind == ProgramKind::TrueType ? "/FontFile2" : "/FontFile3",
                           makeProgramStream(qpdf, program, program.kind, true, chosenSubset));
 
-    // Recompute /CIDSet when present so every bit matches the subset's retained CIDs.
+    // Recompute /CIDSet when present so every bit matches all CIDs present in the embedded
+    // subset program (ISO 19005-2 §6.2.11.4.2).
     if (descriptor.hasKey("/CIDSet")) {
-        if (useCompactedMap) {
-            std::set<uint32_t> mappedCids;
-            for (uint32_t c = 0; c <= maxUsedCid; ++c) mappedCids.insert(c);
-            updateCidSet(qpdf, descriptor, mappedCids);
+        FT_Face subFace = nullptr;
+        jpdfium::font::FtFaceGuard subGuard;
+        std::set<uint32_t> presentCids;
+        if (!chosenSubset.empty() &&
+            FT_New_Memory_Face(lib, reinterpret_cast<const FT_Byte*>(chosenSubset.data()),
+                               FT_Long(chosenSubset.size()), 0, &subFace) == 0 &&
+            subFace) {
+            subGuard.reset(subFace);
+            presentCids = cidsPresentInProgram(target, subFace);
+        }
+        if (!presentCids.empty()) {
+            updateCidSet(qpdf, descriptor, presentCids);
         } else {
-            std::string mapView;
-            if (!identity && mapBytes) {
-                size_t mapSize = std::min<size_t>(
-                    mapBytes->getSize(), 2 * (static_cast<size_t>(jpdfium::font::kMaxCid) + 1));
-                mapView.assign(reinterpret_cast<const char*>(mapBytes->getBuffer()), mapSize);
-            }
-            auto retainedCids = cidsForRetainedGlyphs(target, mapView, targetGlyphs);
-            if (!retainedCids.empty()) updateCidSet(qpdf, descriptor, retainedCids);
+            descriptor.removeKey("/CIDSet");
         }
     }
     return true;
@@ -500,12 +475,7 @@ bool subsetEmbeddedFontResource(QPDF& qpdf, FT_Library lib, QPDFObjectHandle& fo
         if (it != streamUseCount.end() && it->second > 1) return false;
     }
 
-    std::shared_ptr<Buffer> data;
-    try {
-        data = stream.getStreamData(qpdf_dl_generalized);
-    } catch (...) {
-        return false;
-    }
+    std::shared_ptr<Buffer> data = readStreamBufferBounded(stream, qpdf_dl_generalized);
     if (!data || data->getSize() < 16) return false;
 
     FontProgram program;
@@ -962,25 +932,39 @@ void appendFontInventoryEntryJson(FontInventoryEntry const& entry, std::string& 
     auto target = cid ? descendants.getArrayItem(0) : font;
     auto targetDescriptor = target.getKey("/FontDescriptor");
 
-    auto tryReadStream = [](QPDFObjectHandle stream) -> std::shared_ptr<Buffer> {
-        if (!stream.isStream()) return nullptr;
-        try {
-            return stream.getStreamData(qpdf_dl_generalized);
-        } catch (...) {
-            return nullptr;
-        }
+    auto tryReadStream = [](QPDFObjectHandle const& stream) -> std::shared_ptr<Buffer> {
+        return readStreamBufferBounded(stream, qpdf_dl_generalized);
     };
-    auto readableProgram = [&](QPDFObjectHandle const& desc) {
-        if (!desc.isDictionary()) return false;
+    auto validProgram = [](std::shared_ptr<Buffer> const& data) {
+        if (!data || data->getSize() < 4) return false;
+        auto const* b = reinterpret_cast<uint8_t const*>(data->getBuffer());
+        if (b[0] == 0x00 && b[1] == 0x01 && b[2] == 0x00 && b[3] == 0x00) return true;
+        if (b[0] == 0x01 && b[1] == 0x00 && b[2] == 0x04 && b[3] == 0x04) return true;
+        if ((b[0] == 'O' && b[1] == 'T' && b[2] == 'T' && b[3] == 'O') ||
+            (b[0] == 't' && b[1] == 'r' && b[2] == 'u' && b[3] == 'e') ||
+            (b[0] == 't' && b[1] == 't' && b[2] == 'c' && b[3] == 'f'))
+            return true;
+        if (b[0] == '%' && b[1] == '!') return true;
+        return (b[0] & 0xFF) == 0x80 && b[1] == 0x01;
+    };
+    auto programState = [&](QPDFObjectHandle const& desc) {
+        bool present = false;
+        bool valid = false;
+        if (!desc.isDictionary()) return std::pair<bool, bool>{false, false};
         for (char const* key : {"/FontFile", "/FontFile2", "/FontFile3"}) {
             auto data = tryReadStream(desc.getKey(key));
-            if (data && data->getSize() > 0) return true;
+            if (!data || data->getSize() == 0) continue;
+            present = true;
+            if (validProgram(data)) valid = true;
         }
-        return false;
+        return std::pair<bool, bool>{present, valid};
     };
     // Inspect both wrapper and descendant descriptors for embedded /FontFile* and /ToUnicode
     // streams.
-    bool hasProgram = readableProgram(descriptor) || readableProgram(targetDescriptor);
+    auto wrapperProgram = programState(descriptor);
+    auto descendantProgram = programState(targetDescriptor);
+    bool hasProgram = wrapperProgram.first || descendantProgram.first;
+    bool programValid = wrapperProgram.second || descendantProgram.second;
     auto toUnicodeData = tryReadStream(font.getKey("/ToUnicode"));
     bool hasToUnicode = toUnicodeData && toUnicodeData->getSize() > 0;
 
@@ -1019,6 +1003,8 @@ void appendFontInventoryEntryJson(FontInventoryEntry const& entry, std::string& 
     json += boolJson(descriptor.isDictionary() || targetDescriptor.isDictionary());
     json += ",\"program\":";
     json += boolJson(hasProgram);
+    json += ",\"programValid\":";
+    json += boolJson(programValid);
     json += ",\"cid\":";
     json += boolJson(cid);
     json += ",\"toUnicode\":";
@@ -1118,7 +1104,8 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_pdfa_part(const uint8_t* input, int64_t inpu
                                 static_cast<size_t>(inputLen));
         auto metadata = qpdf->getRoot().getKey("/Metadata");
         if (!metadata.isStream()) return 0;
-        auto data = metadata.getStreamData(qpdf_dl_generalized);
+        auto data = jpdfium::qpdf_detail::readStreamBufferBounded(metadata, qpdf_dl_generalized,
+                                                                  size_t{8} * 1024U * 1024U);
         if (!data || !data->getSize()) return 0;
         std::string_view xmp(reinterpret_cast<char const*>(data->getBuffer()), data->getSize());
         // Claim markers mirror the JVM-side PDFA_MARKERS: an actual

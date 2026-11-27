@@ -241,7 +241,9 @@ marked content stay as they were and cost grows linearly with page count:
 - DeviceRGB vector colours, images (including soft-masked and lossless ones),
   Indexed lookups and Separation/DeviceN alternates become output-intent CMYK.
   PDF/X-1a also converts ICCBased, CalRGB, CalGray and Lab.
-- Neutral vector colours become K only (`neutralsToBlack`, on by default).
+- Neutral vector colours become K only (`neutralsToBlack`, on by default). Disabling it
+  emits a conventional 60/40/40/100 rich black instead of relying on the compact profile's
+  strong GCR; see `docs/pdfx-colour-profile.md`.
 - Lossless images stay lossless; JPEG sources are re-encoded as CMYK JPEG.
 - Printable annotations are flattened and JavaScript is removed.
 - Fonts used without an embedded program are embedded with

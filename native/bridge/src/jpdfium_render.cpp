@@ -94,7 +94,7 @@ inline int bitmapFormatForRenderer() {
 }
 
 #ifdef JPDFIUM_HAS_SKIA
-static const auto kUnpremulTable = [] {
+static const auto kUnpremulTable = []() noexcept {
     std::array<std::array<uint8_t, 256>, 256> table{};
     for (uint32_t a = 1; a < 256; ++a) {
         for (uint32_t v = 0; v <= a; ++v) {
@@ -109,8 +109,8 @@ static const auto kUnpremulTable = [] {
 
 inline void bgraToRgbaInPlace(uint8_t* __restrict buf, int w, int h, int stride) {
     if (stride == w * 4) {
-        int total = w * h;
-        int i = 0;
+        size_t total = static_cast<size_t>(w) * static_cast<size_t>(h);
+        size_t i = 0;
 #if defined(__ARM_NEON) || defined(__aarch64__)
         for (; i + 16 <= total; i += 16) {
             uint8x16x4_t pixels = vld4q_u8(buf + i * 4);
@@ -141,11 +141,12 @@ inline void bgraToRgbaInPlace(uint8_t* __restrict buf, int w, int h, int stride)
     for (int row = 0; row < h; ++row) {
         uint8_t* r = buf + static_cast<std::ptrdiff_t>(row) * stride;
         for (int col = 0; col < w; ++col) {
+            const size_t off = static_cast<size_t>(col) * 4;
             uint32_t px = 0;
-            std::memcpy(&px, r + col * 4, sizeof(px));
+            std::memcpy(&px, r + off, sizeof(px));
             uint32_t swapped =
                 (px & 0xFF00FF00u) | ((px & 0x00FF0000u) >> 16) | ((px & 0x000000FFu) << 16);
-            std::memcpy(r + col * 4, &swapped, sizeof(swapped));
+            std::memcpy(r + off, &swapped, sizeof(swapped));
         }
     }
 }
@@ -238,14 +239,17 @@ struct ProgressiveState {
 // completing in a single Start call. The deadline is armed before each
 // Start/Continue; the callback pauses once the budget is exceeded. A set
 // cancel flag pauses immediately so cancellation is observed promptly.
-static thread_local std::chrono::steady_clock::time_point g_pauseDeadline{};
+static thread_local int64_t g_pauseDeadlineNs = 0;
 static constexpr std::chrono::milliseconds kProgressiveSliceBudget{8};
 
 static FPDF_BOOL NeedToPauseNowCallback(IFSDK_PAUSE* pause) {
     if (!pause || !pause->user) return 0;
     const auto* cancel = static_cast<const int32_t*>(pause->user);
     if (*cancel != 0) return 1;
-    return std::chrono::steady_clock::now() >= g_pauseDeadline ? 1 : 0;
+    const auto nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                           std::chrono::steady_clock::now().time_since_epoch())
+                           .count();
+    return nowNs >= g_pauseDeadlineNs ? 1 : 0;
 }
 
 static bool isCancelRequested(const void* cancel_flag) {
@@ -491,7 +495,10 @@ int32_t jpdfium_render_page_progressive_start(void* fpdf_page, uint8_t* target,
     state.pause.NeedToPauseNow = NeedToPauseNowCallback;
     state.pause.user = cancel_flag;
 
-    g_pauseDeadline = std::chrono::steady_clock::now() + kProgressiveSliceBudget;
+    g_pauseDeadlineNs =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            (std::chrono::steady_clock::now() + kProgressiveSliceBudget).time_since_epoch())
+            .count();
     int status =
         FPDF_RenderPageBitmap_Start(bmp, page, 0, 0, width, height, 0, pdfium_flags, &state.pause);
     if (status == FPDF_RENDER_TOBECONTINUED || status == FPDF_RENDER_READY) {
@@ -540,7 +547,7 @@ int32_t jpdfium_render_page_progressive_continue(void* fpdf_page,
             std::lock_guard<std::mutex> lock(g_progLock);
             g_progMap.erase(fpdf_page);
         } catch (...) {
-            // Map erase cannot usefully fail here; teardown continues below.
+            std::fputs("jpdfium_render: progressive cancel map cleanup failed\n", stderr);
         }
         FPDF_PAGE page = static_cast<FPDF_PAGE>(fpdf_page);
         FPDF_RenderPage_Close(page);
@@ -549,7 +556,10 @@ int32_t jpdfium_render_page_progressive_continue(void* fpdf_page,
     }
     state.pause.user = cancel_flag;
     FPDF_PAGE page = static_cast<FPDF_PAGE>(fpdf_page);
-    g_pauseDeadline = std::chrono::steady_clock::now() + kProgressiveSliceBudget;
+    g_pauseDeadlineNs =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            (std::chrono::steady_clock::now() + kProgressiveSliceBudget).time_since_epoch())
+            .count();
     int status = FPDF_RenderPage_Continue(page, &state.pause);
     if (status == FPDF_RENDER_TOBECONTINUED || status == FPDF_RENDER_READY) {
         return JPDFIUM_RENDER_TOBECONTINUED;
@@ -559,7 +569,7 @@ int32_t jpdfium_render_page_progressive_continue(void* fpdf_page,
         std::lock_guard<std::mutex> lock(g_progLock);
         g_progMap.erase(fpdf_page);
     } catch (...) {
-        // Best-effort erase on the terminal path; Close/Destroy still run.
+        std::fputs("jpdfium_render: progressive done map cleanup failed\n", stderr);
     }
     FPDF_RenderPage_Close(page);
     FPDFBitmap_Destroy(state.bmp);
@@ -617,7 +627,7 @@ void jpdfium_render_forget_progressive(void* fpdf_page) noexcept {
             g_progMap.erase(it);
         }
     } catch (...) {
-        // Best-effort cleanup in a noexcept closer.
+        std::fputs("jpdfium_render: progressive forget map cleanup failed\n", stderr);
     }
 }
 
@@ -634,14 +644,14 @@ namespace {
 // the kMaxRenderPixelsInt ceiling (1 GiB at 4 bytes per pixel). This bounds one
 // document, not the process: a trim or process-level budget would be the lever
 // for many open documents.
-constexpr size_t kRetainRasterFrameBytes = 32u * 1024u * 1024u;
+constexpr size_t kRetainRasterFrameBytes = size_t{32} * 1024u * 1024u;
 
 #ifdef JPDFIUM_HAS_TURBOJPEG
 // Optional JPEG quality for the raster embed, latched from the environment.
 int flattenJpegQuality() {
     static const int quality = []() {
         const char* value = getenv("JPDFIUM_FLATTEN_JPEG_QUALITY");
-        return value ? atoi(value) : 0;
+        return value ? static_cast<int>(std::strtol(value, nullptr, 10)) : 0;
     }();
     return quality;
 }
@@ -772,8 +782,7 @@ int32_t prepare_replacement_page(DocWrapper* dw, int32_t insertAt, UniquePage& p
         FS_MATRIX matrix = {static_cast<float>(w_pt), 0, 0, static_cast<float>(h_pt), 0, 0};
         FPDFPageObj_SetMatrix(imgObj.get(), &matrix);
 
-        FPDFPage_InsertObject(newPage.get(), imgObj.get());
-        imgObj.release();  // the page owns it now
+        FPDFPage_InsertObject(newPage.get(), imgObj.release());  // the page owns it now
         if (!FPDFPage_GenerateContent(newPage.get())) return JPDFIUM_ERR_NATIVE;
         // A generated replacement page must carry the image object; PDFium drops
         // an image it cannot stream, so never import a content-less page.
@@ -901,9 +910,9 @@ int32_t jpdfium_doc_flatten_to_images(int64_t docHandle, int32_t dpi) noexcept {
 
 namespace {
 struct JpegMemAccess {
-    FPDF_FILEACCESS fa;
-    const uint8_t* data;
-    size_t size;
+    FPDF_FILEACCESS fa{};
+    const uint8_t* data = nullptr;
+    size_t size = 0;
 };
 
 int jpegMemGetBlock(void* param, unsigned long position, unsigned char* pBuf, unsigned long size) {
@@ -978,8 +987,7 @@ int32_t jpdfium_page_replace_with_jpeg(int64_t docHandle, int32_t pageIndex,
         FS_MATRIX matrix = {wPt, 0, 0, hPt, 0, 0};
         FPDFPageObj_SetMatrix(imgObj.get(), &matrix);
 
-        FPDFPage_InsertObject(newPage.get(), imgObj.get());
-        imgObj.release();
+        FPDFPage_InsertObject(newPage.get(), imgObj.release());
         if (!FPDFPage_GenerateContent(newPage.get())) return JPDFIUM_ERR_NATIVE;
         newPage.reset();
 

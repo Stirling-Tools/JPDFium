@@ -1,10 +1,14 @@
 package stirling.software.jpdfium.doc;
 
+import stirling.software.jpdfium.PdfDocument;
+import stirling.software.jpdfium.panama.NativeRuntime;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.StringReader;
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.CharacterCodingException;
@@ -21,6 +25,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -36,7 +41,11 @@ import java.util.stream.Stream;
 import org.tukaani.xz.XZInputStream;
 
 import stirling.software.jpdfium.exception.JPDFiumException;
+import stirling.software.jpdfium.panama.FontLib;
 import stirling.software.jpdfium.panama.QpdfLib;
+import stirling.software.jpdfium.text.PageText;
+import stirling.software.jpdfium.text.PdfTextExtractor;
+import stirling.software.jpdfium.text.TextChar;
 
 /**
  * Embed font programs into a PDF in one qpdf rewrite.
@@ -74,8 +83,20 @@ public final class PdfFontEmbedder {
      */
     public record Result(
             byte[] pdf, List<String> embedded, List<String> unresolved, List<FontStatus> statuses) {
+        public Result {
+            pdf = pdf == null ? new byte[0] : pdf.clone();
+            embedded = embedded == null ? List.of() : List.copyOf(embedded);
+            unresolved = unresolved == null ? List.of() : List.copyOf(unresolved);
+            statuses = statuses == null ? List.of() : List.copyOf(statuses);
+        }
+
         public Result(byte[] pdf, List<String> embedded, List<String> unresolved) {
             this(pdf, embedded, unresolved, List.of());
+        }
+
+        @Override
+        public byte[] pdf() {
+            return pdf.clone();
         }
 
         /**
@@ -99,7 +120,12 @@ public final class PdfFontEmbedder {
             String baseName, String source, int fsType, boolean resolved, String reason) {}
 
     /** Outcome of the file-backed embedding pass. */
-    public record FileResult(List<String> embedded, List<String> unresolved) {}
+    public record FileResult(List<String> embedded, List<String> unresolved) {
+        public FileResult {
+            embedded = embedded == null ? List.of() : List.copyOf(embedded);
+            unresolved = unresolved == null ? List.of() : List.copyOf(unresolved);
+        }
+    }
 
     record Face(
             Path path,
@@ -284,25 +310,54 @@ public final class PdfFontEmbedder {
      * signed documents can have missing fonts embedded.
      */
     public static Result embedMissing(byte[] pdf, boolean stripSignatures, Path... fontDirs) throws IOException {
+        return embedMissingCore(pdf, stripSignatures, false, fontDirs);
+    }
+
+    private static Result embedMissingCore(
+            byte[] pdf, boolean stripSignatures, boolean includeInvisibleText, Path... fontDirs)
+            throws IOException {
         if (pdf == null || pdf.length == 0) {
             return new Result(pdf == null ? new byte[0] : pdf, List.of(), List.of(), List.of());
         }
-        List<PdfFontAuditor.FontResource> resources = PdfFontAuditor.unembeddedResources(pdf);
-        Set<String> names = new LinkedHashSet<>();
+        PdfFontAuditor.FontInventorySnapshot before = PdfFontAuditor.inspectInventory(pdf);
+        List<PdfFontAuditor.FontResource> resources = before.unembeddedResources();
+        Set<String> corrupt = new LinkedHashSet<>(before.corruptEmbeddedKeys());
+        Set<String> names = new LinkedHashSet<>(corrupt);
+        Set<String> resourceOnly = new HashSet<>();
         Map<String, String> blockers = new HashMap<>();
         for (PdfFontAuditor.FontResource resource : resources) {
             names.add(resource.baseName());
+            if (resource.resourceOnly()) resourceOnly.add(resource.baseName());
             String blocker = substitutionBlocker(resource);
             if (blocker != null) blockers.putIfAbsent(resource.baseName(), blocker);
         }
         List<String> missing = List.copyOf(names);
         if (missing.isEmpty()) return new Result(pdf, List.of(), List.of(), List.of());
+        Set<String> visibleFonts = null;
+        Map<String, Set<Integer>> usedCodepoints = Map.of();
+        try (PdfDocument doc = PdfDocument.open(pdf)) {
+            visibleFonts = PdfFontAuditor.visibleFontKeys(doc);
+            usedCodepoints = usedCodepoints(doc);
+        } catch (Exception _) {
+            // If the document cannot be walked, do not suppress any font.
+        }
         Map<String, Face> bundled = fontDirs.length == 0 ? bundledFaces() : null;
         Map<String, Face> index = null;
         Map<String, byte[]> found = new LinkedHashMap<>();
+        Map<String, byte[]> corruptFound = new LinkedHashMap<>();
         Map<Face, byte[]> operationPrograms = new HashMap<>();
         List<FontStatus> statuses = new ArrayList<>(missing.size());
         for (String name : missing) {
+            // Best-effort embedding may skip fonts whose text is entirely invisible
+            // (render mode 3). The strict path must not: PDF/A-2 6.2.11.5 requires
+            // invisible-text fonts to carry an embedded program too.
+            if (!includeInvisibleText && visibleFonts != null && !visibleFonts.isEmpty()
+                    && !visibleFonts.contains(key(name))
+                    && !resourceOnly.contains(name)) {
+                statuses.add(new FontStatus(name, "", -1, false,
+                        "font is only used in invisible text (Tr 3)"));
+                continue;
+            }
             String blocker = blockers.get(name);
             if (blocker != null) {
                 statuses.add(new FontStatus(name, "", -1, false, blocker));
@@ -326,6 +381,12 @@ public final class PdfFontEmbedder {
                 if (index == null) index = indexFor(fontDirs);
                 face = resolveName(index, name);
             }
+            if (face == null && bundled != null) {
+                Face bundledAlt = restrictedName(bundled, name);
+                if (bundledAlt != null && bundledAlt.embeddable()) {
+                    face = bundledAlt;
+                }
+            }
             if (face == null) {
                 if (index == null) index = indexFor(fontDirs);
                 Face restricted = restrictedName(index, name);
@@ -336,16 +397,50 @@ public final class PdfFontEmbedder {
                 continue;
             }
             byte[] data = program(face, operationPrograms);
+            Set<Integer> needed = usedCodepoints.get(key);
+            if (needed != null && !needed.isEmpty()) {
+                int[] cps = needed.stream().mapToInt(Integer::intValue).toArray();
+                boolean[] covered;
+                try {
+                    covered = FontLib.coversText(data, cps);
+                } catch (Throwable t) {
+                    NativeRuntime.rethrowFatal(t);
+                    covered = null;
+                }
+                if (covered != null) {
+                    for (int i = 0; i < covered.length; i++) {
+                        if (!covered[i]) {
+                            statuses.add(new FontStatus(name, source(face), face.fsType(), false,
+                                    "candidate font does not cover used codepoint U+"
+                                            + Integer.toHexString(cps[i]).toUpperCase()));
+                            data = null;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (data == null) continue;
             int fsType = programFsType(face, data);
             if (!embeddableProgram(fsType)) {
                 statuses.add(new FontStatus(name, source(face), fsType, false,
                         "embedding restricted by fsType " + fsType));
                 continue;
             }
-            found.put(name, singleFace(data, name));
+            if (corrupt.contains(name)) {
+                corruptFound.put(name, singleFace(data, name));
+            } else {
+                found.put(name, singleFace(data, name));
+            }
             statuses.add(new FontStatus(name, source(face), fsType, true, "embedded"));
         }
-        byte[] out = found.isEmpty() ? null : QpdfLib.embedFonts(pdf, found, true, stripSignatures);
+        byte[] out = pdf;
+        if (!found.isEmpty()) {
+            out = QpdfLib.embedFonts(out, found, true, stripSignatures);
+        }
+        if (out != null && !corruptFound.isEmpty()) {
+            out = QpdfLib.embedFonts(out, corruptFound, false, stripSignatures);
+        }
+        if (found.isEmpty() && corruptFound.isEmpty()) out = null;
         if (out == null) {
             List<FontStatus> failed = new ArrayList<>(statuses.size());
             for (FontStatus status : statuses) {
@@ -356,16 +451,22 @@ public final class PdfFontEmbedder {
             }
             return new Result(pdf, List.of(), missing, failed);
         }
-        List<String> unresolved = PdfFontAuditor.unembeddedNames(out);
+        PdfFontAuditor.FontInventorySnapshot after = PdfFontAuditor.inspectInventory(out);
+        Set<String> remaining = new LinkedHashSet<>(after.unembeddedNames());
+        remaining.addAll(after.corruptEmbeddedKeys());
         List<FontStatus> finalStatuses = new ArrayList<>(statuses.size());
         for (FontStatus status : statuses) {
-            finalStatuses.add(status.resolved() && unresolved.contains(status.baseName())
+            finalStatuses.add(status.resolved()
+                            && (remaining.contains(status.baseName()))
                     ? new FontStatus(status.baseName(), status.source(), status.fsType(), false,
                             "native embedder left the font unchanged (glyph order or width coverage)")
                     : status);
         }
-        return new Result(out, missing.stream().filter(n -> !unresolved.contains(n)).toList(),
-                unresolved, finalStatuses);
+        return new Result(out,
+                missing.stream()
+                        .filter(n -> !remaining.contains(n))
+                        .toList(),
+                List.copyOf(remaining), finalStatuses);
     }
 
     /**
@@ -380,14 +481,16 @@ public final class PdfFontEmbedder {
 
     /**
      * Embed missing fonts, optionally stripping signatures, and reject any result that still has
-     * an unembedded font.
+     * an unembedded font. Fonts used only by invisible text (render mode 3) are embedded too:
+     * PDF/A-2 6.2.11.5 requires them to carry a font program, so the strict path never skips
+     * them the way the best-effort {@link #embedMissing(byte[], boolean, Path...)} entry does.
      */
     public static Result embedMissingStrict(byte[] pdf, boolean stripSignatures, Path... fontDirs) throws IOException {
         if (!QpdfLib.isFontInventorySupported()) {
             throw new JPDFiumException(
                     "strict font embedding requires the native font inventory");
         }
-        return embedMissing(pdf, stripSignatures, fontDirs).requireAllEmbedded();
+        return embedMissingCore(pdf, stripSignatures, true, fontDirs).requireAllEmbedded();
     }
 
     /**
@@ -499,11 +602,23 @@ public final class PdfFontEmbedder {
                         "embedding restricted by fsType " + restricted.fsType());
     }
 
+    private static List<Path> configuredFontDirs() {
+        List<Path> dirs = new ArrayList<>(SYSTEM_FONT_DIRS);
+        String extra = System.getProperty("jpdfium.font.path");
+        if (extra == null || extra.isBlank()) extra = System.getenv("JPDFIUM_FONT_PATH");
+        if (extra != null) {
+            for (String part : extra.split(Pattern.quote(java.io.File.pathSeparator))) {
+                if (!part.isBlank()) dirs.add(Path.of(part));
+            }
+        }
+        return List.copyOf(dirs);
+    }
+
     private static Map<String, Face> indexFor(Path... fontDirs) {
         // An empty key selects the default index, which puts the bundled pack
-        // ahead of system fonts. Passing SYSTEM_FONT_DIRS here would make the
-        // default index look like a caller-supplied directory list and let a
-        // system face shadow the deterministic bundled fallback.
+        // ahead of system fonts. Passing the directory list here would make the
+        // default index look like a caller-supplied list and let a system face
+        // shadow the deterministic bundled fallback.
         List<Path> dirs = fontDirs.length == 0 ? List.of() : List.of(fontDirs);
         Map<String, Face> index = INDEXES.computeIfAbsent(dirs, PdfFontEmbedder::index);
         if (fontDirs.length == 0) return index;
@@ -532,15 +647,24 @@ public final class PdfFontEmbedder {
         Map<String, String> blockers = new HashMap<>();
         for (PdfFontAuditor.FontResource resource : resources) {
             String blocker = substitutionBlocker(resource);
-            if (blocker != null) blockers.putIfAbsent(resource.baseName(), blocker);        }
+            if (blocker != null) blockers.putIfAbsent(resource.baseName(), blocker);
+        }
         List<String> allMissing = resources.stream()
                 .map(PdfFontAuditor.FontResource::baseName)
                 .distinct()
                 .toList();
+        if (allMissing.isEmpty()) {
+            if (!Files.exists(output) || !Files.isSameFile(input, output)) {
+                Files.copy(input, output, StandardCopyOption.REPLACE_EXISTING);
+            }
+            return new FileResult(List.of(), List.of());
+        }
         Map<String, byte[]> found = programsFor(allMissing, blockers, fontDirs);
         if (found.isEmpty()
                 || !QpdfLib.embedFontsToFile(input, output, found, true, stripSignatures)) {
-            Files.copy(input, output, StandardCopyOption.REPLACE_EXISTING);
+            if (!Files.exists(output) || !Files.isSameFile(input, output)) {
+                Files.copy(input, output, StandardCopyOption.REPLACE_EXISTING);
+            }
             return new FileResult(List.of(), allMissing);
         }
         List<String> unresolved = nonEmbedded(output);
@@ -653,7 +777,6 @@ public final class PdfFontEmbedder {
         }
         StringBuilder normalized = new StringBuilder(end - start);
         for (int i = start; i < end; ) {
-            char c = name.charAt(i);
             if (name.regionMatches(true, i, "PS", 0, 2)
                     && (i + 2 == end || name.charAt(i + 2) == '-'
                             || (i + 4 == end && name.regionMatches(true, i + 2, "MT", 0, 2)))) {
@@ -680,6 +803,36 @@ public final class PdfFontEmbedder {
         return false;
     }
 
+    private static Map<String, Set<Integer>> usedCodepoints(PdfDocument doc) {
+        Map<String, Set<Integer>> result = new HashMap<>();
+        try {
+            for (PageText page : PdfTextExtractor.extractAll(doc)) {
+                for (TextChar ch : page.chars()) {
+                    if (ch.unicode() <= 0 || ch.fontName() == null || ch.fontName().isEmpty()) {
+                        continue;
+                    }
+                    // PDFium reports raw character codes for glyphs without a
+                    // Unicode mapping and U+FFFD when a ToUnicode entry is
+                    // missing entirely. Requiring a substitute to "cover" those
+                    // would reject every candidate (no fallback font carries a
+                    // C0/C1 control glyph), so control characters and the
+                    // replacement marker are excluded from the required set.
+                    // The original font never renders them through a real glyph
+                    // mapping either, so dropping them cannot change the text.
+                    if (ch.unicode() <= 0x1F || (ch.unicode() >= 0x7F && ch.unicode() <= 0x9F)
+                            || ch.unicode() == 0xFFFD) {
+                        continue;
+                    }
+                    result.computeIfAbsent(key(ch.fontName()), k -> new HashSet<>())
+                            .add(ch.unicode());
+                }
+            }
+        } catch (Exception _) {
+            return Map.of();
+        }
+        return result;
+    }
+
     private static Face resolve(Map<String, Face> index, String key) {
         return lookup(index, key, true);
     }
@@ -698,6 +851,10 @@ public final class PdfFontEmbedder {
 
     private static Face lookupFallback(Map<String, Face> index, String key, boolean embeddableOnly) {
         if (key.isEmpty()) return null;
+        for (String candidate : scriptFallbackKeys(key)) {
+            Face face = index.get(candidate);
+            if (face != null && (!embeddableOnly || face.embeddable())) return face;
+        }
         for (String hint : CJK_FAMILY_HINTS) {
             if (key.contains(hint)) {
                 Face cjk = index.get("notosansscregular");
@@ -730,6 +887,45 @@ public final class PdfFontEmbedder {
         return null;
     }
 
+    /**
+     * Candidate family keys for CJK and world-script fallbacks, in preference
+     * order. A Japanese mincho/gothic face should not silently become a
+     * Simplified-Chinese face when a script-specific face is installed.
+     */
+    static List<String> scriptFallbackKeys(String key) {
+        if (key.isEmpty()) return List.of();
+        List<String> keys = new ArrayList<>();
+        boolean jp = containsAny(key, "mincho", "gothic", "heisei", "koz", "ryumin", "msgothic",
+                "msmincho", "hiragino", "futogo", "shin", "toppan", "ipa");
+        boolean kr = containsAny(key, "batang", "gulim", "dotum", "gungsuh", "nanum", "malgun",
+                "baekmuk", "myeongjo", "haansoft");
+        boolean tc = containsAny(key, "mingliu", "pmingliu", "msung", "dfkai", "lihei",
+                "pingfangtc", "microsoftjhenghei", "jhenghei");
+        boolean sc = containsAny(key, "simsun", "simhei", "fangsong", "stsong", "yahei", "songti",
+                "kaiti", "pingfangsc", "microsoftyahei", "notosanssc");
+        // Korean/Chinese family names often contain "gothic"/"song"; check
+        // those scripts before the generic Japanese hint.
+        if (kr) {
+            keys.addAll(List.of("applegothic", "notosanskr"));
+        } else if (tc) {
+            keys.addAll(List.of("pingfangtc", "notosanstc"));
+        } else if (sc) {
+            keys.addAll(List.of("pingfangsc", "notosanssc"));
+        } else if (jp) {
+            if (containsAny(key, "mincho", "kozmin", "ryumin", "toppan")) keys.add("hiraginomincho");
+            keys.addAll(List.of("hiraginosans", "hiraginokakugothicpro", "notosansjp"));
+        }
+        if (sc) keys.add("notosanssc");
+        return keys;
+    }
+
+    private static boolean containsAny(String key, String... needles) {
+        for (String needle : needles) {
+            if (key.contains(needle)) return true;
+        }
+        return false;
+    }
+
     private static String styleOf(String suffix) {
         boolean bold = suffix.contains("bold") || suffix.contains("medi") || suffix.contains("black")
                 || suffix.contains("demi");
@@ -755,7 +951,7 @@ public final class PdfFontEmbedder {
         boolean bundledFirst = dirs.isEmpty();
         Map<String, Face> index = new HashMap<>();
         if (bundledFirst) index.putAll(bundledFaces());
-        for (Path dir : bundledFirst ? SYSTEM_FONT_DIRS : dirs) {
+        for (Path dir : bundledFirst ? configuredFontDirs() : dirs) {
             if (!Files.isDirectory(dir)) continue;
             List<Path> files = new ArrayList<>();
             try {
@@ -765,7 +961,9 @@ public final class PdfFontEmbedder {
                             @Override
                             public FileVisitResult visitFile(
                                     Path file, BasicFileAttributes attrs) {
-                                String name = file.getFileName().toString().toLowerCase(Locale.ROOT);
+                                Path fileName = file.getFileName();
+                                if (fileName == null) return FileVisitResult.CONTINUE;
+                                String name = fileName.toString().toLowerCase(Locale.ROOT);
                                 if ((attrs.isRegularFile()
                                                 || (attrs.isSymbolicLink()
                                                     && Files.isRegularFile(file)))
@@ -853,11 +1051,16 @@ public final class PdfFontEmbedder {
     }
 
     private static void indexFile(Path path, Map<String, Face> index) {
-        try (FileChannel channel = FileChannel.open(path)) {
+        try (FileChannel channel = FileChannel.open(path);
+                Arena arena = Arena.ofConfined()) {
             BasicFileAttributes attrs = Files.readAttributes(path, BasicFileAttributes.class);
             long size = attrs.size();
+            if (size <= 0 || size > MAX_PROGRAM_BYTES) {
+                return;
+            }
             long mtime = attrs.lastModifiedTime().toMillis();
-            ByteBuffer b = channel.map(FileChannel.MapMode.READ_ONLY, 0, channel.size());
+            MemorySegment mapped = channel.map(FileChannel.MapMode.READ_ONLY, 0, size, arena);
+            ByteBuffer b = mapped.asByteBuffer();
             if (b.getShort(0) == (short) 0x8001 || b.get(0) == '%') {
                 byte[] head = new byte[Math.min(b.capacity(), 8192)];
                 b.get(0, head);
@@ -900,7 +1103,8 @@ public final class PdfFontEmbedder {
     }
 
     private static int fsType(ByteBuffer b, int face) {
-        for (int i = 0, n = b.getShort(face + 4) & 0xFFFF; i < n; i++) {
+        int n = b.getShort(face + 4) & 0xFFFF;
+        for (int i = 0; i < n; i++) {
             int record = face + 12 + 16 * i;
             if (b.getInt(record) == 0x4F532F32) {
                 int tableOffset = b.getInt(record + 8);
@@ -913,12 +1117,14 @@ public final class PdfFontEmbedder {
 
     private static List<String> names(ByteBuffer b, int face) {
         List<String> names = new ArrayList<>();
-        for (int i = 0, n = b.getShort(face + 4) & 0xFFFF; i < n; i++) {
+        int n = b.getShort(face + 4) & 0xFFFF;
+        for (int i = 0; i < n; i++) {
             int record = face + 12 + 16 * i;
             if (b.getInt(record) != 0x6E616D65) continue;
             int table = b.getInt(record + 8);
             int strings = table + (b.getShort(table + 4) & 0xFFFF);
-            for (int j = 0, count = b.getShort(table + 2) & 0xFFFF; j < count; j++) {
+            int count = b.getShort(table + 2) & 0xFFFF;
+            for (int j = 0; j < count; j++) {
                 int q = table + 6 + 12 * j;
                 int platform = b.getShort(q) & 0xFFFF;
                 int id = b.getShort(q + 6);
@@ -980,6 +1186,10 @@ public final class PdfFontEmbedder {
         Face key = face;
         if (face.resource() == null) {
             long size = Files.size(face.path());
+            if (size > MAX_PROGRAM_BYTES) {
+                throw new IOException(
+                        "font file exceeds " + MAX_PROGRAM_BYTES + " bytes: " + face.path());
+            }
             long mtime = Files.getLastModifiedTime(face.path()).toMillis();
             if (size != face.size() || mtime != face.mtime()) {
                 key = new Face(
@@ -1081,8 +1291,8 @@ public final class PdfFontEmbedder {
 
     private static boolean isSymbolicName(String name) {
         String n = name.toLowerCase(Locale.ROOT).replaceFirst("^[a-z]{6}\\+", "");
-        return n.equals("symbol") || n.equals("zapfdingbats") || n.startsWith("symbol,")
-                || n.startsWith("zapfdingbats,") || n.equals("dingbats") || n.startsWith("dingbats,");
+        return "symbol".equals(n) || "zapfdingbats".equals(n) || n.startsWith("symbol,")
+                || n.startsWith("zapfdingbats,") || "dingbats".equals(n) || n.startsWith("dingbats,");
     }
 
     private static byte[] sanitizeSymbolicTrueType(byte[] fontData) {
@@ -1206,7 +1416,8 @@ public final class PdfFontEmbedder {
             throw new IllegalArgumentException("font face is unreasonably large: " + size);
         }
         ByteBuffer out = ByteBuffer.allocate((int) size).put(0, collection, face, header);
-        for (int i = 0, pos = header; i < tables; i++) {
+        int pos = header;
+        for (int i = 0; i < tables; i++) {
             int record = 12 + 16 * i;
             int offset = in.getInt(face + record + 8);
             int length = in.getInt(face + record + 12);

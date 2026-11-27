@@ -93,9 +93,9 @@ class SaveTransportTest {
         }
         byte[] viaChannel = baos.toByteArray();
         assertTrue(viaChannel.length > 0);
-        // Byte-identical: both paths serialize the same untouched document, so
-        // equal length alone would let a corrupt payload of the same size pass.
-        assertArrayEquals(expected, viaChannel,
+        // Byte-identical outside ISO 32000-1 §14.4 volatile trailer /ID (minimal.pdf has no
+        // prior /ID, so PDFium synthesizes fresh hex pair strings on every save).
+        PdfTestAssertions.assertBytesEqualExceptGeneratedTrailerIds(expected, viaChannel,
                 "channel spool must carry the same bytes as saveBytes for minimal.pdf");
     }
 

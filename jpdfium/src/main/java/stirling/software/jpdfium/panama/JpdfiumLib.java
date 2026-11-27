@@ -18,7 +18,6 @@ import stirling.software.jpdfium.model.SaveOptions;
 import java.io.IOException;
 import java.lang.foreign.Arena;
 import java.lang.foreign.FunctionDescriptor;
-import java.lang.foreign.Linker;
 import java.lang.foreign.MemorySegment;
 import java.lang.invoke.MethodHandle;
 import java.nio.ByteBuffer;
@@ -155,19 +154,19 @@ public final class JpdfiumLib {
     }
 
     /** Expected bridge ABI version (mirrors {@code JPDFIUM_ABI_VERSION}). */
-    public static final int EXPECTED_ABI_VERSION = 3;
+    public static final int EXPECTED_ABI_VERSION = NativeAbiCheck.EXPECTED_ABI_VERSION;
     /** Expected native pointer width: all supported targets are 64-bit. */
-    public static final long EXPECTED_PTR_SIZE = 8;
+    public static final long EXPECTED_PTR_SIZE = NativeAbiCheck.EXPECTED_PTR_SIZE;
     /** Expected {@code sizeof(FS_RECTF)}: four floats, no padding. */
-    public static final long EXPECTED_RECTF_SIZE = 16;
+    public static final long EXPECTED_RECTF_SIZE = NativeAbiCheck.EXPECTED_RECTF_SIZE;
     /** Expected {@code offsetof(FS_RECTF, right)}. */
-    public static final long EXPECTED_RECTF_RIGHT_OFFSET = 8;
+    public static final long EXPECTED_RECTF_RIGHT_OFFSET = NativeAbiCheck.EXPECTED_RECTF_RIGHT_OFFSET;
     /**
      * Expected {@code sizeof(FPDF_FILEWRITE)}: {@code int version} plus a
      * function pointer (with padding on 64-bit). Must match the
      * {@code FPDF_FILEWRITE_LAYOUT} used for the save-with-version upcall.
      */
-    public static final long EXPECTED_FILEWRITE_SIZE = 16;
+    public static final long EXPECTED_FILEWRITE_SIZE = NativeAbiCheck.EXPECTED_FILEWRITE_SIZE;
     /** Query ids mirroring {@code JPDFIUM_ABI_QUERY_*}. */
     public static final int ABI_Q_PTR_SIZE = 0;
     public static final int ABI_Q_RECTF_SIZE = 1;
@@ -205,12 +204,12 @@ public final class JpdfiumLib {
      * nothing to a constant read.
      */
     static int abiVersionUnguarded() {
-        return JpdfiumH.jpdfium_abi_version();
+        return NativeAbiCheck.abiVersionUnguarded();
     }
 
     /** Unguarded {@link #abiQuery(int)}; see {@link #abiVersionUnguarded()}. */
     static long abiQueryUnguarded(int query) {
-        return JpdfiumH.jpdfium_abi_query(query);
+        return NativeAbiCheck.abiQueryUnguarded(query);
     }
 
     /**
@@ -220,19 +219,13 @@ public final class JpdfiumLib {
      * struct geometry, {@code FPDF_FILEWRITE} version (must be 1 per
      * {@code fpdf_save.h}), and feature/build identity (Skia/QPDF presence).
      *
-     * <p>Called by {@link NativeLoader} during loading, so it uses the
-     * unguarded probes: see {@link #abiVersionUnguarded()} for why acquiring the
-     * execution domain here would be wrong. A mismatch fails before any
-     * document is processed.
+     * <p>Delegates to {@link NativeAbiCheck#verify(String)} so {@link NativeLoader}
+     * can run the same handshake without initializing {@code JpdfiumLib}.
      *
      * @throws JPDFiumException on any mismatch, naming the offending component
      */
     public static void checkAbiCompatible() {
-        checkAbiCompatible(abiVersionUnguarded(), abiQueryUnguarded(0),
-                abiQueryUnguarded(1), abiQueryUnguarded(2), abiQueryUnguarded(3),
-                abiQueryUnguarded(4), abiQueryUnguarded(5), abiQueryUnguarded(6),
-                abiQueryUnguarded(7), abiQueryUnguarded(8), abiQueryUnguarded(9),
-                abiQueryUnguarded(10), abiQueryUnguarded(11));
+        NativeAbiCheck.verify(NativeLoader.detectPlatform());
     }
 
     /**
@@ -256,78 +249,14 @@ public final class JpdfiumLib {
     static void checkAbiCompatible(int version, long ptrSize, long rectfSize, long rightOff,
             long ulongSize, long leftOff, long bottomOff, long topOff, long matrixSize,
             long fileWriteSize, long fileWriteVersion, long hasSkia, long hasQpdf) {
-        if (version != EXPECTED_ABI_VERSION) {
-            throw new JPDFiumException(
-                    "Unsupported native bridge ABI version " + version + " (expected "
-                            + EXPECTED_ABI_VERSION + " on " + NativeLoader.detectPlatform() + ")");
-        }
-        if (ptrSize != EXPECTED_PTR_SIZE) {
-            throw new JPDFiumException("Unsupported native pointer width " + ptrSize + " (expected "
-                    + EXPECTED_PTR_SIZE + " on " + NativeLoader.detectPlatform() + ")");
-        }
-        if (rectfSize != EXPECTED_RECTF_SIZE) {
-            throw new JPDFiumException("Unsupported FS_RECTF size " + rectfSize + " (expected "
-                    + EXPECTED_RECTF_SIZE + " on " + NativeLoader.detectPlatform() + ")");
-        }
-        if (rightOff != EXPECTED_RECTF_RIGHT_OFFSET) {
-            throw new JPDFiumException("Unsupported FS_RECTF.right offset " + rightOff + " (expected "
-                    + EXPECTED_RECTF_RIGHT_OFFSET + " on " + NativeLoader.detectPlatform() + ")");
-        }
-        // Unsigned long is platform-dependent (LP64 vs LLP64): PDFium uses it
-        // in FPDF_FILEACCESS/FPDF_FILEWRITE and signature string lengths. The
-        // probe must equal the host canonical C long width that the Java FFM
-        // mappings assume (see PdfVersionConverter): accepting either width
-        // would pass a bridge whose C layouts disagree with this JVM, and the
-        // callback would then read a truncated or over-wide size on Windows.
-        long expectedUlong = Linker.nativeLinker().canonicalLayouts().get("long").byteSize();
-        if (ulongSize != expectedUlong) {
-            throw new JPDFiumException("Unsupported native unsigned long width " + ulongSize
-                    + " (expected " + expectedUlong + " on " + NativeLoader.detectPlatform() + ")");
-        }
-        if (leftOff != 0) {
-            throw new JPDFiumException("Unsupported FS_RECTF.left offset " + leftOff
-                    + " (expected 0 on " + NativeLoader.detectPlatform() + ")");
-        }
-        if (topOff != 4) {
-            throw new JPDFiumException("Unsupported FS_RECTF.top offset " + topOff
-                    + " (expected 4 on " + NativeLoader.detectPlatform() + ")");
-        }
-        if (bottomOff != 12) {
-            throw new JPDFiumException("Unsupported FS_RECTF.bottom offset " + bottomOff
-                    + " (expected 12 on " + NativeLoader.detectPlatform() + ")");
-        }
-        if (matrixSize != 24) {
-            throw new JPDFiumException("Unsupported FS_MATRIX size " + matrixSize
-                    + " (expected 24 on " + NativeLoader.detectPlatform() + ")");
-        }
-        if (fileWriteVersion != 1) {
-            throw new JPDFiumException("Unsupported FPDF_FILEWRITE version " + fileWriteVersion
-                    + " (expected 1 per fpdf_save.h on " + NativeLoader.detectPlatform() + ")");
-        }
-        if (fileWriteSize != EXPECTED_FILEWRITE_SIZE) {
-            throw new JPDFiumException("Unsupported FPDF_FILEWRITE size " + fileWriteSize
-                    + " (expected " + EXPECTED_FILEWRITE_SIZE + " on "
-                    + NativeLoader.detectPlatform() + ")");
-        }
-        // Feature identity is informational at handshake time (Skia/QPDF
-        // absence surfaces as ERR_NOT_FOUND or renderer fallback at use time),
-        // but unknown probe values (-1) mean an old bridge that predates the
-        // probe and must be rejected.
-        if (hasSkia < 0 || hasSkia > 1 || hasQpdf < 0 || hasQpdf > 1) {
-            throw new JPDFiumException("Unsupported feature-identity probe hasSkia=" + hasSkia
-                    + " hasQpdf=" + hasQpdf + " on " + NativeLoader.detectPlatform()
-                    + " (bridge predates feature probes; rebuild natives)");
-        }
+        NativeAbiCheck.checkAbiCompatible(NativeLoader.detectPlatform(), version, ptrSize,
+                rectfSize, rightOff, ulongSize, leftOff, bottomOff, topOff, matrixSize,
+                fileWriteSize, fileWriteVersion, hasSkia, hasQpdf);
     }
 
     static void checkAbiCompatible(int version, long ptrSize, long rectfSize, long rightOff) {
-        // Backwards-compatible 4-tuple for older tests: expand with live
-        // probes for the remaining fields so old call sites still verify the
-        // full surface.
-        checkAbiCompatible(version, ptrSize, rectfSize, rightOff, abiQueryUnguarded(3),
-                abiQueryUnguarded(4), abiQueryUnguarded(5), abiQueryUnguarded(6),
-                abiQueryUnguarded(7), abiQueryUnguarded(8), abiQueryUnguarded(9),
-                abiQueryUnguarded(10), abiQueryUnguarded(11));
+        NativeAbiCheck.checkAbiCompatible(
+                NativeLoader.detectPlatform(), version, ptrSize, rectfSize, rightOff);
     }
 
     static void check(int rc, String ctx) {
@@ -958,7 +887,15 @@ public final class JpdfiumLib {
         float ph = pageHeight0(page);
         long w = Math.max(1, (long) Math.floor(pw * scale));
         long h = Math.max(1, (long) Math.floor(ph * scale));
-        long pixels = w * h;
+        long pixels;
+        try {
+            pixels = Math.multiplyExact(w, h);
+        } catch (ArithmeticException overflow) {
+            throw new JPDFiumException(String.format(
+                    "refusing to render %dx%d pixels (page %.1fx%.1f pt at %d dpi) - "
+                            + "dimension product overflows",
+                    w, h, pw, ph, dpi), overflow);
+        }
         if (pixels > maxPixels) {
             throw new JPDFiumException(String.format(
                     "refusing to render %dx%d pixels (page %.1fx%.1f pt at %d dpi) - "
@@ -1088,7 +1025,12 @@ public final class JpdfiumLib {
             int w = INT_SCRATCH.get(JAVA_INT, 0);
             int h = INT2_SCRATCH.get(JAVA_INT, 0);
             MemorySegment nativePtr = ADDR_SCRATCH.get(ADDRESS, 0);
-            long byteLen = (long) w * h * 4;
+            long byteLen = (long) w * h * 4L;
+            if (w <= 0 || h <= 0 || byteLen <= 0 || byteLen > Integer.MAX_VALUE - 8) {
+                JpdfiumH.jpdfium_free_buffer(nativePtr);
+                throw new JPDFiumException(
+                        "rendered page exceeds Java byte array limit: " + w + "x" + h);
+            }
             BridgeAlloc.alloc(BridgeAlloc.Tag.RENDER_OUTPUT, byteLen);
             try {
                 byte[] rgba = nativePtr.reinterpret(byteLen).toArray(JAVA_BYTE);
@@ -1117,10 +1059,16 @@ public final class JpdfiumLib {
             int w = INT_SCRATCH.get(JAVA_INT, 0);
             int h = INT2_SCRATCH.get(JAVA_INT, 0);
             MemorySegment nativePtr = ADDR_SCRATCH.get(ADDRESS, 0);
-            long byteLen = (long) w * h * 4;
+            long byteLen = (long) w * h * 4L;
+            if (w <= 0 || h <= 0 || byteLen <= 0 || byteLen > Integer.MAX_VALUE - 8) {
+                JpdfiumH.jpdfium_free_buffer(nativePtr);
+                throw new JPDFiumException(
+                        "rendered page exceeds Java byte array limit: " + w + "x" + h);
+            }
+            int stride = checkedRgbaStride(w);
             MemorySegment pixels = nativePtr.reinterpret(byteLen);
             BridgeAlloc.alloc(BridgeAlloc.Tag.RENDER_OUTPUT, byteLen);
-            return new RenderedPageView(w, h, w * 4, 4, PixelFormat.RGBA_STRAIGHT,
+            return new RenderedPageView(w, h, stride, 4, PixelFormat.RGBA_STRAIGHT,
                     pixels, () -> {
                         JpdfiumH.jpdfium_free_buffer(nativePtr);
                         BridgeAlloc.freed(BridgeAlloc.Tag.RENDER_OUTPUT, byteLen);
@@ -1144,7 +1092,8 @@ public final class JpdfiumLib {
             // first: without a pixel cap a huge page at high dpi would overflow int unchecked.
             long lw = Math.max(1L, (long) Math.floor(pageWidth0(page) * (double) dpi / 72.0));
             long lh = Math.max(1L, (long) Math.floor(pageHeight0(page) * (double) dpi / 72.0));
-            if (lw > Integer.MAX_VALUE / 4 || lw * lh > Integer.MAX_VALUE - 8) {
+            long maxRasterPixels = (Integer.MAX_VALUE - 8L) / 4L;
+            if (lw > maxRasterPixels || lh > maxRasterPixels || lw * lh > maxRasterPixels) {
                 throw new JPDFiumException("render too large: " + lw + "x" + lh);
             }
             int w = (int) lw;

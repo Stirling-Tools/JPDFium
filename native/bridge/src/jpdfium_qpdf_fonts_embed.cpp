@@ -117,10 +117,13 @@ void applyWidths(QPDFObjectHandle& font, QPDFObjectHandle const& widths) {
     font.replaceKey("/Widths", widths);
 }
 
+bool hasInheritedToUnicode(QPDFObjectHandle const& font);
+
 void setToUnicode(QPDF& qpdf, QPDFObjectHandle font, std::map<uint32_t, FT_ULong> const& codes,
                   bool twoByte) {
     if (codes.empty()) return;
-    if (font.hasKey("/ToUnicode") && !parseToUnicode(font).empty()) return;
+    if (font.hasKey("/ToUnicode") && (hasInheritedToUnicode(font) || !parseToUnicode(font).empty()))
+        return;
     std::map<uint32_t, uint32_t> clean;
     for (auto const& [code, u] : codes) {
         if (u > 0 && u <= 0x10FFFFU) clean.emplace(code, static_cast<uint32_t>(u));
@@ -132,7 +135,8 @@ void setToUnicode(QPDF& qpdf, QPDFObjectHandle font, std::map<uint32_t, FT_ULong
 void setCjkToUnicode(QPDF& qpdf, QPDFObjectHandle font, std::map<uint32_t, FT_ULong> const& codes,
                      bool rksj) {
     if (codes.empty()) return;
-    if (font.hasKey("/ToUnicode") && !parseToUnicode(font).empty()) return;
+    if (font.hasKey("/ToUnicode") && (hasInheritedToUnicode(font) || !parseToUnicode(font).empty()))
+        return;
     std::map<uint32_t, uint32_t> clean;
     for (auto const& [code, u] : codes) {
         if (code <= 0xFFFFU && u > 0 && u <= 0x10FFFFU)
@@ -140,6 +144,16 @@ void setCjkToUnicode(QPDF& qpdf, QPDFObjectHandle font, std::map<uint32_t, FT_UL
     }
     std::string cmap = jpdfium::font::buildToUnicodeCmap(clean, true, rksj, !rksj);
     if (!cmap.empty()) font.replaceKey("/ToUnicode", QPDFObjectHandle::newStream(&qpdf, cmap));
+}
+
+// PDFium reports raw control codepoints for glyphs without a usable Unicode
+// mapping, and U+FFFD when a ToUnicode entry is missing entirely (e.g.
+// pdfjs_TAMReview.pdf maps every drawn CID to U+0002). No substitute font
+// carries a real glyph for those, so requiring coverage would decline every
+// candidate. They map to .notdef instead - the same exemption the Java-side
+// usedCodepoints() applies before even choosing a candidate.
+bool nonRenderableScalar(uint32_t scalar) {
+    return !scalar || scalar <= 0x1F || (scalar >= 0x7F && scalar <= 0x9F) || scalar == 0xFFFD;
 }
 
 bool coversWidthCids(QPDFObjectHandle const& font, std::map<uint32_t, uint32_t> const& unicodeByCid,
@@ -161,7 +175,10 @@ bool cidGlyphOrderMatches(FT_Face face, std::map<uint32_t, uint32_t> const& unic
     if (unicodeByCid.empty() || FT_Select_Charmap(face, FT_ENCODING_UNICODE)) return false;
     for (auto const& [cid, unicode] : unicodeByCid) {
         uint32_t scalar = jpdfium::font::decodeUnicodeScalar(unicode);
-        if (!scalar || FT_Get_Char_Index(face, scalar) != cid) return false;
+        // Non-renderable scalars are pinned to .notdef below, so they impose no
+        // glyph-order constraint on the donor.
+        if (nonRenderableScalar(scalar)) continue;
+        if (FT_Get_Char_Index(face, scalar) != cid) return false;
     }
     return true;
 }
@@ -172,7 +189,11 @@ bool mapCidsToGlyphs(FT_Face face, std::map<uint32_t, uint32_t> const& unicodeBy
     if (unicodeByCid.empty() || FT_Select_Charmap(face, FT_ENCODING_UNICODE)) return false;
     for (auto const& [cid, unicode] : unicodeByCid) {
         uint32_t scalar = jpdfium::font::decodeUnicodeScalar(unicode);
-        FT_UInt gid = scalar ? FT_Get_Char_Index(face, scalar) : 0;
+        if (nonRenderableScalar(scalar)) {
+            cidGlyph[cid] = 0;
+            continue;
+        }
+        FT_UInt gid = FT_Get_Char_Index(face, scalar);
         if (!gid) {
             cidGlyph.clear();
             return false;
@@ -526,6 +547,11 @@ void collectEmbedCandidateFonts(QPDF& qpdf, std::vector<QPDFObjectHandle>& fonts
     if (acroForm.isDictionary()) collectFromResources(acroForm.getKey("/DR"));
 }
 
+bool hasInheritedToUnicode(QPDFObjectHandle const& font) {
+    auto toUnicode = font.getKey("/ToUnicode");
+    return toUnicode.isStream() && !toUnicode.getDict().getKey("/UseCMap").isNull();
+}
+
 bool prepareMissingCidMapping(QPDF& qpdf, QPDFObjectHandle& font, QPDFObjectHandle& target,
                               FontProgram const& program, bool indexedUsage,
                               FontUsageIndexes const& usage, FontEmbedJobState& job) {
@@ -541,6 +567,9 @@ bool prepareMissingCidMapping(QPDF& qpdf, QPDFObjectHandle& font, QPDFObjectHand
     bool korea1Ksc = isKscEucCidEncoding(predefinedEnc);
     bool cjkVertical = isVerticalCidEncoding(predefinedEnc);
 
+    // An inherited ToUnicode map can describe CIDs the local stream does not list;
+    // rebuilding a CIDToGIDMap from the local map alone would drop those glyphs.
+    if (hasInheritedToUnicode(font)) return false;
     // Rebuilding /CIDToGIDMap is only safe for Identity CID maps; custom maps stay verbatim.
     if (!job.identityCidMap) return false;
     if (job.predefinedCjk) {
@@ -598,6 +627,12 @@ bool prepareMissingCidMapping(QPDF& qpdf, QPDFObjectHandle& font, QPDFObjectHand
         if (!cidGlyphOrderMatches(program.face, job.cidUnicode)) return false;
         for (auto const& [mappedCid, unicode] : job.cidUnicode) {
             uint32_t scalar = jpdfium::font::decodeUnicodeScalar(unicode);
+            if (nonRenderableScalar(scalar)) {
+                // Control codes and the replacement marker have no glyph in any
+                // donor; pin them to .notdef like the TrueType route does.
+                job.cidGlyph[mappedCid] = 0;
+                continue;
+            }
             if (!scalar) {
                 job.cidGlyph.clear();
                 break;
@@ -662,7 +697,12 @@ void populateEmbeddedFontProgram(QPDF& qpdf, FT_Library lib, QPDFObjectHandle& f
     // Subsetting TrueType CID fonts renumbers retained GIDs, requiring a fresh /CIDToGIDMap.
     std::map<uint32_t, FT_UInt> remappedGlyph;
     std::set<FT_UInt> targetGlyphs;
-    if (cid && glyf && (job.identityEncoding || job.predefinedCjk) && job.identityCidMap) {
+    bool identityCidMap = job.identityCidMap || target.getKey("/CIDToGIDMap").isNull() ||
+                          target.getKey("/CIDToGIDMap").isNameAndEquals("/Identity");
+    bool identityEncoding = job.identityEncoding ||
+                            font.getKey("/Encoding").isNameAndEquals("/Identity-H") ||
+                            font.getKey("/Encoding").isNameAndEquals("/Identity-V");
+    if (cid && glyf && (identityEncoding || job.predefinedCjk) && identityCidMap) {
         std::map<uint32_t, FT_ULong> codes;
         if (job.predefinedCjk && !job.codeUnicode.empty()) {
             for (auto const& [code, unicode] : job.codeUnicode) codes[code] = unicode;
@@ -740,23 +780,21 @@ void populateEmbeddedFontProgram(QPDF& qpdf, FT_Library lib, QPDFObjectHandle& f
 
     if (cid) {
         std::set<uint32_t> activeCids;
-        if (!glyphs.empty()) {
-            std::string mapView;
-            auto map = target.getKey("/CIDToGIDMap");
-            if (map.isStream()) {
-                try {
-                    auto data = map.getStreamData(qpdf_dl_generalized);
-                    if (data) {
-                        mapView.assign(reinterpret_cast<const char*>(data->getBuffer()),
-                                       data->getSize());
-                    }
-                } catch (...) {
-                    mapView.clear();
-                }
+        FT_Face activeFace = program.face;
+        jpdfium::font::FtFaceGuard subGuard;
+        if (!subset.empty()) {
+            FT_Face subFace = nullptr;
+            if (FT_New_Memory_Face(lib, reinterpret_cast<const FT_Byte*>(subset.data()),
+                                   FT_Long(subset.size()), 0, &subFace) == 0 &&
+                subFace) {
+                subGuard.reset(subFace);
+                activeFace = subFace;
+            } else {
+                activeFace = nullptr;
             }
-            activeCids = cidsForRetainedGlyphs(target, mapView, glyphs);
-        } else {
-            activeCids = cidsPresentInProgram(target, program.face);
+        }
+        if (activeFace) {
+            activeCids = cidsPresentInProgram(target, activeFace);
         }
         if (activeCids.empty()) {
             activeCids.insert(0);
@@ -1004,6 +1042,7 @@ int32_t embedFontsExport(const uint8_t* input, int64_t inputLen, int32_t count,
             std::fprintf(stderr, "jpdfium qpdf embed fonts: %s\n", result.error.c_str());
             return result.rc;
         }
+        if (!result.buffer || result.buffer->getSize() == 0) return -1;
         *outputLen = static_cast<int64_t>(result.buffer->getSize());
         *output = static_cast<uint8_t*>(malloc(static_cast<size_t>(*outputLen)));
         if (!*output) {

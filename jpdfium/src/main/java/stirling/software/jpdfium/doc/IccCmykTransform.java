@@ -3,8 +3,13 @@ package stirling.software.jpdfium.doc;
 import java.awt.color.ColorSpace;
 import java.awt.color.ICC_ColorSpace;
 import java.awt.color.ICC_Profile;
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 import stirling.software.jpdfium.exception.JPDFiumException;
 
@@ -31,17 +36,54 @@ final class IccCmykTransform {
     private static final int LUT_LAST = LUT_GRID - 1;
     private static final int LUT_BYTES = LUT_GRID * LUT_GRID * LUT_GRID * 4;
 
+    private static final int MAX_TRANSFORM_CACHE = 8;
+    private static final Object TRANSFORM_CACHE_LOCK = new Object();
+    private static final Map<ProfileKey, IccCmykTransform> TRANSFORM_CACHE =
+            new LinkedHashMap<>(MAX_TRANSFORM_CACHE + 1, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<ProfileKey, IccCmykTransform> eldest) {
+                    return size() > MAX_TRANSFORM_CACHE;
+                }
+            };
+
+    private static final int MAX_SOURCE_CACHE = 4;
     private static final Object SOURCE_CACHE_LOCK = new Object();
-    private static byte[] cachedSourceIcc;
-    private static int cachedSourceComponents;
-    private static ICC_ColorSpace cachedSourceSpace;
+    private static final Map<SourceKey, ICC_ColorSpace> SOURCE_CACHE =
+            new LinkedHashMap<>(MAX_SOURCE_CACHE + 1, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<SourceKey, ICC_ColorSpace> eldest) {
+                    return size() > MAX_SOURCE_CACHE;
+                }
+            };
 
     private final ColorSpace srgb = ColorSpace.getInstance(ColorSpace.CS_sRGB);
     private final ICC_ColorSpace cmyk;
     private final byte[] targetIcc;
     private final byte[] lut = new byte[LUT_BYTES];
+    private final MemorySegment lutSegment;
     private final byte[] neutral = new byte[256 * 4];
-    private final float[] rgb = new float[3];
+
+    /** Return a cached immutable transform for the given 4-component CMYK ICC profile. */
+    static IccCmykTransform cached(byte[] iccProfile) {
+        validateIccStructure(iccProfile);
+        ProfileKey lookup = new ProfileKey(Arrays.hashCode(iccProfile), iccProfile);
+        synchronized (TRANSFORM_CACHE_LOCK) {
+            IccCmykTransform hit = TRANSFORM_CACHE.get(lookup);
+            if (hit != null) {
+                return hit;
+            }
+        }
+        IccCmykTransform created = new IccCmykTransform(iccProfile);
+        ProfileKey stored = new ProfileKey(lookup.hash, iccProfile.clone());
+        synchronized (TRANSFORM_CACHE_LOCK) {
+            IccCmykTransform existing = TRANSFORM_CACHE.get(lookup);
+            if (existing != null) {
+                return existing;
+            }
+            TRANSFORM_CACHE.put(stored, created);
+        }
+        return created;
+    }
 
     /** Build from a 4-component CMYK ICC profile. */
     IccCmykTransform(byte[] iccProfile) {
@@ -61,9 +103,13 @@ final class IccCmykTransform {
         this.targetIcc = iccProfile.clone();
         buildNeutralRamp();
         buildLut();
+        MemorySegment seg = Arena.ofAuto().allocate(LUT_BYTES);
+        MemorySegment.copy(lut, 0, seg, ValueLayout.JAVA_BYTE, 0, LUT_BYTES);
+        this.lutSegment = seg.asReadOnly();
     }
 
     private void buildNeutralRamp() {
+        float[] rgb = new float[3];
         for (int i = 0; i < 256; i++) {
             float value = i / 255f;
             rgb[0] = value;
@@ -78,6 +124,7 @@ final class IccCmykTransform {
     }
 
     private void buildLut() {
+        float[] rgb = new float[3];
         int index = 0;
         for (int r = 0; r < LUT_GRID; r++) {
             rgb[0] = r / (float) LUT_LAST;
@@ -149,6 +196,11 @@ final class IccCmykTransform {
     /** Immutable LUT bytes for the native image pass: RGBRGB... in grid order. */
     byte[] lutBytes() {
         return lut.clone();
+    }
+
+    /** Immutable off-heap LUT segment backed by an auto arena for zero-copy native calls. */
+    MemorySegment lutSegment() {
+        return lutSegment;
     }
 
     static int lutGrid() {
@@ -250,11 +302,12 @@ final class IccCmykTransform {
 
     private static ICC_ColorSpace staticSourceSpace(byte[] sourceIcc, int expectedComponents) {
         validateIccStructure(sourceIcc);
+        SourceKey lookup = new SourceKey(
+                new ProfileKey(Arrays.hashCode(sourceIcc), sourceIcc), expectedComponents);
         synchronized (SOURCE_CACHE_LOCK) {
-            if (cachedSourceSpace != null
-                    && cachedSourceComponents == expectedComponents
-                    && Arrays.equals(cachedSourceIcc, sourceIcc)) {
-                return cachedSourceSpace;
+            ICC_ColorSpace hit = SOURCE_CACHE.get(lookup);
+            if (hit != null) {
+                return hit;
             }
         }
         ICC_Profile profile;
@@ -268,13 +321,33 @@ final class IccCmykTransform {
                     + profile.getNumComponents() + " components=" + expectedComponents);
         }
         ICC_ColorSpace space = new ICC_ColorSpace(profile);
+        SourceKey stored = new SourceKey(
+                new ProfileKey(lookup.profile.hash, sourceIcc.clone()), expectedComponents);
         synchronized (SOURCE_CACHE_LOCK) {
-            cachedSourceIcc = sourceIcc.clone();
-            cachedSourceComponents = expectedComponents;
-            cachedSourceSpace = space;
+            ICC_ColorSpace existing = SOURCE_CACHE.get(lookup);
+            if (existing != null) {
+                return existing;
+            }
+            SOURCE_CACHE.put(stored, space);
         }
         return space;
     }
+
+    private record ProfileKey(int hash, byte[] bytes) {
+        @Override
+        public boolean equals(Object other) {
+            if (this == other) return true;
+            if (!(other instanceof ProfileKey that)) return false;
+            return hash == that.hash && Arrays.equals(bytes, that.bytes);
+        }
+
+        @Override
+        public int hashCode() {
+            return hash;
+        }
+    }
+
+    private record SourceKey(ProfileKey profile, int components) {}
 
     private static int clampByte(int v) {
         if (v <= 0) return 0;

@@ -114,8 +114,9 @@ public final class ColorBindings {
     public static final int PDFX_NEUTRALS_TO_BLACK = 0x04;
     public static final int PDFX_CONVERT_SPECIAL = 0x08;
     public static final int PDFX_STRICT_IMAGES = 0x10;
+    public static final int PDFX_ALLOW_STRIP_OC = 0x20;
     private static final int JPDFIUM_ERR_PDFX_NONCONFORMANT = -11;
-    private static final int PDFX_MESSAGE_CAPACITY = 1024;
+    private static final int PDFX_MESSAGE_CAPACITY = 16384;
 
     private static final MethodHandle PDFX_PREPARE_BYTES = downcallOptionalUnguarded(
             "jpdfium_pdfx_prepare_bytes",
@@ -353,6 +354,22 @@ public final class ColorBindings {
         if (grid < 2 || grid > 256 || expected != lut.length) return -1;
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment lutSeg = arena.allocateFrom(JAVA_BYTE, lut);
+            return pageImagesToCmykSegment(docHandle, pageIndex, quality, flags, lutSeg, grid);
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            return -1;
+        }
+    }
+
+    /** Zero-copy {@link MemorySegment} variant of {@link #pageImagesToCmyk(long, int, int, int, byte[], int)}. */
+    public static int pageImagesToCmykSegment(long docHandle, int pageIndex, int quality, int flags,
+                                              MemorySegment lutSeg, int grid) {
+        if (PAGE_IMAGES_TO_CMYK_EX == null || lutSeg == null || lutSeg.equals(MemorySegment.NULL)) {
+            return pageImagesToCmyk(docHandle, pageIndex, quality, flags);
+        }
+        long expected = (long) grid * grid * grid * 4L;
+        if (grid < 2 || grid > 256 || expected != lutSeg.byteSize()) return -1;
+        try (Arena arena = Arena.ofConfined()) {
             MemorySegment outConverted = arena.allocate(JAVA_LONG);
             int rc = (int) PAGE_IMAGES_TO_CMYK_EX.invokeExact(
                     docHandle, pageIndex, quality, flags, lutSeg, grid, outConverted);
@@ -377,9 +394,28 @@ public final class ColorBindings {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment lutSeg = lut == null
                     ? MemorySegment.NULL : arena.allocateFrom(JAVA_BYTE, lut);
+            return documentImagesToCmykSegment(docHandle, quality, flags, lutSeg, grid);
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            return -1;
+        }
+    }
+
+    /** Zero-copy {@link MemorySegment} variant of {@link #documentImagesToCmyk(long, int, int, byte[], int)}. */
+    public static int documentImagesToCmykSegment(long docHandle, int quality, int flags,
+                                                  MemorySegment lutSeg, int grid) {
+        if (DOCUMENT_IMAGES_TO_CMYK_EX == null) return -1;
+        MemorySegment effectiveLut = lutSeg == null ? MemorySegment.NULL : lutSeg;
+        if (!effectiveLut.equals(MemorySegment.NULL)) {
+            long expected = (long) grid * grid * grid * 4L;
+            if (grid < 2 || grid > 256 || expected != effectiveLut.byteSize()) return -1;
+        } else if (grid != 0) {
+            return -1;
+        }
+        try (Arena arena = Arena.ofConfined()) {
             MemorySegment outConverted = arena.allocate(JAVA_LONG);
             int rc = (int) DOCUMENT_IMAGES_TO_CMYK_EX.invokeExact(
-                    docHandle, quality, flags, lutSeg, grid, outConverted);
+                    docHandle, quality, flags, effectiveLut, grid, outConverted);
             if (rc != JPDFIUM_OK) return -1;
             return Math.toIntExact(outConverted.get(JAVA_LONG, 0));
         } catch (Throwable t) {
@@ -499,20 +535,30 @@ public final class ColorBindings {
 
     public static byte[] pdfxPrepareBytes(byte[] pdf, int level, byte[] lut, int lutGrid,
                                           int flags, int quality) {
+        requireValidLut(lut, lutGrid);
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment lutSeg = lut == null ? MemorySegment.NULL : arena.allocateFrom(JAVA_BYTE, lut);
+            return pdfxPrepareBytesSegment(pdf, level, lutSeg, lut == null ? 0 : lutGrid, flags, quality);
+        }
+    }
+
+    /** Zero-copy {@link MemorySegment} LUT variant of {@link #pdfxPrepareBytes(byte[], int, byte[], int, int, int)}. */
+    public static byte[] pdfxPrepareBytesSegment(byte[] pdf, int level, MemorySegment lutSeg, int lutGrid,
+                                                 int flags, int quality) {
         if (PDFX_PREPARE_BYTES == null) {
             throw new JPDFiumException(
                     "This native build has no PDF/X preparation pass");
         }
-        requireValidLut(lut, lutGrid);
+        MemorySegment effectiveLut = lutSeg == null ? MemorySegment.NULL : lutSeg;
+        requireValidLut(effectiveLut, lutGrid);
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment in = arena.allocateFrom(JAVA_BYTE, pdf);
-            MemorySegment lutSeg = lut == null ? MemorySegment.NULL : arena.allocateFrom(JAVA_BYTE, lut);
             MemorySegment outPtr = arena.allocate(ADDRESS);
             MemorySegment outLen = arena.allocate(JAVA_LONG);
             MemorySegment message = arena.allocate(PDFX_MESSAGE_CAPACITY);
-            int rc = (int) PDFX_PREPARE_BYTES.invokeExact(in, (long) pdf.length, level, lutSeg,
-                    lut == null ? 0 : lutGrid, flags, quality, outPtr, outLen, message,
-                    PDFX_MESSAGE_CAPACITY);
+            int rc = (int) PDFX_PREPARE_BYTES.invokeExact(in, (long) pdf.length, level, effectiveLut,
+                    effectiveLut.equals(MemorySegment.NULL) ? 0 : lutGrid, flags, quality,
+                    outPtr, outLen, message, PDFX_MESSAGE_CAPACITY);
             requirePdfxOk(rc, message);
             return extractAndFree(outPtr, outLen);
         } catch (JPDFiumException e) {
@@ -526,18 +572,30 @@ public final class ColorBindings {
 
     public static void pdfxPrepareFile(String inPath, String outPath, int level, byte[] lut,
                                        int lutGrid, int flags, int quality) {
+        requireValidLut(lut, lutGrid);
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment lutSeg = lut == null ? MemorySegment.NULL : arena.allocateFrom(JAVA_BYTE, lut);
+            pdfxPrepareFileSegment(inPath, outPath, level, lutSeg,
+                    lut == null ? 0 : lutGrid, flags, quality);
+        }
+    }
+
+    /** Zero-copy {@link MemorySegment} LUT variant of {@link #pdfxPrepareFile(String, String, int, byte[], int, int, int)}. */
+    public static void pdfxPrepareFileSegment(String inPath, String outPath, int level, MemorySegment lutSeg,
+                                              int lutGrid, int flags, int quality) {
         if (PDFX_PREPARE_FILE == null) {
             throw new JPDFiumException(
                     "This native build has no PDF/X preparation pass");
         }
-        requireValidLut(lut, lutGrid);
+        MemorySegment effectiveLut = lutSeg == null ? MemorySegment.NULL : lutSeg;
+        requireValidLut(effectiveLut, lutGrid);
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment in = arena.allocateFrom(inPath);
             MemorySegment out = arena.allocateFrom(outPath);
-            MemorySegment lutSeg = lut == null ? MemorySegment.NULL : arena.allocateFrom(JAVA_BYTE, lut);
             MemorySegment message = arena.allocate(PDFX_MESSAGE_CAPACITY);
-            int rc = (int) PDFX_PREPARE_FILE.invokeExact(in, out, level, lutSeg,
-                    lut == null ? 0 : lutGrid, flags, quality, message, PDFX_MESSAGE_CAPACITY);
+            int rc = (int) PDFX_PREPARE_FILE.invokeExact(in, out, level, effectiveLut,
+                    effectiveLut.equals(MemorySegment.NULL) ? 0 : lutGrid, flags, quality,
+                    message, PDFX_MESSAGE_CAPACITY);
             requirePdfxOk(rc, message);
         } catch (JPDFiumException e) {
             throw e;
@@ -554,6 +612,15 @@ public final class ColorBindings {
                 || lut.length != (long) lutGrid * lutGrid * lutGrid * 4) {
             throw new IllegalArgumentException("CMYK LUT must hold grid^3 * 4 bytes for a grid of"
                     + " 2 to 256; got " + lut.length + " bytes for grid " + lutGrid);
+        }
+    }
+
+    private static void requireValidLut(MemorySegment lutSeg, int lutGrid) {
+        if (lutSeg == null || lutSeg.equals(MemorySegment.NULL)) return;
+        if (lutGrid < 2 || lutGrid > 256
+                || lutSeg.byteSize() != (long) lutGrid * lutGrid * lutGrid * 4) {
+            throw new IllegalArgumentException("CMYK LUT must hold grid^3 * 4 bytes for a grid of"
+                    + " 2 to 256; got " + lutSeg.byteSize() + " bytes for grid " + lutGrid);
         }
     }
 

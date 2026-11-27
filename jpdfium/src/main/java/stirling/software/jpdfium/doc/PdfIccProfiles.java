@@ -12,17 +12,26 @@ public final class PdfIccProfiles {
     public static final String COMPACT_CMYK_CONDITION = "JPDFium Compact CMYK";
 
     private static final String COMPACT_CMYK_RESOURCE = "/icc/JPDFiumCompactCmyk.icc";
+    private static final String COMPACT_CMYK_V2_RESOURCE = "/icc/JPDFiumCompactCmykV2.icc";
 
     private PdfIccProfiles() {}
 
     /**
-     * Bundled 4-component CMYK output profile for PDF/X output intents.
+     * Bundled 4-component CMYK output profile for PDF/X and PDF/A-2b/3b output intents.
      *
      * <p>This is a small generic fallback, not a certified printing-condition
      * profile. The returned array is a copy and can be modified by the caller.
      */
     public static byte[] compactCmyk() {
         return Holder.COMPACT_CMYK.clone();
+    }
+
+    /**
+     * Bundled ICC v2.4 4-component CMYK output profile for PDF/A-1b output intents
+     * (ISO 19005-1 requires ICC version 2 profiles).
+     */
+    public static byte[] compactCmykV2() {
+        return Holder.COMPACT_CMYK_V2.clone();
     }
 
     private static byte[] load(String resource) {
@@ -38,5 +47,6 @@ public final class PdfIccProfiles {
 
     private static final class Holder {
         private static final byte[] COMPACT_CMYK = load(COMPACT_CMYK_RESOURCE);
+        private static final byte[] COMPACT_CMYK_V2 = load(COMPACT_CMYK_V2_RESOURCE);
     }
 }

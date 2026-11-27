@@ -469,4 +469,148 @@ class PdfRepairTest {
         return false;
     }
 
+    @Test
+    void executeFailsClosedOnUnboundedDictionaryNesting() {
+        Assumptions.assumeTrue(NativeRuntime.isFull(), "needs real native qpdf");
+        // Regression: inputs nesting more dictionaries than the repair tracking
+        // window used to throw ArrayIndexOutOfBoundsException out of execute().
+        // They must fail closed instead.
+        byte[] deepNesting = ("%PDF-1.4\n" + "<<".repeat(100) + "/Im1 5 0 R")
+                .getBytes(StandardCharsets.ISO_8859_1);
+        RepairResult result = PdfRepair.builder().input(deepNesting).all().build().execute();
+        assertEquals(RepairResult.Status.FAILED, result.status(),
+                "hostile nesting must fail closed, never throw");
+    }
+
+    @Test
+    void executeFailsClosedOnHeaderlessDeepPageScan() {
+        // Regression: a headerless, deeply nested /Type /Page drives the page-tree
+        // prescan through the same bounded tracking stack; it must fail closed.
+        byte[] headerless = ("<<".repeat(70) + "/Type /Page")
+                .getBytes(StandardCharsets.ISO_8859_1);
+        RepairResult result = PdfRepair.builder().input(headerless).all().build().execute();
+        assertEquals(RepairResult.Status.FAILED, result.status(),
+                "garbage must fail closed, never throw");
+    }
+
+    @Test
+    void executeHonorsObjectNumberCapDuringSalvage() {
+        // Regression: an object number above the 9,000,000 cap used to overflow
+        // Integer.parseInt inside salvageTruncatedPdf and kill execute() with a
+        // NumberFormatException. The cap must hold here like everywhere else.
+        String hostile = "%PDF-1.4\n"
+                + "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"
+                + "2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n"
+                + "2147483648 0 obj\n<<>>\nendobj\n"
+                + "trailer\n<< /Root 1 0 R >>\n%%EOF";
+        RepairResult result = PdfRepair.builder()
+                .input(hostile.getBytes(StandardCharsets.ISO_8859_1))
+                .all()
+                .build()
+                .execute();
+        assertNotNull(result, "execute must return a result, never throw");
+        if (result.isUsable()) {
+            assertFalse(new String(result.repairedPdf(), StandardCharsets.ISO_8859_1)
+                            .contains("/Size 2147483649"),
+                    "salvage must cap /Size at the accepted object-number bound");
+        }
+    }
+
+    @Test
+    void repairsGluedEndobjAfterAStream() throws Exception {
+        Assumptions.assumeTrue(NativeRuntime.isFull(), "Requires full native repair bridge");
+        // Regression: after closing a stream the position guard used to
+        // re-enter stream state at the "stream" suffix of "endstream" and
+        // over-guarded the rest of the file, so normalizeGluedEndobj never
+        // split a glued "endobjN 0 obj" that follows a stream. qpdf attaches
+        // the glued object to the previous one and the page is lost.
+        String formData = "BT ET\n";
+        String contentData = "BT /F1 12 Tf 8 8 Td (Marker) Tj ET\n";
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("%PDF-1.4\n");
+        int o1 = sb.length();
+        sb.append("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+        int o2 = sb.length();
+        sb.append("2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n");
+        int o4 = sb.length();
+        sb.append("4 0 obj\n<< /Type /XObject /Subtype /Form /BBox [0 0 8 8] /Length ")
+                .append(formData.length()).append(" >>\nstream\n").append(formData)
+                .append("endstream\nendobj\n");
+        int o5 = sb.length();
+        sb.append("5 0 obj\n<< /Length ").append(contentData.length())
+                // Glued "endobj3 0 obj": the page object header follows the
+                // content stream's endobj without a separator.
+                .append(" >>\nstream\n").append(contentData).append("endstream\nendobj3 0 obj\n");
+        int o3 = sb.length();
+        sb.append("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] "
+                + "/Resources << /XObject << /Im1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n");
+        int xref = sb.length();
+        sb.append(String.format(Locale.ROOT,
+                "xref\n0 6\n0000000000 65535 f \n%010d 00000 n \n%010d 00000 n \n"
+                        + "%010d 00000 n \n%010d 00000 n \n%010d 00000 n \n"
+                        + "trailer\n<< /Root 1 0 R /Size 6 >>\nstartxref\n%d\n%%%%EOF\n",
+                o1, o2, o3, o4, o5, xref));
+
+        byte[] pdf = sb.toString().getBytes(StandardCharsets.ISO_8859_1);
+        RepairResult result = PdfRepair.builder().input(pdf).all().build().execute();
+        assertTrue(result.isUsable(), "repair failed: " + result.status());
+        try (PDDocument reopened = Loader.loadPDF(result.repairedPdf())) {
+            assertEquals(1, reopened.getNumberOfPages(),
+                    "the glued page object must be recovered after a stream");
+            assertTrue(new PDFTextStripper().getText(reopened).contains("Marker"),
+                    "page content must survive the glued-endobj split");
+        }
+    }
+
+    @Test
+    void streamDataContainingEndstreamKeywordStaysUntouched() throws Exception {
+        Assumptions.assumeTrue(NativeRuntime.isFull(), "Requires full native repair bridge");
+        // Regression: stream data containing the bytes "endstream" ended the
+        // position guard early; the remaining data was treated as object
+        // syntax and the resource-key dedup edited it, shifting the stream
+        // under its own /Length so the page object landed inside the extended
+        // stream and the page was lost. The guard must follow the declared
+        // /Length exactly.
+        StringBuilder refs = new StringBuilder();
+        for (int i = 0; i < 120; i++) refs.append("/Im1 4 0 R\n");
+        // The trailing space (not an EOL) is what defeats the old scanner: no
+        // re-entry at the "stream" suffix, so the dedup targets stay unguarded.
+        String contentData = "q\nendstream " + refs
+                + "BT /F1 12 Tf 8 8 Td (Marker) Tj ET\nQ\n";
+        String formData = "BT ET\n";
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("%PDF-1.4\n");
+        int o1 = sb.length();
+        sb.append("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+        int o2 = sb.length();
+        sb.append("2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n");
+        int o4 = sb.length();
+        sb.append("4 0 obj\n<< /Type /XObject /Subtype /Form /BBox [0 0 8 8] /Length ")
+                .append(formData.length()).append(" >>\nstream\n").append(formData)
+                .append("endstream\nendobj\n");
+        int o5 = sb.length();
+        sb.append("5 0 obj\n<< /Length ").append(contentData.length())
+                .append(" >>\nstream\n").append(contentData).append("endstream\nendobj\n");
+        int o3 = sb.length();
+        sb.append("3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] "
+                + "/Resources << /XObject << /Im1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n");
+        int xref = sb.length();
+        sb.append(String.format(Locale.ROOT,
+                "xref\n0 6\n0000000000 65535 f \n%010d 00000 n \n%010d 00000 n \n"
+                        + "%010d 00000 n \n%010d 00000 n \n%010d 00000 n \n"
+                        + "trailer\n<< /Root 1 0 R /Size 6 >>\nstartxref\n%d\n%%%%EOF\n",
+                o1, o2, o3, o4, o5, xref));
+
+        byte[] pdf = sb.toString().getBytes(StandardCharsets.ISO_8859_1);
+        RepairResult result = PdfRepair.builder().input(pdf).all().build().execute();
+        assertTrue(result.isUsable(), "repair failed: " + result.status());
+        try (PDDocument reopened = Loader.loadPDF(result.repairedPdf())) {
+            assertEquals(1, reopened.getNumberOfPages(),
+                    "the page must survive the repair");
+            assertTrue(new PDFTextStripper().getText(reopened).contains("Marker"),
+                    "stream data must not be edited by the repair-token normalizers");
+        }
+    }
 }

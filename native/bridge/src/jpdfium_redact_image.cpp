@@ -171,6 +171,7 @@ void recordGrayImage(std::vector<ErasedGrayImage>* grayImages, const uint8_t* gr
         grayImages->push_back({static_cast<uint32_t>(w), static_cast<uint32_t>(h), hash});
     } catch (const std::bad_alloc&) {
         // Only costs the compaction: the image is already erased and stored.
+        return;
     }
 }
 
@@ -293,14 +294,17 @@ bool eraseImagePixels(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_PAGEOBJECT imageOb
 
     // Pixel-center -> page map (row-vector convention, row 0 = top):
     //   px = pa*ix + pc*iy + pe,  py = pb*ix + pd*iy + pf
-    const double pa = imgMatrix.a / w;
+    const double pa = static_cast<double>(imgMatrix.a) / w;
     const double pc = -static_cast<double>(imgMatrix.c) / h;
-    const double pb = imgMatrix.b / w;
+    const double pb = static_cast<double>(imgMatrix.b) / w;
     const double pd = -static_cast<double>(imgMatrix.d) / h;
     const double pe = imgMatrix.e + imgMatrix.c + 0.5 * pa + 0.5 * pc;
     const double pf = imgMatrix.f + imgMatrix.d + 0.5 * pb + 0.5 * pd;
 
-    int minIx = 0, minIy = 0, maxIx = w - 1, maxIy = h - 1;
+    int minIx = 0;
+    int minIy = 0;
+    int maxIx = 0;
+    int maxIy = 0;
     const double det = pa * pd - pb * pc;
     if (std::abs(det) < 1e-12) {
         // Degenerate (zero-area) image: it paints nothing; nothing to erase.
@@ -398,13 +402,14 @@ bool eraseImagePixels(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_PAGEOBJECT imageOb
 #include <qpdf/QPDFObjectHandle.hh>
 #include <qpdf/QPDFWriter.hh>
 
+#include "jpdfium_qpdf_internal.h"
 #include "jpdfium_qpdf_writer_lock.h"
 
 namespace {
 
 // [/Indexed /DeviceRGB 255 lookup] whose lookup maps every index i to (i,i,i):
 // what SetBitmap writes for a gray bitmap. Only then is index == gray level.
-bool isGrayRamp(QPDFObjectHandle cs) {
+bool isGrayRamp(QPDFObjectHandle const& cs) {
     if (!cs.isArray() || cs.getArrayNItems() != 4) return false;
     if (!cs.getArrayItem(0).isNameAndEquals("/Indexed") ||
         !cs.getArrayItem(1).isNameAndEquals("/DeviceRGB")) {
@@ -417,7 +422,9 @@ bool isGrayRamp(QPDFObjectHandle cs) {
     if (lookup.isString()) {
         table = lookup.getStringValue();
     } else if (lookup.isStream()) {
-        std::shared_ptr<Buffer> data = lookup.getStreamData(qpdf_dl_generalized);
+        std::shared_ptr<Buffer> data =
+            jpdfium::qpdf_detail::readStreamBufferBounded(lookup, qpdf_dl_generalized, 4096);
+        if (!data) return false;
         table.assign(reinterpret_cast<const char*>(data->getBuffer()), data->getSize());
     } else {
         return false;
@@ -460,7 +467,9 @@ bool rewriteErasedGrayImages(QPDF& q, const DocCore& core) {
             }
         }
         if (!sizeMatches || !isGrayRamp(dict.getKey("/ColorSpace"))) continue;
-        std::shared_ptr<Buffer> data = obj.getStreamData(qpdf_dl_generalized);
+        std::shared_ptr<Buffer> data =
+            jpdfium::qpdf_detail::readStreamBufferBounded(obj, qpdf_dl_generalized);
+        if (!data) continue;
         const size_t n = static_cast<size_t>(w) * static_cast<size_t>(h);
         if (data->getSize() != n) continue;
         const uint8_t* gray = data->getBuffer();
@@ -485,7 +494,10 @@ bool rewriteErasedGrayImages(QPDF& q, const DocCore& core) {
                 const uint8_t* row = gray + static_cast<size_t>(y) * w;
                 char* out = samples.data() + static_cast<size_t>(y) * rowBytes;
                 for (long long x = 0; x < w; x++) {
-                    if (row[x]) out[x >> 3] |= static_cast<char>(0x80 >> (x & 7));
+                    if (row[x]) {
+                        out[x >> 3] = static_cast<char>(static_cast<uint8_t>(out[x >> 3]) |
+                                                        static_cast<uint8_t>(0x80U >> (x & 7)));
+                    }
                 }
             }
             dict.replaceKey("/BitsPerComponent", QPDFObjectHandle::newInteger(1));

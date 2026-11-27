@@ -218,9 +218,9 @@ public final class PdfColorConverter {
             int flags = options.strictImages() ? ColorBindings.IMAGE_STRICT : 0;
             if (!options.extractBlack()) flags |= ColorBindings.IMAGE_NO_GCR;
             if (options.convertLosslessImages()) flags |= ColorBindings.IMAGE_CONVERT_LOSSLESS;
-            byte[] lut = xform == null ? null : xform.lutBytes();
+            MemorySegment lut = xform == null ? MemorySegment.NULL : xform.lutSegment();
             int grid = xform == null ? 0 : IccCmykTransform.lutGrid();
-            int images = ColorBindings.documentImagesToCmyk(
+            int images = ColorBindings.documentImagesToCmykSegment(
                     doc.nativeHandle(), options.jpegQuality(), flags, lut, grid);
             if (images >= 0) {
                 total += images;
@@ -266,7 +266,7 @@ public final class PdfColorConverter {
     private static IccCmykTransform cmykTransform(ColorConvertOptions options) {
         if (options.targetColorSpace() != ColorSpace.CMYK) return null;
         byte[] icc = options.iccProfile();
-        return icc == null ? null : new IccCmykTransform(icc);
+        return icc == null ? null : IccCmykTransform.cached(icc);
     }
 
     /**
@@ -291,9 +291,9 @@ public final class PdfColorConverter {
             if (options.convertLosslessImages()) flags |= ColorBindings.IMAGE_CONVERT_LOSSLESS;
             int images;
             if (xform != null) {
-                images = ColorBindings.pageImagesToCmyk(
+                images = ColorBindings.pageImagesToCmykSegment(
                         doc.nativeHandle(), pageIndex, options.jpegQuality(), flags,
-                        xform.lutBytes(), IccCmykTransform.lutGrid());
+                        xform.lutSegment(), IccCmykTransform.lutGrid());
             } else {
                 images = ColorBindings.pageImagesToCmyk(
                         doc.nativeHandle(), pageIndex, options.jpegQuality(), flags);
@@ -308,12 +308,6 @@ public final class PdfColorConverter {
             total += convertPage(page.rawHandle(), options, xform, formIds);
         }
         return total;
-    }
-
-    private static int convertPage(MemorySegment rawPage, ColorSpace target, Set<Long> formIds) {
-        return convertPage(rawPage, ColorConvertOptions.builder()
-                .targetColorSpace(target)
-                .build(), null, formIds);
     }
 
     private static int convertPage(MemorySegment rawPage, ColorConvertOptions options,

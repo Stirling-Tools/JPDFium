@@ -247,6 +247,195 @@ void sanitizeSfntForSubset(std::string& sfnt) {
     }
 }
 
+namespace {
+
+bool locateCmapTable(std::string_view sfnt, uint32_t& cmapOffset, uint32_t& cmapLength) {
+    if (sfnt.size() < 12) return false;
+    auto const* bytes = reinterpret_cast<uint8_t const*>(sfnt.data());
+    const uint16_t numTables = readU16BE(bytes + 4);
+    if (sfnt.size() < 12 + static_cast<size_t>(numTables) * 16) return false;
+    for (uint16_t i = 0; i < numTables; ++i) {
+        size_t entry = 12 + static_cast<size_t>(i) * 16;
+        if (std::memcmp(bytes + entry, "cmap", 4) == 0) {
+            cmapOffset = readU32BE(bytes + entry + 8);
+            cmapLength = readU32BE(bytes + entry + 12);
+            return cmapOffset <= sfnt.size() && cmapLength <= sfnt.size() - cmapOffset &&
+                   cmapLength >= 4;
+        }
+    }
+    return false;
+}
+
+std::string buildFormat4Cmap(std::map<uint32_t, uint16_t> const& mapping) {
+    std::vector<std::pair<uint32_t, uint16_t>> entries;
+    entries.reserve(mapping.size());
+    for (auto const& [cp, gid] : mapping) {
+        if (cp <= 0xFFFE && gid != 0) entries.emplace_back(cp, gid);
+    }
+    const size_t segCount = entries.size() + 1;
+    const size_t length = 16 + 8 * segCount;
+    // Format 4 stores its length in a 16-bit field. Refuse to emit a wrapped
+    // value that would make the subtable unreadable.
+    if (length > 0xFFFFU) return {};
+    std::string table(length, '\0');
+    auto* p = reinterpret_cast<uint8_t*>(table.data());
+    writeU16BE(p, 4);
+    writeU16BE(p + 2, static_cast<uint16_t>(length));
+    writeU16BE(p + 4, 0);
+    writeU16BE(p + 6, static_cast<uint16_t>(segCount * 2));
+    size_t searchRange = 2;
+    size_t entrySelector = 0;
+    while (searchRange * 2 <= segCount * 2) {
+        searchRange *= 2;
+        ++entrySelector;
+    }
+    writeU16BE(p + 8, static_cast<uint16_t>(searchRange));
+    writeU16BE(p + 10, static_cast<uint16_t>(entrySelector));
+    writeU16BE(p + 12, static_cast<uint16_t>(segCount * 2 - searchRange));
+    size_t endCodes = 14;
+    size_t startCodes = endCodes + segCount * 2 + 2;
+    size_t deltas = startCodes + segCount * 2;
+    size_t ranges = deltas + segCount * 2;
+    for (size_t i = 0; i < entries.size(); ++i) {
+        const uint32_t cp = entries[i].first;
+        const uint16_t gid = entries[i].second;
+        writeU16BE(p + endCodes + i * 2, static_cast<uint16_t>(cp));
+        writeU16BE(p + startCodes + i * 2, static_cast<uint16_t>(cp));
+        writeU16BE(p + deltas + i * 2, static_cast<uint16_t>(gid - cp));
+        writeU16BE(p + ranges + i * 2, 0);
+    }
+    writeU16BE(p + endCodes + entries.size() * 2, 0xFFFF);
+    writeU16BE(p + startCodes + entries.size() * 2, 0xFFFF);
+    writeU16BE(p + deltas + entries.size() * 2, 1);
+    writeU16BE(p + ranges + entries.size() * 2, 0);
+    return table;
+}
+
+struct SfntTable {
+    char tag[4]{};
+    std::string data;
+};
+
+}  // namespace
+
+int sfntCmapSubtableCount(std::string_view sfnt) {
+    uint32_t off = 0;
+    uint32_t len = 0;
+    if (!locateCmapTable(sfnt, off, len) || len < 4) return 0;
+    return readU16BE(reinterpret_cast<uint8_t const*>(sfnt.data()) + off + 2);
+}
+
+bool sfntHasCmapSubtable(std::string_view sfnt, uint16_t platform, uint16_t encoding) {
+    uint32_t off = 0;
+    uint32_t len = 0;
+    if (!locateCmapTable(sfnt, off, len) || len < 4) return false;
+    auto const* b = reinterpret_cast<uint8_t const*>(sfnt.data());
+    const uint16_t count = readU16BE(b + off + 2);
+    if (static_cast<size_t>(count) * 8 + 4 > len) return false;
+    for (uint16_t i = 0; i < count; ++i) {
+        const size_t rec = off + 4 + static_cast<size_t>(i) * 8;
+        if (readU16BE(b + rec) == platform && readU16BE(b + rec + 2) == encoding) return true;
+    }
+    return false;
+}
+
+bool ensureSfntCmapSubtable(std::string& sfnt, uint16_t platform, uint16_t encoding,
+                            std::map<uint32_t, uint16_t> const& mapping) {
+    if (sfnt.size() < 12) return false;
+    auto* header = reinterpret_cast<uint8_t*>(sfnt.data());
+    const uint16_t numTables = readU16BE(header + 4);
+    if (sfnt.size() < 12 + static_cast<size_t>(numTables) * 16) return false;
+
+    std::vector<SfntTable> tables;
+    tables.reserve(numTables + 1);
+    for (uint16_t i = 0; i < numTables; ++i) {
+        const size_t entry = 12 + static_cast<size_t>(i) * 16;
+        const uint32_t off = readU32BE(header + entry + 8);
+        const uint32_t len = readU32BE(header + entry + 12);
+        if (off > sfnt.size() || len > sfnt.size() - off) return false;
+        SfntTable t{};
+        std::memcpy(t.tag, header + entry, 4);
+        t.data.assign(sfnt.data() + off, len);
+        tables.push_back(std::move(t));
+    }
+
+    const std::string subtable = buildFormat4Cmap(mapping);
+    if (subtable.empty()) return false;
+    std::string cmap;
+    cmap.resize(12 + subtable.size());
+    auto* c = reinterpret_cast<uint8_t*>(cmap.data());
+    writeU16BE(c, 0);
+    writeU16BE(c + 2, 1);
+    writeU16BE(c + 4, platform);
+    writeU16BE(c + 6, encoding);
+    writeU32BE(c + 8, 12);
+    std::copy(subtable.begin(), subtable.end(), cmap.begin() + 12);
+
+    bool replaced = false;
+    for (auto& t : tables) {
+        if (std::memcmp(t.tag, "cmap", 4) == 0) {
+            t.data = cmap;
+            replaced = true;
+        }
+    }
+    if (!replaced) {
+        SfntTable t{};
+        std::memcpy(t.tag, "cmap", 4);
+        t.data = cmap;
+        tables.push_back(std::move(t));
+    }
+    std::sort(tables.begin(), tables.end(), [](SfntTable const& a, SfntTable const& b) {
+        return std::memcmp(a.tag, b.tag, 4) < 0;
+    });
+
+    const size_t n = tables.size();
+    const size_t dataStart = 12 + n * 16;
+    std::string out;
+    std::vector<uint32_t> offsets(n);
+    size_t total = dataStart;
+    for (size_t i = 0; i < n; ++i) {
+        offsets[i] = static_cast<uint32_t>(total);
+        total += (tables[i].data.size() + 3) & ~static_cast<size_t>(3);
+    }
+    out.assign(total, '\0');
+    auto* o = reinterpret_cast<uint8_t*>(out.data());
+    std::memcpy(o, sfnt.data(), 4);
+    writeU16BE(o + 4, static_cast<uint16_t>(n));
+    size_t searchRange = 16;
+    size_t entrySelector = 0;
+    while (searchRange * 2 <= n * 16) {
+        searchRange *= 2;
+        ++entrySelector;
+    }
+    writeU16BE(o + 6, static_cast<uint16_t>(searchRange));
+    writeU16BE(o + 8, static_cast<uint16_t>(entrySelector));
+    writeU16BE(o + 10, static_cast<uint16_t>(n * 16 - searchRange));
+
+    uint32_t headOffset = 0;
+    for (size_t i = 0; i < n; ++i) {
+        const size_t entry = 12 + i * 16;
+        std::memcpy(o + entry, tables[i].tag, 4);
+        writeU32BE(o + entry + 8, offsets[i]);
+        writeU32BE(o + entry + 12, static_cast<uint32_t>(tables[i].data.size()));
+        if (std::memcmp(tables[i].tag, "head", 4) == 0) headOffset = offsets[i];
+        if (!tables[i].data.empty())
+            std::copy(tables[i].data.begin(), tables[i].data.end(),
+                      out.begin() + static_cast<std::ptrdiff_t>(offsets[i]));
+    }
+    if (headOffset && headOffset + 12 <= out.size()) writeU32BE(o + headOffset + 8, 0);
+    for (size_t i = 0; i < n; ++i) {
+        const size_t entry = 12 + i * 16;
+        const size_t padded = (tables[i].data.size() + 3) & ~static_cast<size_t>(3);
+        writeU32BE(o + entry + 4, calcSfntTableChecksum(o + offsets[i], padded));
+    }
+    if (headOffset && headOffset + 12 <= out.size()) {
+        const uint32_t sum = calcSfntTableChecksum(o, out.size());
+        writeU32BE(o + headOffset + 8, 0xB1B0AFBAU - sum);
+    }
+    sfnt.swap(out);
+    return true;
+}
+
 void ensureUnicodeMicrosoftCmap(std::string& sfnt) {
     if (sfnt.size() < 12) return;
     auto* bytes = reinterpret_cast<uint8_t*>(sfnt.data());
@@ -867,7 +1056,10 @@ std::string buildCidSetBits(std::set<uint32_t> const& cids) {
     if (maxCid > kMaxCid) maxCid = kMaxCid;
     std::string bits(static_cast<size_t>(maxCid / 8U) + 1U, '\0');
     for (uint32_t cid : cids) {
-        if (cid > kMaxCid) continue;
+        // CID 0 is .notdef, not a CID present in the subset. ISO 19005
+        // validators compare the CIDSet bits with the program's glyph set and
+        // reject an extra bit for .notdef.
+        if (cid == 0 || cid > kMaxCid) continue;
         size_t byteIndex = cid / 8U;
         uint8_t bitMask = static_cast<uint8_t>(0x80U >> (cid & 7U));
         bits[byteIndex] = static_cast<char>(static_cast<uint8_t>(bits[byteIndex]) | bitMask);
@@ -1268,6 +1460,7 @@ std::string buildFormat4CmapTable(uint16_t numGlyphs,
 
     const size_t segCount = segs.size();
     const size_t fmt4Len = 16 + segCount * 8;
+    if (fmt4Len > 0xFFFFU) return {};
     std::string cmapTable(12 + fmt4Len, '\0');
     auto* cm = reinterpret_cast<uint8_t*>(cmapTable.data());
     writeU16BE(cm + 0, 0);
@@ -1574,31 +1767,40 @@ bool visitStreamDepth(std::map<QPDFObjGen, int>& seenStreams, QPDFObjectHandle c
     return true;
 }
 
-void collectResourceFonts(QPDFObjectHandle const& resources, int depth,
-                          std::set<QPDFObjGen>& seenResources, std::set<QPDFObjGen>& seenFonts,
-                          std::map<QPDFObjGen, int>& seenStreams,
-                          std::vector<QPDFObjectHandle>& fonts) {
-    if (!resources.isDictionary() || depth > 32) return;
+namespace {
+
+constexpr size_t kMaxFontResourceNodes = 65536;
+
+void collectResourceFontsBounded(QPDFObjectHandle const& resources, int depth,
+                                 std::set<QPDFObjGen>& seenResources,
+                                 std::set<QPDFObjGen>& seenFonts,
+                                 std::map<QPDFObjGen, int>& seenStreams,
+                                 std::vector<QPDFObjectHandle>& fonts, size_t& nodeCount) {
+    if (!resources.isDictionary() || depth > 32 || nodeCount >= kMaxFontResourceNodes) return;
     if (resources.isIndirect() && !seenResources.insert(resources.getObjGen()).second) return;
+    ++nodeCount;
 
     QPDFObjectHandle fontDict = resources.getKey("/Font");
     if (fontDict.isDictionary()) {
         for (auto const& name : fontDict.getKeys()) {
+            if (nodeCount >= kMaxFontResourceNodes) return;
             QPDFObjectHandle font = fontDict.getKey(name);
             if (!font.isDictionary()) continue;
             if (font.isIndirect() && !seenFonts.insert(font.getObjGen()).second) continue;
             fonts.push_back(font);
             if (font.getKey("/Subtype").isNameAndEquals("/Type3")) {
-                collectResourceFonts(font.getKey("/Resources"), depth + 1, seenResources, seenFonts,
-                                     seenStreams, fonts);
+                collectResourceFontsBounded(font.getKey("/Resources"), depth + 1, seenResources,
+                                            seenFonts, seenStreams, fonts, nodeCount);
                 QPDFObjectHandle charProcs = font.getKey("/CharProcs");
                 if (charProcs.isDictionary()) {
                     for (auto const& glyphName : charProcs.getKeys()) {
+                        if (nodeCount >= kMaxFontResourceNodes) return;
                         QPDFObjectHandle glyph = charProcs.getKey(glyphName);
                         if (!glyph.isStream() || !visitStreamDepth(seenStreams, glyph, depth + 1))
                             continue;
-                        collectResourceFonts(glyph.getDict().getKey("/Resources"), depth + 1,
-                                             seenResources, seenFonts, seenStreams, fonts);
+                        collectResourceFontsBounded(glyph.getDict().getKey("/Resources"), depth + 1,
+                                                    seenResources, seenFonts, seenStreams, fonts,
+                                                    nodeCount);
                     }
                 }
             }
@@ -1608,6 +1810,7 @@ void collectResourceFonts(QPDFObjectHandle const& resources, int depth,
     QPDFObjectHandle extGstates = resources.getKey("/ExtGState");
     if (extGstates.isDictionary()) {
         for (auto const& gsName : extGstates.getKeys()) {
+            if (nodeCount >= kMaxFontResourceNodes) return;
             QPDFObjectHandle gs = extGstates.getKey(gsName);
             if (!gs.isDictionary()) continue;
             QPDFObjectHandle gsFonts = gs.getKey("/Font");
@@ -1624,8 +1827,9 @@ void collectResourceFonts(QPDFObjectHandle const& resources, int depth,
             if (smask.isDictionary()) {
                 QPDFObjectHandle group = smask.getKey("/G");
                 if (group.isStream() && visitStreamDepth(seenStreams, group, depth + 1))
-                    collectResourceFonts(group.getDict().getKey("/Resources"), depth + 1,
-                                         seenResources, seenFonts, seenStreams, fonts);
+                    collectResourceFontsBounded(group.getDict().getKey("/Resources"), depth + 1,
+                                                seenResources, seenFonts, seenStreams, fonts,
+                                                nodeCount);
             }
         }
     }
@@ -1633,24 +1837,37 @@ void collectResourceFonts(QPDFObjectHandle const& resources, int depth,
     QPDFObjectHandle xobjects = resources.getKey("/XObject");
     if (xobjects.isDictionary()) {
         for (auto const& name : xobjects.getKeys()) {
+            if (nodeCount >= kMaxFontResourceNodes) return;
             QPDFObjectHandle xobject = xobjects.getKey(name);
             if (!xobject.isStream()) continue;
             if (!xobject.getDict().getKey("/Subtype").isNameAndEquals("/Form")) continue;
             if (!visitStreamDepth(seenStreams, xobject, depth + 1)) continue;
-            collectResourceFonts(xobject.getDict().getKey("/Resources"), depth + 1, seenResources,
-                                 seenFonts, seenStreams, fonts);
+            collectResourceFontsBounded(xobject.getDict().getKey("/Resources"), depth + 1,
+                                        seenResources, seenFonts, seenStreams, fonts, nodeCount);
         }
     }
 
     QPDFObjectHandle patterns = resources.getKey("/Pattern");
     if (patterns.isDictionary()) {
         for (auto const& name : patterns.getKeys()) {
+            if (nodeCount >= kMaxFontResourceNodes) return;
             QPDFObjectHandle pattern = patterns.getKey(name);
             if (!pattern.isStream() || !visitStreamDepth(seenStreams, pattern, depth + 1)) continue;
-            collectResourceFonts(pattern.getDict().getKey("/Resources"), depth + 1, seenResources,
-                                 seenFonts, seenStreams, fonts);
+            collectResourceFontsBounded(pattern.getDict().getKey("/Resources"), depth + 1,
+                                        seenResources, seenFonts, seenStreams, fonts, nodeCount);
         }
     }
+}
+
+}  // namespace
+
+void collectResourceFonts(QPDFObjectHandle const& resources, int depth,
+                          std::set<QPDFObjGen>& seenResources, std::set<QPDFObjGen>& seenFonts,
+                          std::map<QPDFObjGen, int>& seenStreams,
+                          std::vector<QPDFObjectHandle>& fonts) {
+    size_t nodeCount = 0;
+    collectResourceFontsBounded(resources, depth, seenResources, seenFonts, seenStreams, fonts,
+                                nodeCount);
 }
 
 std::vector<QPDFObjectHandle> collectPageFonts(QPDFObjectHandle const& page,
@@ -1658,6 +1875,7 @@ std::vector<QPDFObjectHandle> collectPageFonts(QPDFObjectHandle const& page,
                                                std::set<QPDFObjGen>& seenFonts) {
     std::vector<QPDFObjectHandle> fonts;
     std::map<QPDFObjGen, int> seenStreams;
+    size_t nodeCount = 0;
 
     QPDFObjectHandle resources = page.getKey("/Resources");
     if (!resources.isDictionary()) {
@@ -1668,12 +1886,13 @@ std::vector<QPDFObjectHandle> collectPageFonts(QPDFObjectHandle const& page,
             parent = parent.getKey("/Parent");
         }
     }
-    collectResourceFonts(resources, 0, seenResources, seenFonts, seenStreams, fonts);
+    collectResourceFontsBounded(resources, 0, seenResources, seenFonts, seenStreams, fonts,
+                                nodeCount);
 
     QPDFObjectHandle annots = page.getKey("/Annots");
     if (annots.isArray()) {
-        const int annotCount = annots.getArrayNItems();
-        for (int i = 0; i < annotCount; ++i) {
+        const int annotCount = std::min(annots.getArrayNItems(), 4096);
+        for (int i = 0; i < annotCount && nodeCount < kMaxFontResourceNodes; ++i) {
             QPDFObjectHandle annot = annots.getArrayItem(i);
             if (!annot.isDictionary()) continue;
             QPDFObjectHandle ap = annot.getKey("/AP");
@@ -1681,14 +1900,20 @@ std::vector<QPDFObjectHandle> collectPageFonts(QPDFObjectHandle const& page,
             for (auto const& key : ap.getKeys()) {
                 QPDFObjectHandle appearance = ap.getKey(key);
                 if (appearance.isStream()) {
-                    collectResourceFonts(appearance.getDict().getKey("/Resources"), 0,
-                                         seenResources, seenFonts, seenStreams, fonts);
+                    if (visitStreamDepth(seenStreams, appearance, 1)) {
+                        collectResourceFontsBounded(appearance.getDict().getKey("/Resources"), 1,
+                                                    seenResources, seenFonts, seenStreams, fonts,
+                                                    nodeCount);
+                    }
                 } else if (appearance.isDictionary()) {
                     for (auto const& stateKey : appearance.getKeys()) {
                         QPDFObjectHandle stateStream = appearance.getKey(stateKey);
                         if (!stateStream.isStream()) continue;
-                        collectResourceFonts(stateStream.getDict().getKey("/Resources"), 0,
-                                             seenResources, seenFonts, seenStreams, fonts);
+                        if (visitStreamDepth(seenStreams, stateStream, 1)) {
+                            collectResourceFontsBounded(stateStream.getDict().getKey("/Resources"),
+                                                        1, seenResources, seenFonts, seenStreams,
+                                                        fonts, nodeCount);
+                        }
                     }
                 }
             }

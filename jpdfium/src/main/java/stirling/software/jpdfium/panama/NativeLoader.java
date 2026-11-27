@@ -30,9 +30,6 @@ public final class NativeLoader {
      * Retained for the JVM lifetime: one jar per platform at most.
      */
     private static volatile ClassLoader supplementalLoader;
-
-    /** Re-entry guard for the ABI handshake; see verifyBridgeAbi(). */
-    private static boolean verifyingBridgeAbi;
     private static volatile Throwable loadError = null;
     private static volatile Boolean muslLibc = null;
 
@@ -93,20 +90,9 @@ public final class NativeLoader {
                     "Native bridge predates ABI handshake (missing jpdfium_abi_version); "
                             + "rebuild natives for " + detectPlatform());
         }
-        // checkAbiCompatible() initializes JpdfiumLib, whose static initializer
-        // calls back into ensureLoaded(). Without this guard that re-enters
-        // tryLoadFromClasspath() and repeats extraction and System.load. `loaded`
-        // stays false until the handshake succeeds, so an ABI mismatch still
-        // leaves the loader correctly marked as not loaded.
-        if (verifyingBridgeAbi) {
-            return;
-        }
-        verifyingBridgeAbi = true;
-        try {
-            JpdfiumLib.checkAbiCompatible();
-        } finally {
-            verifyingBridgeAbi = false;
-        }
+        // NativeAbiCheck touches only JpdfiumH, never JpdfiumLib, avoiding any
+        // class-initialization cycle while ensureLoaded() holds NativeLoader.class.
+        NativeAbiCheck.verify(detectPlatform());
     }
 
     /**
