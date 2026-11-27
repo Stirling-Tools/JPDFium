@@ -387,11 +387,14 @@ int32_t jpdfium_doc_create(int64_t* handle) {
         FPDF_DOCUMENT doc = FPDF_CreateNewDocument();
         if (!doc) return JPDFIUM_ERR_NATIVE;
 
+        auto core = makeDocCore(doc);
         auto w = std::make_unique<DocWrapper>();
-        w->core = makeDocCore(doc);
-        auto* raw = w.release();
+        w->core = std::move(core);
+        DocWrapper* raw = w.get();
         DocHandleRegistry::instance().add(raw);
         *handle = encodeHandle(raw);
+        DocWrapper* released = w.release();
+        (void)released;
         return JPDFIUM_OK;
 
     } catch (...) {
@@ -405,12 +408,15 @@ int32_t jpdfium_doc_open(const char* path, int64_t* handle) {
         FPDF_DOCUMENT doc = FPDF_LoadDocument(path, nullptr);
         if (!doc) return translatePdfiumError();
 
-        auto w = std::make_unique<DocWrapper>();
         // Record the source path so a later save can refuse to overwrite it.
-        w->core = makeDocCore(doc, nullptr, 0, path);
-        auto* raw = w.release();
+        auto core = makeDocCore(doc, nullptr, 0, path);
+        auto w = std::make_unique<DocWrapper>();
+        w->core = std::move(core);
+        DocWrapper* raw = w.get();
         DocHandleRegistry::instance().add(raw);
         *handle = encodeHandle(raw);
+        DocWrapper* released = w.release();
+        (void)released;
         return JPDFIUM_OK;
 
     } catch (...) {
@@ -433,11 +439,14 @@ int32_t jpdfium_doc_open_bytes(const uint8_t* data, int64_t len, int64_t* handle
             return translatePdfiumError();
         }
 
+        auto core = makeDocCore(doc, copy, len);
         auto w = std::make_unique<DocWrapper>();
-        w->core = makeDocCore(doc, copy, len);
-        auto* raw = w.release();
+        w->core = std::move(core);
+        DocWrapper* raw = w.get();
         DocHandleRegistry::instance().add(raw);
         *handle = encodeHandle(raw);
+        DocWrapper* released = w.release();
+        (void)released;
         return JPDFIUM_OK;
 
     } catch (...) {
@@ -459,11 +468,14 @@ int32_t jpdfium_doc_open_bytes_protected(const uint8_t* data, int64_t len, const
             return translatePdfiumError();
         }
 
+        auto core = makeDocCore(doc, copy, len);
         auto w = std::make_unique<DocWrapper>();
-        w->core = makeDocCore(doc, copy, len);
-        auto* raw = w.release();
+        w->core = std::move(core);
+        DocWrapper* raw = w.get();
         DocHandleRegistry::instance().add(raw);
         *handle = encodeHandle(raw);
+        DocWrapper* released = w.release();
+        (void)released;
         return JPDFIUM_OK;
 
     } catch (...) {
@@ -477,14 +489,17 @@ int32_t jpdfium_doc_open_protected(const char* path, const char* password, int64
         FPDF_DOCUMENT doc = FPDF_LoadDocument(path, password);
         if (!doc) return translatePdfiumError();
 
-        auto w = std::make_unique<DocWrapper>();
         // Record the source path like jpdfium_doc_open so a later save refuses
         // to overwrite its own backing file (O_TRUNC would destroy the input
         // PDFium is still reading).
-        w->core = makeDocCore(doc, nullptr, 0, path);
-        auto* raw = w.release();
+        auto core = makeDocCore(doc, nullptr, 0, path);
+        auto w = std::make_unique<DocWrapper>();
+        w->core = std::move(core);
+        DocWrapper* raw = w.get();
         DocHandleRegistry::instance().add(raw);
         *handle = encodeHandle(raw);
+        DocWrapper* released = w.release();
+        (void)released;
         return JPDFIUM_OK;
 
     } catch (...) {
@@ -778,13 +793,17 @@ int32_t jpdfium_page_open(int64_t doc, int32_t idx, int64_t* handle) {
         DocWrapper* w = decodeDoc(doc);
         if (!w || !w->core || !w->core->doc) return JPDFIUM_ERR_INVALID;
 
-        FPDF_PAGE page = FPDF_LoadPage(w->core->doc, idx);
+        UniquePage page(FPDF_LoadPage(w->core->doc, idx));
         if (!page) return JPDFIUM_ERR_NOT_FOUND;
 
-        auto* pw = new PageWrapper(page, w->core->doc, idx, w->core);
-        PageHandleRegistry::instance().add(pw);
-        // NOLINTNEXTLINE(clang-analyzer-cplusplus.NewDeleteLeaks) -- owned by PageHandleRegistry
-        *handle = encodeHandle(pw);
+        auto pw = std::make_unique<PageWrapper>(page.get(), w->core->doc, idx, w->core);
+        FPDF_PAGE ownedPage = page.release();  // PageWrapper now owns the PDFium page.
+        (void)ownedPage;
+        PageWrapper* raw = pw.get();
+        PageHandleRegistry::instance().add(raw);
+        *handle = encodeHandle(raw);
+        PageWrapper* releasedPage = pw.release();
+        (void)releasedPage;
         return JPDFIUM_OK;
 
     } catch (...) {
@@ -834,8 +853,13 @@ void jpdfium_page_close(int64_t page) noexcept {
     // still free the wrapper of a page whose document was replaced, so the
     // staleness check below deliberately does not gate the delete - but
     // membership does, because an unregistered address must never be deleted.
-    PageWrapper* pw = reinterpret_cast<PageWrapper*>(static_cast<uintptr_t>(page));
-    if (!pw || !PageHandleRegistry::instance().contains(pw)) return;
+    const auto addr = static_cast<uintptr_t>(page);
+    // 0 and the registry tombstone (1) are never allocated addresses. Reject
+    // them before forming a pointer, independently of the registry check.
+    if (addr <= 1) return;
+    PageWrapper* pw = reinterpret_cast<PageWrapper*>(addr);
+    if (!PageHandleRegistry::instance().contains(pw)) return;
+    std::unique_ptr<PageWrapper> owner(pw);
     if (pw->page) {
         // A pending progressive render holds this raw page identity in its
         // map; retire it before the page itself is freed so a later session
@@ -849,8 +873,7 @@ void jpdfium_page_close(int64_t page) noexcept {
         }
     }
     PageHandleRegistry::instance().remove(pw);
-    delete pw;  // NOLINT(clang-analyzer-cplusplus.NewDelete) -- validated via
-                // PageHandleRegistry::contains
+    owner.reset();
 }
 
 // JSON report of the last sanitize stage ("" when none has run).

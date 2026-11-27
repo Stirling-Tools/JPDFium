@@ -581,29 +581,13 @@ int32_t jpdfium_crop_remove_content_ex(int64_t page, float x, float y, float w, 
         // straddling images need pixel erase, paths need clipping, and forms
         // need recursive descent. For fully inside/outside text, EPDF
         // redaction provides pristine font preservation.
-        bool requiresFission = false;
         bool hasForms = false;
-        for (int i = 0; i < fastObjCount && !requiresFission; ++i) {
+        for (int i = 0; i < fastObjCount; ++i) {
             FPDF_PAGEOBJECT obj = FPDFPage_GetObject(pw->page, i);
             if (!obj) continue;
-            int type = FPDFPageObj_GetType(obj);
-            if (type == FPDF_PAGEOBJ_FORM) {
+            if (FPDFPageObj_GetType(obj) == FPDF_PAGEOBJ_FORM) {
                 hasForms = true;
-                requiresFission = true;
                 break;
-            }
-            if (type == FPDF_PAGEOBJ_IMAGE || type == FPDF_PAGEOBJ_PATH) {
-                float ol, ob, or_, ot;
-                if (FPDFPageObj_GetBounds(obj, &ol, &ob, &or_, &ot)) {
-                    // Check if it straddles the keep region: intersects both
-                    // the inside and the outside.
-                    bool overlaps = rectsOverlap(ol, ob, or_, ot, kL, kB, kR, kT);
-                    bool fullyInside = isFullyContained(ol, ob, or_, ot, kL, kB, kR, kT);
-                    if (overlaps && !fullyInside) {
-                        requiresFission = true;
-                        break;
-                    }
-                }
             }
         }
 

@@ -69,6 +69,13 @@ double time_ns(F&& f) {
     return std::chrono::duration<double, std::nano>(t1 - t0).count() / kIters;
 }
 
+// Test-only: manufacture a pointer value that was never allocated. This mirrors
+// the original crash reproduction (0x3039) and the registry tombstone (1); it
+// must never be dereferenced.
+inline const void* fabricatedAddress(uintptr_t value) {
+    return reinterpret_cast<const void*>(value);
+}
+
 void check(bool ok, const char* msg) {
     if (ok) {
         std::printf("ok   %s\n", msg);
@@ -199,7 +206,7 @@ int main() {
     // remove-then-reuse keeps probing intact.
     {
         HandleRegistry sat;
-        check(!sat.contains(reinterpret_cast<const void*>(1)),
+        check(!sat.contains(fabricatedAddress(1)),
               "tombstone address never validates on empty table");
         constexpr size_t kSlots = HandleRegistry::kSlots;
         std::vector<void*> fill(kSlots);
@@ -210,14 +217,14 @@ int main() {
         auto* extra = new int64_t(-1);
         sat.add(extra);  // table full -> overflow path, must still validate
         check(sat.contains(extra), "overflow entry validates past full table");
-        check(!sat.contains(reinterpret_cast<const void*>(1)),
+        check(!sat.contains(fabricatedAddress(1)),
               "tombstone still rejected with full table + tombstones absent");
         for (size_t i = 0; i < kSlots; i += 2) {
             sat.remove(fill[i]);
             delete reinterpret_cast<int64_t*>(fill[i]);
             fill[i] = nullptr;
         }
-        check(!sat.contains(reinterpret_cast<const void*>(1)),
+        check(!sat.contains(fabricatedAddress(1)),
               "tombstone still rejected after removals create tombstones");
         int live = 0;
         for (size_t i = 1; i < kSlots; i += 2) {

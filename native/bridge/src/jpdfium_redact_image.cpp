@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
@@ -294,17 +295,17 @@ bool eraseImagePixels(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_PAGEOBJECT imageOb
 
     // Pixel-center -> page map (row-vector convention, row 0 = top):
     //   px = pa*ix + pc*iy + pe,  py = pb*ix + pd*iy + pf
-    const double pa = static_cast<double>(imgMatrix.a) / w;
-    const double pc = -static_cast<double>(imgMatrix.c) / h;
-    const double pb = static_cast<double>(imgMatrix.b) / w;
-    const double pd = -static_cast<double>(imgMatrix.d) / h;
+    const double pa = static_cast<double>(imgMatrix.a) / static_cast<double>(w);
+    const double pc = -static_cast<double>(imgMatrix.c) / static_cast<double>(h);
+    const double pb = static_cast<double>(imgMatrix.b) / static_cast<double>(w);
+    const double pd = -static_cast<double>(imgMatrix.d) / static_cast<double>(h);
     const double pe = imgMatrix.e + imgMatrix.c + 0.5 * pa + 0.5 * pc;
     const double pf = imgMatrix.f + imgMatrix.d + 0.5 * pb + 0.5 * pd;
 
-    int minIx = 0;
-    int minIy = 0;
-    int maxIx = 0;
-    int maxIy = 0;
+    int minIx;
+    int minIy;
+    int maxIx;
+    int maxIy;
     const double det = pa * pd - pb * pc;
     if (std::abs(det) < 1e-12) {
         // Degenerate (zero-area) image: it paints nothing; nothing to erase.
@@ -495,8 +496,9 @@ bool rewriteErasedGrayImages(QPDF& q, const DocCore& core) {
                 char* out = samples.data() + static_cast<size_t>(y) * rowBytes;
                 for (long long x = 0; x < w; x++) {
                     if (row[x]) {
-                        out[x >> 3] = static_cast<char>(static_cast<uint8_t>(out[x >> 3]) |
-                                                        static_cast<uint8_t>(0x80U >> (x & 7)));
+                        const auto current = std::bit_cast<unsigned char>(out[x >> 3]);
+                        out[x >> 3] = std::bit_cast<char>(
+                            static_cast<unsigned char>(current | (0x80u >> (x & 7))));
                     }
                 }
             }

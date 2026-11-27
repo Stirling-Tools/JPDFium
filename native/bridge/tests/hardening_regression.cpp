@@ -45,7 +45,7 @@ void pushBe32(std::vector<uint8_t>& out, uint32_t v) {
 
 std::vector<uint8_t> buildMinimalTrueTypeFont(bool includeUnicodeCmap) {
     struct Table {
-        const char* tag;
+        const char* tag = nullptr;
         std::vector<uint8_t> data;
     };
 

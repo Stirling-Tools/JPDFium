@@ -880,14 +880,22 @@ int setDocInfoFile(const char* in_path, const char* out_path, const char* const*
 }
 
 void configureForcedVersionWriter(QPDF& pdf, QPDFWriter& writer, const char* version) {
-    char* end = nullptr;
-    long major = std::strtol(version, &end, 10);
-    long minor = 0;
-    bool parsed = (end && end != version && *end == '.');
-    if (parsed) {
-        char* end2 = nullptr;
-        minor = std::strtol(end + 1, &end2, 10);
-        parsed = (end2 && end2 != end + 1);
+    int major = 0;
+    int minor = 0;
+    bool parsed = false;
+    if (version) {
+        char* end = nullptr;
+        const long parsedMajor = std::strtol(version, &end, 10);
+        if (end != version && *end == '.') {
+            char* minorEnd = nullptr;
+            const long parsedMinor = std::strtol(end + 1, &minorEnd, 10);
+            if (minorEnd != end + 1 && *minorEnd == '\0' && parsedMajor >= 0 && parsedMajor <= 99 &&
+                parsedMinor >= 0 && parsedMinor <= 99) {
+                major = static_cast<int>(parsedMajor);
+                minor = static_cast<int>(parsedMinor);
+                parsed = true;
+            }
+        }
     }
     if (parsed && (major < 1 || (major == 1 && minor < 5))) {
         // Object streams require PDF 1.5+ (ISO 32000-1 §7.5.7); keep <=1.4 valid.

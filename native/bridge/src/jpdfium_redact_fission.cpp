@@ -50,7 +50,7 @@ struct TextFragment {
     std::vector<uint16_t> utf16;            // UTF-16LE null-terminated text (original codepoints)
     std::vector<uint16_t> utf16Ligated;     // origin-sharing pairs recombined into U+FB00-FB06
     std::vector<uint16_t> utf16Decomposed;  // ligature-decomposed variant (empty if identical)
-    FS_MATRIX matrix;    // page space: linear part from FPDFText_GetMatrix (includes
+    FS_MATRIX matrix{};  // page space: linear part from FPDFText_GetMatrix (includes
                          // rotation, Tz and the form chain), e/f from FPDFText_GetCharOrigin
     float fontSize = 0;  // font size of the first surviving char
     bool unicodeUnreliable = false;  // any char in the run has a broken ToUnicode mapping
@@ -455,8 +455,9 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
                 }
                 if (lig) {
                     ligated.replace(li, n, 1, lig);
-                    runIdx.erase(runIdx.begin() + li, runIdx.begin() + li + n);
-                    runIdx.insert(runIdx.begin() + li, ri);
+                    runIdx.erase(runIdx.begin() + static_cast<std::ptrdiff_t>(li),
+                                 runIdx.begin() + static_cast<std::ptrdiff_t>(li + n));
+                    runIdx.insert(runIdx.begin() + static_cast<std::ptrdiff_t>(li), ri);
                 } else {
                     li++;
                 }
@@ -657,7 +658,7 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
                     if (computeDeviations(currentRun, devs) && devs.size() >= 2) {
                         double sum = 0;
                         for (double d : devs) sum += d;
-                        double mean = sum / devs.size();
+                        double mean = sum / static_cast<double>(devs.size());
                         // 0.25pt: above matrix-chain noise, below any real TJ
                         // adjustment (TJ numbers are integer /1000 em - at 12pt
                         // even -25 units = 0.3pt).
@@ -1196,17 +1197,23 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
         }
         // A promoted image can only sit before or after the whole top form, so
         // it must be the first or last painted content of its form chain.
-        for (FPDF_PAGEOBJECT cand : promotionCandidates) {
-            auto cit = objPtrToIndex.find(reinterpret_cast<uintptr_t>(cand));
-            if (cit == objPtrToIndex.end()) continue;
+        // Visit in document order so output does not depend on the pointer
+        // hash used by the candidate set.
+        std::vector<size_t> promotionOrder;
+        promotionOrder.reserve(promotionCandidates.size());
+        for (size_t index = 0; index < allObjs.size(); ++index) {
+            if (promotionCandidates.count(allObjs[index].obj)) promotionOrder.push_back(index);
+        }
+        for (size_t index : promotionOrder) {
+            const ObjRef& ref = allObjs[index];
             bool hasEarlier = false;
             bool hasLater = false;
-            classifyPaintPosition(allObjs[cit->second], hasEarlier, hasLater);
+            classifyPaintPosition(ref, hasEarlier, hasLater);
             if (hasEarlier && hasLater) {
                 if (cropRect) {
                     // Promotion would reorder the form's visible content.
                     // Keep the image where it is and clip the page instead.
-                    cropKeepWhole.insert(cand);
+                    cropKeepWhole.insert(ref.obj);
                     continue;
                 }
                 if (refusedUnmodified) *refusedUnmodified = true;
@@ -1936,21 +1943,24 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
     //    IMPORTANT: after the first FPDFPage_RemoveObject of a TEXT object
     //    every FPDF_TEXTPAGE handle is invalid - all text-page reads happened
     //    in the analysis phase above, nothing below queries the text page.
-    std::vector<FPDF_PAGEOBJECT> destroyList(objsToDestroy.begin(), objsToDestroy.end());
-
-    // Shallowest first: page-level objects (depth 0) before form children;
-    // tie-break by global index so destruction order (and thus output bytes)
-    // is deterministic across runs.
-    std::sort(destroyList.begin(), destroyList.end(), [&](FPDF_PAGEOBJECT a, FPDF_PAGEOBJECT b) {
-        auto ia = objPtrToIndex.find(reinterpret_cast<uintptr_t>(a));
-        auto ib = objPtrToIndex.find(reinterpret_cast<uintptr_t>(b));
-        int da = ia != objPtrToIndex.end() ? allObjs[ia->second].depth : 0;
-        int db = ib != objPtrToIndex.end() ? allObjs[ib->second].depth : 0;
+    // Every object queued for destruction came from allObjs, whose index
+    // already is document order. Collect indices rather than pointer values,
+    // then sort by depth (page-level before form children) and index so the
+    // destruction order, and therefore the output bytes, is reproducible.
+    std::vector<size_t> destroyOrder;
+    destroyOrder.reserve(objsToDestroy.size());
+    for (size_t i = 0; i < allObjs.size(); ++i) {
+        if (objsToDestroy.count(allObjs[i].obj)) destroyOrder.push_back(i);
+    }
+    std::sort(destroyOrder.begin(), destroyOrder.end(), [&](size_t a, size_t b) {
+        const int da = allObjs[a].depth;
+        const int db = allObjs[b].depth;
         if (da != db) return da < db;
-        int ga = ia != objPtrToIndex.end() ? ia->second : 0;
-        int gb = ib != objPtrToIndex.end() ? ib->second : 0;
-        return ga < gb;
+        return a < b;
     });
+    std::vector<FPDF_PAGEOBJECT> destroyList;
+    destroyList.reserve(destroyOrder.size());
+    for (size_t index : destroyOrder) destroyList.push_back(allObjs[index].obj);
 
     // Pre-compute the skip set while every pointer in the parent chain is
     // still alive (ancestors are destroyed first, so the chain cannot be

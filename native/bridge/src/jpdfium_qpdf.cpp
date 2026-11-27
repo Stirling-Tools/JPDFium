@@ -734,29 +734,29 @@ int writeToFile(std::shared_ptr<QPDF> const& qpdf, const char* out_path,
         return -1;
     }
     int32_t jbig2Replaced = applyDocumentOptions(*qpdf, options);
-    FILE* out = createOutputFile(out_path);
+    // Own the FILE* for the whole write; QPDFWriter is told not to close it.
+    // A throw while constructing or configuring the writer cannot leak the
+    // descriptor.
+    std::unique_ptr<FILE, decltype(&std::fclose)> out(createOutputFile(out_path), &std::fclose);
     if (!out) return -1;
-    bool writerOwnsFile = false;
     try {
         QPDFWriter w{*qpdf};
         // Encryption is deliberately preserved here: optimize, merge, and
         // extract are round-trip operations, and silently dropping the
         // source encryption would change the document's protection. QDF mode
         // opts out explicitly because readable output cannot stay encrypted.
-        // QPDFWriter::setOutputFile(..., true) takes ownership of `out` and closes it.
-        w.setOutputFile("jpdfium-out", out, true);
-        writerOwnsFile = true;  // NOLINT(clang-analyzer-unix.Stream) -- owned by QPDFWriter
+        // QPDFWriter runs before |out| is destroyed, so the caller keeps
+        // ownership and the unique_ptr performs the single fclose.
+        w.setOutputFile("jpdfium-out", out.get(), false);
         configureWriter(w, options, jbig2Replaced);
         WriterLock lock{options.compressionLevel};
         w.write();
         return 0;
     } catch (const std::exception& e) {
         std::fprintf(stderr, "jpdfium qpdf file: %s\n", e.what());
-        if (!writerOwnsFile) std::fclose(out);
         return -1;
     } catch (...) {
         std::fprintf(stderr, "jpdfium qpdf file: unknown error\n");
-        if (!writerOwnsFile) std::fclose(out);
         return -1;
     }
 }

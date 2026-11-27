@@ -108,8 +108,8 @@ static const auto kUnpremulTable = []() noexcept {
 }();
 
 inline void bgraToRgbaInPlace(uint8_t* __restrict buf, int w, int h, int stride) {
-    if (stride == w * 4) {
-        size_t total = static_cast<size_t>(w) * static_cast<size_t>(h);
+    if (stride >= 0 && static_cast<size_t>(stride) == static_cast<size_t>(w) * 4u) {
+        const size_t total = static_cast<size_t>(w) * static_cast<size_t>(h);
         size_t i = 0;
 #if defined(__ARM_NEON) || defined(__aarch64__)
         for (; i + 16 <= total; i += 16) {
@@ -153,10 +153,10 @@ inline void bgraToRgbaInPlace(uint8_t* __restrict buf, int w, int h, int stride)
 
 inline void unpremulAndSwapBgraInPlace(uint8_t* __restrict buf, int w, int h, int stride,
                                        bool reverse_byte_order) {
-    if (stride == w * 4) {
-        int total = w * h;
+    if (stride >= 0 && static_cast<size_t>(stride) == static_cast<size_t>(w) * 4u) {
+        const size_t total = static_cast<size_t>(w) * static_cast<size_t>(h);
         uint8_t* __restrict r = buf;
-        for (int i = 0; i < total; ++i, r += 4) {
+        for (size_t i = 0; i < total; ++i, r += 4) {
             uint8_t a = r[3];
             if (a == 255) {
                 if (reverse_byte_order) {
@@ -650,8 +650,13 @@ constexpr size_t kRetainRasterFrameBytes = size_t{32} * 1024u * 1024u;
 // Optional JPEG quality for the raster embed, latched from the environment.
 int flattenJpegQuality() {
     static const int quality = []() {
-        const char* value = getenv("JPDFIUM_FLATTEN_JPEG_QUALITY");
-        return value ? static_cast<int>(std::strtol(value, nullptr, 10)) : 0;
+        const char* value = std::getenv("JPDFIUM_FLATTEN_JPEG_QUALITY");
+        if (!value || !*value) return 0;
+        char* end = nullptr;
+        const long parsed = std::strtol(value, &end, 10);
+        // 0 disables the optional TurboJPEG path; TurboJPEG accepts 1..100.
+        if (end == value || *end != '\0' || parsed < 1 || parsed > 100) return 0;
+        return static_cast<int>(parsed);
     }();
     return quality;
 }

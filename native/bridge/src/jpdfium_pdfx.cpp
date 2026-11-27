@@ -2,6 +2,7 @@
 #include <fpdfview.h>
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -1895,11 +1896,10 @@ QPDFObjectHandle Converter::ColourKeyToStencil(const Raster& raster, QPDFObjectH
                 keyed = v >= lo[c] && v <= hi[c];
             }
             if (keyed) {
-                const size_t byteIdx = static_cast<size_t>(y * mask_row + x / 8);
-                const auto bitMask =
-                    static_cast<unsigned char>(0x80U >> static_cast<unsigned>(x % 8));
-                bits[byteIdx] =
-                    static_cast<char>(static_cast<unsigned char>(bits[byteIdx]) | bitMask);
+                const size_t bi = static_cast<size_t>(y * mask_row + x / 8);
+                const auto current = std::bit_cast<unsigned char>(bits[bi]);
+                bits[bi] =
+                    std::bit_cast<char>(static_cast<unsigned char>(current | (0x80u >> (x % 8))));
             }
         }
     }

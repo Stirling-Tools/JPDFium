@@ -150,7 +150,7 @@ bool compilePcre2(const std::u32string& pattern, bool caseless, Pcre2Pattern& ou
     pcre2_set_match_limit(mctx, kPcre2MatchLimit);
     pcre2_set_depth_limit(mctx, kPcre2DepthLimit);
     // JIT stack 32KB initial / 512KB max; freed by the Pcre2Pattern destructor.
-    pcre2_jit_stack* jst = pcre2_jit_stack_create(32 * 1024, 512 * 1024, nullptr);
+    pcre2_jit_stack* jst = pcre2_jit_stack_create(size_t{32} * 1024, size_t{512} * 1024, nullptr);
     if (jst) pcre2_jit_stack_assign(mctx, nullptr, jst);
     out.code = code;
     out.md = md;
@@ -197,7 +197,7 @@ static constexpr double kOriginMarginEm = 0.01;
 // object to take a size from.
 static double charEm(FPDF_TEXTPAGE textPage, int index, FS_MATRIX* matrix) {
     if (!FPDFText_GetTextObject(textPage, index)) return 0;
-    FS_MATRIX m;
+    FS_MATRIX m{};
     if (!FPDFText_GetMatrix(textPage, index, &m)) return 0;
     if (matrix) *matrix = m;
     double size = FPDFText_GetFontSize(textPage, index);
@@ -390,7 +390,7 @@ static void coverOutlineLessGlyph(FPDF_TEXTPAGE textPage, int index, double* l, 
                                   double* b, double* t) {
     unsigned int u = FPDFText_GetUnicode(textPage, index);
     if (u == ' ' || u == 0xA0 || u == '\t' || u == '\r' || u == '\n') return;
-    FS_MATRIX m;
+    FS_MATRIX m{};
     double em = charEm(textPage, index, &m);
     double ox, oy;
     if (em <= 0 || !FPDFText_GetCharOrigin(textPage, index, &ox, &oy)) return;
@@ -443,7 +443,7 @@ struct BaselineFrame {
 };
 
 bool charFrame(FPDF_TEXTPAGE tp, int ci, BaselineFrame* f) {
-    FS_MATRIX m;
+    FS_MATRIX m{};
     if (!FPDFText_GetMatrix(tp, ci, &m) || !FPDFText_GetCharOrigin(tp, ci, &f->ox, &f->oy))
         return false;
     double nu = std::hypot(static_cast<double>(m.a), static_cast<double>(m.b));
@@ -551,7 +551,7 @@ bool matchCharBox(FPDF_TEXTPAGE textPage, int index, double* l, double* r, doubl
     }
     FPDF_PAGEOBJECT obj = FPDFText_GetTextObject(textPage, index);
     if (!obj || FPDFTextObj_GetTextRenderMode(obj) != FPDF_TEXTRENDERMODE_INVISIBLE) return true;
-    FS_MATRIX m;
+    FS_MATRIX m{};
     double em = charEm(textPage, index, &m);
     double ox, oy;
     if (em <= 0 || !FPDFText_GetCharOrigin(textPage, index, &ox, &oy)) return true;
@@ -1220,6 +1220,7 @@ void alignMatchesToShapedClusters(FPDF_TEXTPAGE tp, std::vector<TextMatch>& matc
     CharBoxCache chars(tp);
     for (auto& m : matches) {
         std::unordered_map<FPDF_PAGEOBJECT, int> firstPos, lastPos;
+        std::vector<FPDF_PAGEOBJECT> objectOrder;
         for (int ci : m.charIndices) {
             FPDF_PAGEOBJECT o = FPDFText_GetTextObject(tp, ci);
             auto it = runs.find(o);
@@ -1227,11 +1228,15 @@ void alignMatchesToShapedClusters(FPDF_TEXTPAGE tp, std::vector<TextMatch>& matc
             auto pit = std::lower_bound(it->second.chars.begin(), it->second.chars.end(), ci);
             if (pit == it->second.chars.end() || *pit != ci) continue;
             int pos = static_cast<int>(pit - it->second.chars.begin());
-            if (!firstPos.count(o) || pos < firstPos[o]) firstPos[o] = pos;
-            if (!lastPos.count(o) || pos > lastPos[o]) lastPos[o] = pos;
+            const auto [fit, firstInserted] = firstPos.try_emplace(o, pos);
+            if (firstInserted) objectOrder.push_back(o);
+            if (!firstInserted && pos < fit->second) fit->second = pos;
+            const auto [lit, lastInserted] = lastPos.try_emplace(o, pos);
+            if (!lastInserted && pos > lit->second) lit->second = pos;
         }
         bool extended = false;
-        for (auto& [o, fp] : firstPos) {
+        for (FPDF_PAGEOBJECT o : objectOrder) {
+            const int fp = firstPos[o];
             const ShapeRun& run = runs[o];
             int lp = lastPos[o];
             int cs = run.clusterOf[fp];
