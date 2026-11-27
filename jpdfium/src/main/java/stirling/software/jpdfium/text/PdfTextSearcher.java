@@ -60,8 +60,8 @@ public final class PdfTextSearcher {
      * Parse match results from the native JSON format.
      * Format: [{"start":0,"len":3}, ...]
      *
-     * <p>Single index-based sweep: no {@code String.split} or per-field substring
-     * allocation beyond the value span handed to {@code Integer.parseInt}.
+     * <p>Single index-based sweep: no {@code String.split}, no substrings. Numeric
+     * values are parsed in place directly from the backing {@code char} sequence.
      */
     static List<SearchMatch> parseMatchesJson(String json, int pageIndex) {
         List<SearchMatch> matches = new ArrayList<>();
@@ -95,10 +95,9 @@ public final class PdfTextSearcher {
                         if (d == ',' || d == '}') break;
                         v1++;
                     }
-                    String val = json.substring(v0, v1);
                     switch (k0) {
-                        case 's' -> start = Integer.parseInt(val);  // "start"
-                        case 'l' -> len = Integer.parseInt(val);    // "len"
+                        case 's' -> start = parseIntInPlace(json, v0, v1);  // "start"
+                        case 'l' -> len = parseIntInPlace(json, v0, v1);    // "len"
                         default -> { }
                     }
                     i = v1;
@@ -110,6 +109,23 @@ public final class PdfTextSearcher {
             p = i;
         }
         return matches;
+    }
+
+    private static int parseIntInPlace(String s, int start, int end) {
+        int i = start;
+        boolean negative = false;
+        if (i < end && s.charAt(i) == '-') {
+            negative = true;
+            i++;
+        }
+        if (i >= end) throw new NumberFormatException("empty number");
+        int result = 0;
+        for (; i < end; i++) {
+            char c = s.charAt(i);
+            if (c < '0' || c > '9') throw new NumberFormatException("not a digit");
+            result = result * 10 + (c - '0');
+        }
+        return negative ? -result : result;
     }
 
     /**
