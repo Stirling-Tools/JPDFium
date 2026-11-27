@@ -455,7 +455,7 @@ public final class PdfRepair {
                     }
                     continue;
                 }
-                if (matchesAscii(pdf, i, "endstream") && isTokenStart(pdf, i)) {
+                if (matchesAscii(pdf, i, "endstream") && isBareKeywordStart(pdf, i)) {
                     for (int k = i + 1; k < i + 9; k++) guarded[k] = true;
                     i += 8;
                     stream = false;
@@ -495,7 +495,7 @@ public final class PdfRepair {
                     && (i == 0 || pdf[i - 1] != '<')) {
                 guarded[i] = true;
                 hex = true;
-            } else if (matchesAscii(pdf, i, "stream") && isTokenStart(pdf, i)
+            } else if (matchesAscii(pdf, i, "stream") && isBareKeywordStart(pdf, i)
                     && (i + 6 >= pdf.length || pdf[i + 6] == '\n' || pdf[i + 6] == '\r')) {
                 guarded[i] = true;
                 stream = true;
@@ -553,12 +553,18 @@ public final class PdfRepair {
                 || prev == '%';
     }
 
+    // A PDF name such as /stream is data, not the stream keyword. isTokenStart
+    // intentionally accepts '/' for names in general; keyword scanning must not.
+    private static boolean isBareKeywordStart(byte[] pdf, int i) {
+        return isTokenStart(pdf, i) && (i == 0 || pdf[i - 1] != '/');
+    }
+
     private static byte[] normalizeRepairTokens(byte[] pdf) {
         return deduplicateResourceKeys(normalizeTruncatedObj(normalizeGluedEndobj(pdf)));
     }
 
-    private static final Pattern STREAM_BODY = Pattern.compile("stream\r?\n.*?endstream",
-            Pattern.DOTALL);
+    private static final Pattern STREAM_BODY = Pattern.compile(
+            "(?<![A-Za-z0-9/#])stream(?:\r\n|\r|\n).*?endstream", Pattern.DOTALL);
     private static final Pattern RESOURCE_REF = Pattern.compile("(/Im\\d+)[\\t ]+\\d+[\\t ]+0[\\t ]+R");
 
     // Some producers repeat resource keys hundreds of times (e.g. /Im13 ... /Im13).
@@ -1169,15 +1175,49 @@ public final class PdfRepair {
 
     private static java.util.List<String> kidsOrder(String text) {
         java.util.List<String> order = new java.util.ArrayList<>();
-        Matcher kids = Pattern.compile("/Kids\\s*\\[([^\\]]*)]").matcher(text);
-        while (kids.find()) {
-            Matcher ref = Pattern.compile("(\\d+)\\s+\\d+\\s+R").matcher(kids.group(1));
-            while (ref.find()) {
-                String value = ref.group(1) + " 0 R";
-                if (!order.contains(value)) order.add(value);
+        int[] catalog = catalogObjectBefore(text, text.length());
+        if (catalog != null) {
+            String catalogBody = objectBody(text, catalog[0], catalog[1]);
+            String rootRef = catalogBody == null ? null : valueAfterKey(catalogBody, "/Pages");
+            if (rootRef != null) {
+                collectKidsOrder(text, rootRef.trim(), order, new java.util.HashSet<>(), 0);
+            }
+        }
+        if (order.isEmpty()) {
+            // No usable root: preserve the previous declaration-order fallback.
+            Matcher kids = Pattern.compile("/Kids\\s*\\[([^\\]]*)]").matcher(text);
+            while (kids.find()) {
+                Matcher ref = Pattern.compile("(\\d+)\\s+(\\d+)\\s+R").matcher(kids.group(1));
+                while (ref.find()) {
+                    String value = ref.group(1) + " " + ref.group(2) + " R";
+                    if (!order.contains(value)) order.add(value);
+                }
             }
         }
         return order;
+    }
+
+    private static void collectKidsOrder(String text, String ref, java.util.List<String> order,
+                                         java.util.Set<String> visited, int depth) {
+        if (depth > 64 || !visited.add(ref)) return;
+        Matcher r = Pattern.compile("(\\d+)\\s+(\\d+)\\s+R").matcher(ref);
+        if (!r.find()) return;
+        long number = parseObjectNumber(r.group(1));
+        long generation = parseObjectNumber(r.group(2));
+        if (number < 0 || generation < 0) return;
+        String body = objectBody(text, number, generation);
+        if (body == null) return;
+        if (Pattern.compile("/Type\\s*/Page(?![s])").matcher(body).find()) {
+            if (!order.contains(ref)) order.add(ref);
+            return;
+        }
+        String kids = valueAfterKey(body, "/Kids");
+        if (kids == null) return;
+        Matcher child = Pattern.compile("(\\d+)\\s+(\\d+)\\s+R").matcher(kids);
+        while (child.find()) {
+            collectKidsOrder(text, child.group(1) + " " + child.group(2) + " R", order, visited,
+                             depth + 1);
+        }
     }
 
     private static String objectBody(String text, long number, long generation) {
@@ -1299,12 +1339,13 @@ public final class PdfRepair {
 
     // Rebuilds a /Pages tree from literal page dictionaries that lost their parent.
     // Streams are skipped so /Type /Page text inside content cannot create pages.
-    private static byte[] rebuildPageTree(byte[] input) {
+    static byte[] rebuildPageTree(byte[] input) {
         if (input == null || input.length < 16) return null;
         String text = new String(input, StandardCharsets.ISO_8859_1);
         Matcher stream = STREAM_BODY.matcher(text);
         java.util.List<Integer> pageStarts = new java.util.ArrayList<>();
         java.util.List<Long> pageNumbers = new java.util.ArrayList<>();
+        java.util.List<Long> pageGenerations = new java.util.ArrayList<>();
         java.util.List<String> refs = new java.util.ArrayList<>();
         java.util.List<String> orphanedPages = new java.util.ArrayList<>();
         int pos = 0;
@@ -1314,20 +1355,27 @@ public final class PdfRepair {
             String chunk = text.substring(from, to);
             Matcher page = Pattern.compile("/Type\\s*/Page(?![s])").matcher(chunk);
             while (page.find()) {
-                Matcher obj = Pattern.compile("(\\d+)\\s+\\d+\\s+obj").matcher(chunk.substring(0, page.start()));
+                Matcher obj =
+                        Pattern.compile("(\\d+)\\s+(\\d+)\\s+obj")
+                                .matcher(chunk.substring(0, page.start()));
                 String number = null;
+                String generation = null;
                 int start = -1;
                 int objEnd = -1;
                 while (obj.find()) {
                     number = obj.group(1);
+                    generation = obj.group(2);
                     start = from + obj.start();
                     objEnd = from + obj.end();
                 }
-                boolean owned = number != null && page.start() - (objEnd - from) <= 64;
-                if (owned && !refs.contains(number + " 0 R")) {
-                    refs.add(number + " 0 R");
+                boolean owned = number != null && generation != null
+                        && page.start() - (objEnd - from) <= 64;
+                String ref = owned ? number + " " + generation + " R" : null;
+                if (owned && !refs.contains(ref)) {
+                    refs.add(ref);
                     pageStarts.add(start);
                     pageNumbers.add(parseObjectNumber(number));
+                    pageGenerations.add(parseObjectNumber(generation));
                 } else if (!owned) {
                     String orphan = balancedDictionary(chunk, page.start());
                     if (orphan != null) orphanedPages.add(orphan);
@@ -1391,8 +1439,8 @@ public final class PdfRepair {
                     continue;
                 }
             }
-            if (pageNumbers.get(i) >= 0) {
-                dict = inheritPageAttributes(dict, text, pageNumbers.get(i), 0);
+            if (pageNumbers.get(i) >= 0 && pageGenerations.get(i) >= 0) {
+                dict = inheritPageAttributes(dict, text, pageNumbers.get(i), pageGenerations.get(i));
             }
             out.append(replaceParent(dict, pagesObj));
             cursor = end;
@@ -1406,9 +1454,11 @@ public final class PdfRepair {
         int[] catalog = catalogObjectBefore(text, text.length());
         String result;
         long rootObj;
+        long rootGen = 0;
         if (catalog != null) {
             result = updateCatalogPages(out.toString(), catalog, pagesObj);
             rootObj = catalog[0];
+            rootGen = catalog[1];
         } else {
             rootObj = maxObj + 2;
             result = out.toString() + rootObj + " 0 obj\n<< /Type /Catalog /Pages " + pagesObj
@@ -1416,7 +1466,7 @@ public final class PdfRepair {
         }
         // /Size is one greater than the highest object number. pagesObj is
         // maxObj + 1, and a newly created catalog is maxObj + 2.
-        result += "trailer\n<< /Root " + rootObj + " 0 R /Size "
+        result += "trailer\n<< /Root " + rootObj + " " + rootGen + " R /Size "
                 + Math.max(maxObj + 2, rootObj + 1) + " >>\nstartxref\n0\n%%EOF\n";
         return result.getBytes(StandardCharsets.ISO_8859_1);
     }

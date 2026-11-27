@@ -214,6 +214,76 @@ class PdfRepairStructuralDamageTest {
         }
     }
 
+    @Test
+    void rebuildPreservesPageAndCatalogGenerations() throws Exception {
+        Assumptions.assumeTrue(NativeRuntime.isFull(), "Requires full native repair bridge");
+        String content = "BT /F1 12 Tf 72 700 Td (GEN) Tj ET";
+        String pdf = "%PDF-1.4\n"
+                + "1 1 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"
+                + "2 0 obj\n<< /Type /Pages /Kids [5 1 R] /Count 1 >>\nendobj\n"
+                + "5 1 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+                + "/Resources << /Font << /F1 9 0 R >> >> /Contents 6 0 R >>\nendobj\n"
+                + "6 0 obj\n<< /Length " + content.length() + " >>\nstream\n" + content
+                + "\nendstream\nendobj\n"
+                + FONT_OBJECT
+                + "trailer\n<< /Root 1 1 R /Size 10 >>\nstartxref\n0\n%%EOF\n";
+        byte[] rebuilt = PdfRepair.rebuildPageTree(pdf.getBytes(StandardCharsets.ISO_8859_1));
+        assertNotNull(rebuilt, "page-tree reconstruction must run");
+        String raw = new String(rebuilt, StandardCharsets.ISO_8859_1);
+        assertTrue(raw.contains("/Root 1 1 R"), "catalog generation must survive reconstruction");
+        assertTrue(raw.contains("5 1 R"), "page generation must survive reconstruction");
+
+        RepairResult result = repairBrokenHeader(pdf);
+        assertTrue(result.isUsable(), "mixed-generation tree must repair: " + result.status());
+        try (PDDocument doc = Loader.loadPDF(result.repairedPdf())) {
+            assertEquals(1, doc.getNumberOfPages(), "the generation-1 page must remain reachable");
+            assertTrue(new PDFTextStripper().getText(doc).contains("GEN"));
+        }
+    }
+
+    @Test
+    void rebuildFollowsPageTreeOrderNotDefinitionOrder() {
+        String pdf = "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"
+                + "10 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 /Parent 2 0 R >>\nendobj\n"
+                + "20 0 obj\n<< /Type /Pages /Kids [4 0 R] /Count 1 /Parent 2 0 R >>\nendobj\n"
+                + "3 0 obj\n<< /Type /Page /Parent 10 0 R /MediaBox [0 0 200 200] >>\nendobj\n"
+                + "4 0 obj\n<< /Type /Page /Parent 20 0 R /MediaBox [0 0 200 200] >>\nendobj\n"
+                + "2 0 obj\n<< /Type /Pages /Kids [20 0 R 10 0 R] /Count 2 >>\nendobj\n";
+        byte[] rebuilt = PdfRepair.rebuildPageTree(pdf.getBytes(StandardCharsets.ISO_8859_1));
+        assertNotNull(rebuilt, "page-tree reconstruction must run");
+        String raw = new String(rebuilt, StandardCharsets.ISO_8859_1);
+        assertTrue(raw.contains("Kids [4 0 R 3 0 R]"),
+                "pages must follow root /Kids traversal: " + raw);
+    }
+
+    @Test
+    void crOnlyStreamPayloadIsNotPageContent() {
+        String pdf = "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"
+                + "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n"
+                + "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>\nendobj\n"
+                + "4 0 obj\n<< /Length 54 >>\nstream\r"
+                + "90 0 obj << /Type /Page >> endobj\r"
+                + "endstream\nendobj\n";
+        byte[] rebuilt = PdfRepair.rebuildPageTree(pdf.getBytes(StandardCharsets.ISO_8859_1));
+        assertNotNull(rebuilt, "page-tree reconstruction must run");
+        String raw = new String(rebuilt, StandardCharsets.ISO_8859_1);
+        assertFalse(raw.contains("90 0 R"), "CR-only stream payload must not become a page: " + raw);
+        assertTrue(raw.contains("3 0 R"), "the real page must remain");
+    }
+
+    @Test
+    void streamNameDoesNotHideFollowingPage() {
+        String pdf = "1 0 obj\n<< /Type /Catalog /Pages 2 0 R /X /stream >>\nendobj\n"
+                + "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n"
+                + "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>\nendobj\n"
+                + "90 0 obj\n<< /Type /Page /MediaBox [0 0 200 200] >>\nendobj\n";
+        byte[] rebuilt = PdfRepair.rebuildPageTree(pdf.getBytes(StandardCharsets.ISO_8859_1));
+        assertNotNull(rebuilt, "page-tree reconstruction must run");
+        String raw = new String(rebuilt, StandardCharsets.ISO_8859_1);
+        assertTrue(raw.contains("90 0 R"),
+                "a /stream name is not a stream and must not hide later pages: " + raw);
+    }
+
     private static int trailerSize(byte[] pdf) {
         String text = new String(pdf, StandardCharsets.ISO_8859_1);
         java.util.regex.Matcher m = java.util.regex.Pattern.compile("/Size\\s+(\\d+)").matcher(text);
