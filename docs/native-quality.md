@@ -51,14 +51,14 @@ ASAN_OPTIONS=detect_container_overflow=0 ctest --test-dir native/build-asan
 
 ## Residual diagnostics
 
-The project checks still report performance/style suggestions (by-value
-`QPDFObjectHandle` parameters, `std::move` opportunities, enum base widths) and
-two known false-positive categories: throwing static initialization for
-constexpr/`thread_local` defaults, and branch-clone on equivalent switch/if
-bodies. There are **zero** `clang-analyzer-*`, `bugprone-exception-escape`,
+After this pass, the project `.clang-tidy` checks and cppcheck report no
+findings for `native/bridge/src`. The test-only `hardening_regression` table
+tag initializer was also fixed, so cppcheck covers the whole project cleanly.
+There are **zero** `clang-analyzer-*`, `bugprone-exception-escape`,
 `bugprone-unused-return-value`, `bugprone-narrowing-conversions`,
-`bugprone-implicit-widening-of-multiplication-result`, or `bugprone-empty-catch`
-findings; cppcheck reports zero warnings.
+`bugprone-implicit-widening-of-multiplication-result`,
+`bugprone-nondeterministic-pointer-iteration-order`, or
+`bugprone-empty-catch` findings.
 
 ## Verification
 

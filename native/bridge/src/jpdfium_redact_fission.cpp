@@ -1767,10 +1767,10 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
                     canEdit = false;
                 } else {
                     const ObjRef& ref = allObjs[pit->second];
-                    if (ref.topFormObj && objsToDestroy.count(ref.topFormObj)) {
-                        canEdit = false;  // freed with the destroyed top form
-                    } else if (!FPDFFormObj_RemoveObject(plan.parentForm, plan.originalObj)) {
-                        canEdit = false;
+                    const bool topFormGone = ref.topFormObj && objsToDestroy.count(ref.topFormObj);
+                    if (topFormGone ||
+                        !FPDFFormObj_RemoveObject(plan.parentForm, plan.originalObj)) {
+                        canEdit = false;  // the original is already or becomes unreachable
                     } else {
                         detachedFromForms.insert(plan.parentForm);
                         promotedFromForm = true;

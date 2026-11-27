@@ -907,14 +907,14 @@ static bool buildLiteralAlternation(const char** words, int32_t wordCount, bool 
     std::u32string body;
     for (const auto& esc : escaped) {
         body += esc;
-        body += U"|";
+        body += U'|';
     }
     body.pop_back();  // trailing '|'
     pattern.clear();
     if (wholeWord) pattern += U"\\b";
     pattern += U"(?:";
     pattern += body;
-    pattern += U")";
+    pattern += U')';
     if (wholeWord) pattern += U"\\b";
     return true;
 }
