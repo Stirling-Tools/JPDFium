@@ -1596,29 +1596,117 @@ public final class PdfRepair {
         return out;
     }
 
-    /** Finds the object header that owns the last catalog dictionary before {@code limit}. */
+    /**
+     * Finds the object header that owns the last real catalog dictionary before {@code limit}.
+     * String contents and nested dictionaries are ignored: an Info value such as
+     * {@code /Subject (/Type /Catalog)} must not become the document root.
+     */
     private static int[] catalogObjectBefore(String body, int limit) {
-        int type = body.lastIndexOf("/Type /Catalog", limit);
-        if (type < 0) type = body.lastIndexOf("/Type/Catalog", limit);
-        if (type < 0) return null;
-        int obj = body.lastIndexOf(" obj", type);
-        if (obj < 0) return null;
-        int p = obj - 1;
-        while (p >= 0 && isPdfSpace((byte) body.charAt(p))) p--;
-        int genEnd = p;
-        while (p >= 0 && Character.isDigit(body.charAt(p))) p--;
-        if (p == genEnd) return null;
-        int genStart = p + 1;
-        while (p >= 0 && isPdfSpace((byte) body.charAt(p))) p--;
-        int numEnd = p;
-        while (p >= 0 && Character.isDigit(body.charAt(p))) p--;
-        if (p == numEnd) return null;
-        if (p >= 0 && !isPdfSpace((byte) body.charAt(p)) && body.charAt(p) != '>') return null;
-        try {
-            return new int[] {Integer.parseInt(body.substring(p + 1, numEnd + 1)),
-                    Integer.parseInt(body.substring(genStart, genEnd + 1))};
-        } catch (NumberFormatException _) {
-            return null;
+        Matcher headers =
+                Pattern.compile("(?m)^[\\t ]*(\\d+)[\\t ]+(\\d+)[\\t ]+obj\\b").matcher(body);
+        int[] found = null;
+        while (headers.find() && headers.start() < limit) {
+            long number = parseObjectNumber(headers.group(1));
+            long generation = parseObjectNumber(headers.group(2));
+            if (number < 0 || generation < 0) continue;
+            int end = body.indexOf("endobj", headers.end());
+            if (end < 0 || end > limit) continue;
+            int dictStart = body.indexOf("<<", headers.end());
+            if (dictStart < 0 || dictStart > end) continue;
+            int dictEnd = dictionaryEnd(body, dictStart);
+            if (dictEnd < 0 || dictEnd > end) continue;
+            String dictionary = body.substring(dictStart, dictEnd);
+            if (hasTopLevelCatalogType(dictionary)) {
+                found = new int[] {(int) number, (int) generation};
+            }
         }
+        return found;
+    }
+
+    /** True when the dictionary's own (top-level) {@code /Type} is {@code /Catalog}. */
+    private static boolean hasTopLevelCatalogType(String dictionary) {
+        int depth = 0;
+        boolean literal = false;
+        boolean hex = false;
+        boolean comment = false;
+        int arrayDepth = 0;
+        for (int i = 0; i < dictionary.length(); ) {
+            char c = dictionary.charAt(i);
+            if (comment) {
+                if (c == '\n' || c == '\r') comment = false;
+                i++;
+                continue;
+            }
+            if (literal) {
+                if (c == '\\') {
+                    i += 2;
+                } else {
+                    if (c == ')') literal = false;
+                    i++;
+                }
+                continue;
+            }
+            if (hex) {
+                if (c == '>') hex = false;
+                i++;
+                continue;
+            }
+            if (c == '%') {
+                comment = true;
+                i++;
+                continue;
+            }
+            if (c == '(') {
+                literal = true;
+                i++;
+                continue;
+            }
+            if (c == '<') {
+                if (i + 1 < dictionary.length() && dictionary.charAt(i + 1) == '<') {
+                    depth++;
+                    i += 2;
+                } else {
+                    hex = true;
+                    i++;
+                }
+                continue;
+            }
+            if (c == '>' && i + 1 < dictionary.length() && dictionary.charAt(i + 1) == '>') {
+                depth--;
+                i += 2;
+                continue;
+            }
+            if (c == '[') {
+                arrayDepth++;
+                i++;
+                continue;
+            }
+            if (c == ']') {
+                if (arrayDepth > 0) arrayDepth--;
+                i++;
+                continue;
+            }
+            if (c == '/' && depth == 1 && arrayDepth == 0) {
+                int end = i + 1;
+                while (end < dictionary.length() && isPdfNameByte((byte) dictionary.charAt(end))) end++;
+                String name = dictionary.substring(i, end);
+                if (!"/Type".equals(name)) {
+                    i = end;
+                    continue;
+                }
+                int value = end;
+                while (value < dictionary.length() && Character.isWhitespace(dictionary.charAt(value)))
+                    value++;
+                if (value < dictionary.length() && dictionary.charAt(value) == '/') {
+                    int valueEnd = value + 1;
+                    while (valueEnd < dictionary.length()
+                            && isPdfNameByte((byte) dictionary.charAt(valueEnd))) valueEnd++;
+                    return "/Catalog".equals(dictionary.substring(value, valueEnd));
+                }
+                return false;
+            }
+            i++;
+        }
+        return false;
     }
 }

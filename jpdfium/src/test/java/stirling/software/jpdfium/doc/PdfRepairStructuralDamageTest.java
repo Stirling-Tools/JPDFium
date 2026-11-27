@@ -215,6 +215,26 @@ class PdfRepairStructuralDamageTest {
     }
 
     @Test
+    void catalogSelectionIgnoresTypeTextInsideLaterInfoObject() throws Exception {
+        String pdf = "%PDF-1.4\n"
+                + "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"
+                + "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>\nendobj\n"
+                + "4 0 obj\n<< /Title (metadata) /Subject (/Type /Catalog) >>\nendobj\n"
+                + "trailer\n<< /Root 1 0 R /Size 5 >>\nstartxref\n0\n%%EOF\n";
+        byte[] rebuilt = PdfRepair.rebuildPageTree(pdf.getBytes(StandardCharsets.ISO_8859_1));
+        assertNotNull(rebuilt, "page-tree reconstruction must run");
+        String raw = new String(rebuilt, StandardCharsets.ISO_8859_1);
+        int lastTrailer = raw.lastIndexOf("trailer");
+        assertTrue(lastTrailer >= 0, raw);
+        assertTrue(raw.substring(lastTrailer).contains("/Root 1 0 R"),
+                "the real catalog must be selected, not /Type /Catalog text in Info: " + raw);
+        assertFalse(raw.contains("<< /Pages"),
+                "the Info object must not receive the rebuilt /Pages entry: " + raw);
+        assertTrue(raw.contains("1 0 obj\n<< /Type /Catalog /Pages 5 0 R >>"),
+                "the real catalog must point at the rebuilt page tree: " + raw);
+    }
+
+    @Test
     void rebuildPreservesPageAndCatalogGenerations() throws Exception {
         Assumptions.assumeTrue(NativeRuntime.isFull(), "Requires full native repair bridge");
         String content = "BT /F1 12 Tf 72 700 Td (GEN) Tj ET";

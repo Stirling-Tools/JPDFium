@@ -60,6 +60,15 @@ ASAN_OPTIONS=detect_container_overflow=0 ctest --test-dir native/build-asan
   regression checks both `/ColorSpace` and `/Components`. Unresolved CodeRabbit
   feedback was audited across 48 PRs (129 open threads); fixes were limited to
   confirmed current-tip defects.
+- **Catalog selection from object dictionaries.** Page-tree reconstruction and
+  truncated-file salvage selected the last raw `/Type /Catalog` substring,
+  including text inside a later Info object's `/Subject (...)` value. The
+  scanner now walks top-level object headers, extracts each object's first
+  dictionary, and accepts `/Type` only at dictionary depth 1 outside strings,
+  comments, hex strings, arrays, and nested dictionaries. The real catalog and
+  its generation are retained instead of pointing `/Root` at Info. Regression:
+  `PdfRepairStructuralDamageTest.catalogSelectionIgnoresTypeTextInsideLaterInfoObject`
+  (pre-fix selected object 4 and wrote `/Root 4 0 R`).
 - **PDF/A part after a conformance-only marker.** A raw Info string such as
   `pdfaid:conformance='B'` made the scanner treat the document as a PDF/A
   claim, but without a raw `pdfaid:part` it defaulted to part 2 and skipped the
@@ -177,7 +186,7 @@ There are **zero** `clang-analyzer-*`, `bugprone-exception-escape`,
 
 ## Verification
 
-- Integration suite: `4916` tests, `0` failures, `0` errors, `314` skipped.
+- Integration suite: `4917` tests, `0` failures, `0` errors, `314` skipped.
 - Release ctest: `6/6` passed.
 - ASan+UBSan ctest: `6/6` passed with
   `ASAN_OPTIONS=detect_container_overflow=0`. Default ASan still reports the
