@@ -763,6 +763,17 @@ if(JPDFIUM_BUILD_TESTS)
         target_compile_options(staging_publish PRIVATE -Wall -Wextra -Wpedantic -Werror)
     endif()
     add_test(NAME staging_publish COMMAND staging_publish)
+    if(JPDFIUM_USE_PDFIUM)
+        add_executable(hardening_regression bridge/tests/hardening_regression.cpp)
+        target_include_directories(hardening_regression PRIVATE bridge/include)
+        if(MSVC)
+            target_compile_options(hardening_regression PRIVATE /W4 /WX)
+        else()
+            target_compile_options(hardening_regression PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        endif()
+        target_link_libraries(hardening_regression PRIVATE jpdfium)
+        add_test(NAME hardening_regression COMMAND hardening_regression)
+    endif()
     # Test environment. ENVIRONMENT is a whole-property value, so every
     # contributor has to append here: setting it twice silently drops the first
     # assignment, which previously cost the component-build library path as soon
@@ -782,6 +793,18 @@ if(JPDFIUM_BUILD_TESTS)
     # UBSan findings must fail the run rather than merely print, so a latent
     # overflow in the writer's budget arithmetic cannot pass silently.
     if(JPDFIUM_SANITIZE AND NOT MSVC)
+        string(FIND "${JPDFIUM_SANITIZE}" "address" _has_asan)
+        if(NOT _has_asan EQUAL -1)
+            # External libqpdf is built without ASan instrumentation, so std::vector
+            # values returned across the ABI boundary trigger libc++ container-overflow
+            # false positives unless disabled here.
+            set(_asan_env "ASAN_OPTIONS=detect_container_overflow=0")
+            if(_jpdfium_test_env STREQUAL "")
+                set(_jpdfium_test_env "${_asan_env}")
+            else()
+                set(_jpdfium_test_env "${_jpdfium_test_env};${_asan_env}")
+            endif()
+        endif()
         string(FIND "${JPDFIUM_SANITIZE}" "undefined" _has_ubsan)
         if(NOT _has_ubsan EQUAL -1)
             set(_ubsan_env "UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1")
@@ -795,6 +818,10 @@ if(JPDFIUM_BUILD_TESTS)
     if(NOT _jpdfium_test_env STREQUAL "")
         set_tests_properties(native_smoke handle_safety PROPERTIES
             ENVIRONMENT "${_jpdfium_test_env}")
+        if(TARGET hardening_regression)
+            set_tests_properties(hardening_regression PROPERTIES
+                ENVIRONMENT "${_jpdfium_test_env}")
+        endif()
     endif()
     # handle_safety reads a real PDF fixture by relative path, and CTest runs
     # from the build directory, so the path must be anchored at the repo root.
