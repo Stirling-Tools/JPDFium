@@ -79,6 +79,8 @@ public final class PdfPageSplitter {
             try (PdfPage page = doc.page(currentIdx)) {
                 pageWidth = page.size().width();
                 pageHeight = page.size().height();
+            } catch (RuntimeException e) {
+                continue;
             }
 
             // Determine split point
@@ -141,31 +143,46 @@ public final class PdfPageSplitter {
             MemorySegment bitmap;
             try {
                 bitmap = (MemorySegment) RenderBindings.FPDFBitmap_Create.invokeExact(bmpW, bmpH, 0);
-            } catch (Throwable t) { return pageWidth / 2.0f; }
+            } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
+                return pageWidth / 2.0f;
+            }
             if (bitmap.equals(MemorySegment.NULL)) return pageWidth / 2.0f;
 
             try {
                 // Fill white
                 try {
                     RenderBindings.FPDFBitmap_FillRect.invokeExact(bitmap, 0, 0, bmpW, bmpH, 0xFFFFFFFFL);
-                } catch (Throwable t) { return pageWidth / 2.0f; }
+                } catch (Throwable t) {
+                    NativeRuntime.rethrowFatal(t);
+                    return pageWidth / 2.0f;
+                }
 
                 // Render
                 int flags = RenderBindings.FPDF_PRINTING;
                 try {
                     RenderBindings.FPDF_RenderPageBitmap.invokeExact(
                             bitmap, rawPage, 0, 0, bmpW, bmpH, 0, flags);
-                } catch (Throwable t) { return pageWidth / 2.0f; }
+                } catch (Throwable t) {
+                    NativeRuntime.rethrowFatal(t);
+                    return pageWidth / 2.0f;
+                }
 
                 MemorySegment bufferPtr;
                 try {
                     bufferPtr = (MemorySegment) PageEditBindings.FPDFBitmap_GetBuffer.invokeExact(bitmap);
-                } catch (Throwable t) { return pageWidth / 2.0f; }
+                } catch (Throwable t) {
+                    NativeRuntime.rethrowFatal(t);
+                    return pageWidth / 2.0f;
+                }
 
                 int stride;
                 try {
                     stride = (int) PageEditBindings.FPDFBitmap_GetStride.invokeExact(bitmap);
-                } catch (Throwable t) { return pageWidth / 2.0f; }
+                } catch (Throwable t) {
+                    NativeRuntime.rethrowFatal(t);
+                    return pageWidth / 2.0f;
+                }
 
                 MemorySegment buffer = bufferPtr.reinterpret((long) stride * bmpH);
 

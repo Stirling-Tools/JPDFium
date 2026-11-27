@@ -78,7 +78,49 @@ public final class PdfMerger {
         if (inputs == null || inputs.isEmpty()) {
             return null;
         }
-        return QpdfLib.merge(inputs);
+        byte[] result = QpdfLib.merge(inputs);
+        if (hasPages(result)) {
+            return result;
+        }
+        List<byte[]> repaired = new ArrayList<>(inputs.size());
+        for (byte[] in : inputs) {
+            if (in == null) continue;
+            try {
+                byte[] rep = PdfRepair.builder().input(in).build().execute().repairedPdf();
+                repaired.add(rep != null && rep.length > 0 ? rep : in);
+            } catch (RuntimeException e) {
+                repaired.add(in);
+            }
+        }
+        byte[] retried = repaired.isEmpty() ? null : QpdfLib.merge(repaired);
+        if (hasPages(retried)) {
+            return retried;
+        }
+        try (PdfDocument dest = PdfDocument.createEmpty()) {
+            for (byte[] in : repaired) {
+                try (PdfDocument src = PdfDocument.open(in)) {
+                    boolean ok = PdfPageImporter.importPages(
+                            dest.rawHandle(), src.rawHandle(), null, dest.pageCount());
+                    if (!ok) {
+                        return null;
+                    }
+                }
+            }
+            return dest.pageCount() > 0 ? dest.saveBytes() : null;
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    private static boolean hasPages(byte[] pdf) {
+        if (pdf == null || pdf.length == 0) {
+            return false;
+        }
+        try (PdfDocument doc = PdfDocument.open(pdf)) {
+            return doc.pageCount() > 0;
+        } catch (RuntimeException e) {
+            return false;
+        }
     }
 
     /**
