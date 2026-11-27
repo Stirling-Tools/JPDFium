@@ -829,7 +829,7 @@ void populateEmbeddedFontProgram(QPDF& qpdf, FT_Library lib, QPDFObjectHandle& f
 EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
                             std::vector<FontSource> const& sources, bool onlyMissing,
                             FILE* out = nullptr, bool existingOnly = false,
-                            bool stripSignatures = false) {
+                            bool stripSignatures = false, bool verifyCidMapping = false) {
     struct Programs : std::vector<FontProgram> {
         FT_Library lib = nullptr;
         ~Programs() {
@@ -919,12 +919,18 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
             }
 
             FontEmbedJobState job;
-            if (cid && !hasProgram && onlyMissing) {
+            bool mappingPrepared = false;
+            if (cid && ((!hasProgram && onlyMissing) || verifyCidMapping)) {
+                // A replacement donor's glyph order rarely matches the source CID order.
+                // Without a verified CID-to-GID map the font would render the wrong
+                // glyphs even though every CID has a Unicode mapping.
                 if (!prepareMissingCidMapping(*qpdf, font, target, program, indexedUsage, usage,
                                               job)) {
                     continue;
                 }
-            } else {
+                mappingPrepared = true;
+            }
+            if (!mappingPrepared) {
                 auto cidMap = target.getKey("/CIDToGIDMap");
                 job.identityCidMap = cidMap.isNull() || cidMap.isNameAndEquals("/Identity");
                 job.identityEncoding = font.getKey("/Encoding").isNameAndEquals("/Identity-H") ||
@@ -1019,7 +1025,8 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
 int32_t embedFontsExport(const uint8_t* input, int64_t inputLen, int32_t count,
                          const char* const* names, const uint8_t* const* fonts,
                          const int64_t* fontLens, bool onlyMissing, bool existingOnly,
-                         uint8_t** output, int64_t* outputLen, bool stripSignatures = false) {
+                         uint8_t** output, int64_t* outputLen, bool stripSignatures = false,
+                         bool verifyCidMapping = false) {
     try {
         if (!input || inputLen <= 0 || count <= 0 || !names || !fonts || !fontLens || !output ||
             !outputLen) {
@@ -1037,7 +1044,7 @@ int32_t embedFontsExport(const uint8_t* input, int64_t inputLen, int32_t count,
                 qpdf.processMemoryFile("font-in", reinterpret_cast<const char*>(input),
                                        static_cast<size_t>(inputLen));
             },
-            sources, onlyMissing, nullptr, existingOnly, stripSignatures);
+            sources, onlyMissing, nullptr, existingOnly, stripSignatures, verifyCidMapping);
         if (result.rc != 0) {
             std::fprintf(stderr, "jpdfium qpdf embed fonts: %s\n", result.error.c_str());
             return result.rc;
@@ -1159,7 +1166,7 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_embed_fonts(const uint8_t* input, int64_t in
                                                 const int64_t* fontLens, int32_t flags,
                                                 uint8_t** output, int64_t* outputLen) {
     return embedFontsExport(input, inputLen, count, names, fonts, fontLens, (flags & 1) != 0, false,
-                            output, outputLen, (flags & 2) != 0);
+                            output, outputLen, (flags & 2) != 0, (flags & 4) != 0);
 }
 
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_embed_fonts_file(const char* in_path, const char* out_path,

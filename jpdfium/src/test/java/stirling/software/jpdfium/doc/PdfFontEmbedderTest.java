@@ -27,6 +27,7 @@ import org.apache.pdfbox.pdmodel.font.PDType1Font;
 import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
 import org.apache.pdfbox.text.PDFTextStripper;
 import stirling.software.jpdfium.panama.FontLib;
+import org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationLink;
 import org.apache.pdfbox.pdmodel.interactive.form.PDAcroForm;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -46,6 +47,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -1378,6 +1380,134 @@ class PdfFontEmbedderTest {
         assertFalse(PdfFontAuditor.looksLikeFontProgram(
                 new byte[] {(byte) 0x01, 0, (byte) 0x04, 0, 0, 0, 0, 0}),
                 "CFF offSize 0 is invalid");
+    }
+
+    @Test
+    void embedsUnusedPageResourceFontWhenAnotherFontIsVisible() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
+        byte[] pdf;
+        try (PDDocument doc = new PDDocument();
+                ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            PDPage page = new PDPage(PDRectangle.LETTER);
+            doc.addPage(page);
+            COSDictionary fonts = new COSDictionary();
+            for (String[] entry : new String[][] {
+                {"F1", "LiberationSans"}, {"F2", "LiberationSerif"}
+            }) {
+                COSDictionary font = new COSDictionary();
+                font.setItem(COSName.TYPE, COSName.FONT);
+                font.setItem(COSName.SUBTYPE, COSName.TYPE1);
+                font.setName(COSName.BASE_FONT, entry[1]);
+                fonts.setItem(COSName.getPDFName(entry[0]), font);
+            }
+            COSDictionary resourceDict = new COSDictionary();
+            resourceDict.setItem(COSName.FONT, fonts);
+            page.setResources(new PDResources(resourceDict));
+            page.setContents(new PDStream(doc, new ByteArrayInputStream(
+                    "BT /F1 12 Tf 72 720 Td (Hello) Tj ET"
+                            .getBytes(StandardCharsets.US_ASCII))));
+            doc.save(out);
+            pdf = out.toByteArray();
+        }
+
+        PdfFontEmbedder.Result result = PdfFontEmbedder.embedMissing(pdf);
+
+        assertTrue(result.embedded().contains("LiberationSans"),
+                "visible font must be embedded: " + result.statuses());
+        assertTrue(result.embedded().contains("LiberationSerif"),
+                "unused page resource must still be embedded: " + result.statuses());
+    }
+
+    @Test
+    void incompleteUsageScanNeverClassifiesFontsAsInvisibleOnly() {
+        assertFalse(PdfFontAuditor.FontUsageScan.incomplete().invisibleOnly("font"),
+                "an incomplete scan must not suppress embedding");
+        assertFalse(new PdfFontAuditor.FontUsageScan(Set.of(), Set.of("font"), false)
+                        .invisibleOnly("font"),
+                "a partial scan must not suppress embedding");
+        assertTrue(new PdfFontAuditor.FontUsageScan(Set.of(), Set.of("font"), true)
+                        .invisibleOnly("font"),
+                "a complete scan may suppress an invisible-only font");
+        assertFalse(new PdfFontAuditor.FontUsageScan(Set.of("font"), Set.of("font"), true)
+                        .invisibleOnly("font"),
+                "visible use wins over invisible use");
+    }
+
+    @Test
+    void annotationPageReportsIncompleteUsageScan() throws Exception {
+        byte[] pdf;
+        try (PDDocument doc = new PDDocument();
+                ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            PDPage page = new PDPage(PDRectangle.LETTER);
+            doc.addPage(page);
+            PDAnnotationLink link = new PDAnnotationLink();
+            link.setRectangle(new PDRectangle(0, 0, 10, 10));
+            page.getAnnotations().add(link);
+            doc.save(out);
+            pdf = out.toByteArray();
+        }
+
+        try (PdfDocument doc = PdfDocument.open(pdf)) {
+            assertFalse(PdfFontAuditor.scanFontUsage(doc).complete(),
+                    "annotation appearance streams are not scanned");
+            assertNull(PdfFontAuditor.visibleFontKeys(doc),
+                    "an incomplete scan must not expose a partial visible set");
+        }
+    }
+
+    @Test
+    void replacesCorruptCidProgramWithVerifiedCidToGidMapping() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
+        byte[] input = identityCidPdf("ArialMT", "<0001> <0041>");
+        input = corruptCidProgram(input);
+        assertTrue(PdfFontAuditor.corruptEmbeddedKeys(input).contains("ArialMT"),
+                "fixture must expose a corrupt embedded CID program");
+
+        PdfFontEmbedder.Result result = PdfFontEmbedder.embedMissing(input);
+
+        assertTrue(result.embedded().contains("ArialMT"), result.statuses().toString());
+        try (PDDocument pdf = Loader.loadPDF(result.pdf())) {
+            COSDictionary descendant = identityCidDescendant(pdf);
+            COSBase mapping = descendant.getDictionaryObject(COSName.CID_TO_GID_MAP);
+            assertTrue(mapping instanceof COSStream,
+                    "a corrupt CID replacement must not keep /CIDToGIDMap /Identity");
+            byte[] bytes;
+            try (var in = ((COSStream) mapping).createInputStream()) {
+                bytes = in.readAllBytes();
+            }
+            assertTrue(bytes.length >= 4, "CID 1 must have a mapping entry");
+            int gid = ((bytes[2] & 0xFF) << 8) | (bytes[3] & 0xFF);
+            assertTrue(gid > 1,
+                    "CID 1 must map to the donor's A glyph, not donor GID 1: " + gid);
+        }
+    }
+
+    @Test
+    void corruptCidWithoutToUnicodeStaysUnresolved() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
+        byte[] input = corruptCidProgram(identityCidPdf("ArialMT", null));
+
+        PdfFontEmbedder.Result result = PdfFontEmbedder.embedMissing(input);
+
+        assertFalse(result.embedded().contains("ArialMT"),
+                "a CID font without a verified mapping must not be substituted: "
+                        + result.statuses());
+        assertTrue(result.unresolved().contains("ArialMT"),
+                "the unresolved font must remain reported: " + result.unresolved());
+    }
+
+    private static byte[] corruptCidProgram(byte[] pdfBytes) throws IOException {
+        try (PDDocument pdf = Loader.loadPDF(pdfBytes);
+                ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            COSDictionary descendant = identityCidDescendant(pdf);
+            COSDictionary descriptor =
+                    (COSDictionary) descendant.getDictionaryObject(COSName.FONT_DESC);
+            descriptor.setItem(COSName.FONT_FILE2,
+                    new PDStream(pdf, new ByteArrayInputStream(new byte[] {1, 2, 3, 4}))
+                            .getCOSObject());
+            pdf.save(out);
+            return out.toByteArray();
+        }
     }
 
     @Test
@@ -2846,6 +2976,33 @@ class PdfFontEmbedderTest {
         assertTrue(result.unresolved().isEmpty(), "unresolved: " + result.unresolved());
         assertTrue(result.embedded().contains("Times-Roman"),
                 "all-invisible document must still embed its font: " + result.embedded());
+    }
+
+    @Test
+    void bestEffortEmbedsSoleInvisibleFont() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native font replacement unavailable");
+        byte[] pdf;
+        try (PDDocument doc = new PDDocument();
+                ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            PDPage page = new PDPage(PDRectangle.LETTER);
+            doc.addPage(page);
+            COSDictionary fonts = new COSDictionary();
+            fonts.setItem("F1", type1FontDict("Times-Roman"));
+            COSDictionary resources = new COSDictionary();
+            resources.setItem(COSName.FONT, fonts);
+            page.setResources(new PDResources(resources));
+            page.setContents(new PDStream(doc, new ByteArrayInputStream(
+                    "BT /F1 12 Tf 3 Tr 72 700 Td (Hidden) Tj ET"
+                            .getBytes(StandardCharsets.US_ASCII))));
+            doc.save(out);
+            pdf = out.toByteArray();
+        }
+
+        PdfFontEmbedder.Result result = PdfFontEmbedder.embedMissing(pdf);
+
+        assertTrue(result.embedded().contains("Times-Roman"),
+                "a document with no visible text must still embed its font: "
+                        + result.statuses());
     }
 
     @Test

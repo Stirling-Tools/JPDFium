@@ -323,20 +323,18 @@ public final class PdfFontEmbedder {
         List<PdfFontAuditor.FontResource> resources = before.unembeddedResources();
         Set<String> corrupt = new LinkedHashSet<>(before.corruptEmbeddedKeys());
         Set<String> names = new LinkedHashSet<>(corrupt);
-        Set<String> resourceOnly = new HashSet<>();
         Map<String, String> blockers = new HashMap<>();
         for (PdfFontAuditor.FontResource resource : resources) {
             names.add(resource.baseName());
-            if (resource.resourceOnly()) resourceOnly.add(resource.baseName());
             String blocker = substitutionBlocker(resource);
             if (blocker != null) blockers.putIfAbsent(resource.baseName(), blocker);
         }
         List<String> missing = List.copyOf(names);
         if (missing.isEmpty()) return new Result(pdf, List.of(), List.of(), List.of());
-        Set<String> visibleFonts = null;
+        PdfFontAuditor.FontUsageScan usage = null;
         Map<String, Set<Integer>> usedCodepoints = Map.of();
         try (PdfDocument doc = PdfDocument.open(pdf)) {
-            visibleFonts = PdfFontAuditor.visibleFontKeys(doc);
+            usage = PdfFontAuditor.scanFontUsage(doc);
             usedCodepoints = usedCodepoints(doc);
         } catch (Exception _) {
             // If the document cannot be walked, do not suppress any font.
@@ -351,9 +349,10 @@ public final class PdfFontEmbedder {
             // Best-effort embedding may skip fonts whose text is entirely invisible
             // (render mode 3). The strict path must not: PDF/A-2 6.2.11.5 requires
             // invisible-text fonts to carry an embedded program too.
-            if (!includeInvisibleText && visibleFonts != null && !visibleFonts.isEmpty()
-                    && !visibleFonts.contains(key(name))
-                    && !resourceOnly.contains(name)) {
+            if (!includeInvisibleText
+                    && usage != null
+                    && !usage.visible().isEmpty()
+                    && usage.invisibleOnly(key(name))) {
                 statuses.add(new FontStatus(name, "", -1, false,
                         "font is only used in invisible text (Tr 3)"));
                 continue;
@@ -438,7 +437,7 @@ public final class PdfFontEmbedder {
             out = QpdfLib.embedFonts(out, found, true, stripSignatures);
         }
         if (out != null && !corruptFound.isEmpty()) {
-            out = QpdfLib.embedFonts(out, corruptFound, false, stripSignatures);
+            out = QpdfLib.embedFonts(out, corruptFound, false, stripSignatures, true);
         }
         if (found.isEmpty() && corruptFound.isEmpty()) out = null;
         if (out == null) {

@@ -73,6 +73,27 @@ ASAN_OPTIONS=detect_container_overflow=0 ctest --test-dir native/build-asan
   `type2FunctionRangeClipsBeforeLabConversion` proves a Lab `a=80` input is
   clipped to `/Range` `[-20 20]` before conversion (verified to fail with
   clipping disabled).
+- **Incomplete font-usage scans.** `PdfFontAuditor.visibleFontKeys` used to keep
+  whatever a failed child scan had collected, so a page that could not be
+  walked completely made an unvisited font look invisible and best-effort
+  embedding skipped it. Usage classification now returns an explicit
+  `FontUsageScan` with a `complete` flag; a failed page, form, or annotation
+  walk yields an incomplete result and never suppresses embedding. Unused page
+  resources are also no longer treated as invisible text: suppression requires
+  a complete scan that observed the font only under rendering mode 3. Regressions:
+  `PdfFontEmbedderTest.embedsUnusedPageResourceFontWhenAnotherFontIsVisible`,
+  `incompleteUsageScanNeverClassifiesFontsAsInvisibleOnly`,
+  `annotationPageReportsIncompleteUsageScan`, and
+  `bestEffortEmbedsSoleInvisibleFont`.
+- **Corrupt CID font replacement.** Replacing a corrupt CID font program with a
+  donor kept `/CIDToGIDMap /Identity`, so CID 1 rendered donor glyph 1 instead
+  of the donor glyph for `A`. Corrupt replacements now request a verified
+  CID-to-GID mapping derived from `/ToUnicode` (ISO 32000-1 9.7.5.3); when the
+  mapping cannot be established the font stays unresolved instead of being
+  reported as embedded. Regressions:
+  `PdfFontEmbedderTest.replacesCorruptCidProgramWithVerifiedCidToGidMapping`
+  and `corruptCidWithoutToUnicodeStaysUnresolved` (the latter failed before the
+  mapping flag was passed).
 - **ToUnicode codespaces.** Rebuilt CMaps now declare one codespace range for
   every retained source width and emit each code at its full width. A
   resource-limited parse clears its partial entries and leaves the original
@@ -129,7 +150,7 @@ There are **zero** `clang-analyzer-*`, `bugprone-exception-escape`,
 
 ## Verification
 
-- Integration suite: `4907` tests, `0` failures, `0` errors, `315` skipped.
+- Integration suite: `4913` tests, `0` failures, `0` errors, `314` skipped.
 - Release ctest: `6/6` passed.
 - ASan+UBSan ctest: `6/6` passed with
   `ASAN_OPTIONS=detect_container_overflow=0`. Default ASan still reports the

@@ -684,34 +684,69 @@ public final class PdfFontAuditor {
     }
 
     /**
-     * Font base names used by text objects that are actually painted. Text in
-     * rendering mode 3 (invisible OCR layers) is excluded. Nested form XObjects
-     * are traversed when the native build supports it.
+     * Result of walking page content for font usage. {@code complete} is false when any page,
+     * form XObject, or annotation appearance could not be inspected, in which case absence from
+     * {@link #visible()} says nothing about whether a font is painted.
+     */
+    record FontUsageScan(Set<String> visible, Set<String> invisible, boolean complete) {
+        FontUsageScan {
+            visible = visible == null ? Set.of() : Set.copyOf(visible);
+            invisible = invisible == null ? Set.of() : Set.copyOf(invisible);
+        }
+
+        static FontUsageScan incomplete() {
+            return new FontUsageScan(Set.of(), Set.of(), false);
+        }
+
+        /** True only when every observed use of {@code key} is rendering mode 3. */
+        boolean invisibleOnly(String key) {
+            return complete && invisible.contains(key) && !visible.contains(key);
+        }
+    }
+
+    /**
+     * Font base names used by text objects that are actually painted. Text in rendering mode 3
+     * (invisible OCR layers) is excluded. Nested form XObjects are traversed when the native build
+     * supports it.
+     *
+     * @return the keys, or {@code null} when any part of the page content could not be inspected
      */
     public static Set<String> visibleFontKeys(PdfDocument doc) {
-        Set<String> keys = new LinkedHashSet<>();
+        FontUsageScan scan = scanFontUsage(doc);
+        return scan.complete() ? scan.visible() : null;
+    }
+
+    /**
+     * Classify every text object by render mode. A partial walk must not be used for suppression:
+     * an unvisited font would be mistaken for invisible text and skipped by best-effort embedding.
+     */
+    static FontUsageScan scanFontUsage(PdfDocument doc) {
+        Set<String> visible = new LinkedHashSet<>();
+        Set<String> invisible = new LinkedHashSet<>();
         for (int i = 0; i < doc.pageCount(); i++) {
             try (PdfPage page = doc.page(i)) {
                 MemorySegment raw = page.rawHandleForRead();
                 int annotations =
                         (int) AnnotationBindings.FPDFPage_GetAnnotCount.invokeExact(raw);
                 // Annotation appearance streams are not walked here, so the
-                // visible set would be incomplete.
-                if (annotations > 0) return null;
+                // result would be incomplete.
+                if (annotations > 0) return FontUsageScan.incomplete();
                 int count = (int) PageEditBindings.FPDFPage_CountObjects.invokeExact(raw);
                 for (int j = 0; j < count; j++) {
                     MemorySegment obj =
                             (MemorySegment) PageEditBindings.FPDFPage_GetObject.invokeExact(raw, j);
-                    collectVisibleFonts(obj, keys, 0);
+                    if (!collectFontUsage(obj, visible, invisible, 0)) {
+                        return FontUsageScan.incomplete();
+                    }
                 }
             } catch (Throwable t) {
                 NativeRuntime.rethrowFatal(t);
                 // A page that cannot be walked tells us nothing; signal an
                 // incomplete result instead of hiding fonts.
-                return null;
+                return FontUsageScan.incomplete();
             }
         }
-        return keys;
+        return new FontUsageScan(visible, invisible, true);
     }
 
     /**
@@ -812,31 +847,34 @@ public final class PdfFontAuditor {
                 || ((data[0] & 0xFF) == 0x80 && data[1] == 0x01);
     }
 
-    private static void collectVisibleFonts(MemorySegment obj, Set<String> keys, int depth) {
-        if (depth > 64 || obj == null || obj.equals(MemorySegment.NULL)) return;
+    private static boolean collectFontUsage(
+            MemorySegment obj, Set<String> visible, Set<String> invisible, int depth) {
+        if (depth > 64 || obj == null || obj.equals(MemorySegment.NULL)) return false;
         try {
             int type = (int) PageEditBindings.FPDFPageObj_GetType.invokeExact(obj);
             if (type == 1) {
                 int renderMode =
                         (int) PageEditBindings.FPDFTextObj_GetTextRenderMode.invokeExact(obj);
-                if (renderMode != 3) {
-                    MemorySegment font =
-                            (MemorySegment) PageEditBindings.FPDFTextObj_GetFont.invokeExact(obj);
-                    String name = getFontBaseName(font);
-                    if (!name.isEmpty() && !"<unknown>".equals(name)) {
-                        keys.add(PdfFontEmbedder.key(name));
-                    }
+                MemorySegment font =
+                        (MemorySegment) PageEditBindings.FPDFTextObj_GetFont.invokeExact(obj);
+                String name = getFontBaseName(font);
+                if (!name.isEmpty() && !"<unknown>".equals(name)) {
+                    (renderMode == 3 ? invisible : visible).add(PdfFontEmbedder.key(name));
                 }
-            } else if (type == 5 && PageEditBindings.formTraversalAvailable()) {
+            } else if (type == 5) {
+                if (!PageEditBindings.formTraversalAvailable()) return false;
                 int children =
                         (int) PageEditBindings.FPDFFormObj_CountObjects.invokeExact(obj);
                 for (int i = 0; i < children; i++) {
                     MemorySegment child = PageEditBindings.formObject(obj, i);
-                    collectVisibleFonts(child, keys, depth + 1);
+                    if (!collectFontUsage(child, visible, invisible, depth + 1)) return false;
                 }
             }
-        } catch (Throwable _) {
-            // Best-effort scan; keep whatever was collected.
+            return true;
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            // A failed child scan makes the whole classification incomplete.
+            return false;
         }
     }
 

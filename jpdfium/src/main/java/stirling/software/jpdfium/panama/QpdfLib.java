@@ -328,6 +328,24 @@ public final class QpdfLib {
 
     public static byte[] embedFonts(
             byte[] input, Map<String, byte[]> fonts, boolean onlyMissing, boolean stripSignatures) {
+        return embedFonts(input, fonts, onlyMissing, stripSignatures, false);
+    }
+
+    /**
+     * Embed font programs, optionally verifying a CID font's code-to-glyph mapping.
+     *
+     * <p>{@code verifyCidMapping} must be set when a donor program replaces a corrupt CID
+     * program: the native bridge then rebuilds {@code /CIDToGIDMap} from the font's
+     * {@code /ToUnicode} map and leaves the font unresolved when that mapping cannot be
+     * preserved. Without it, an Identity CMap would render the donor's glyph IDs as if they
+     * were the original CIDs.
+     */
+    public static byte[] embedFonts(
+            byte[] input,
+            Map<String, byte[]> fonts,
+            boolean onlyMissing,
+            boolean stripSignatures,
+            boolean verifyCidMapping) {
         if (EMBED_FONTS_HANDLE == null) throw new JPDFiumException("font embedding requires native qpdf support");
         Semaphore held = acquireSlotOrThrow("font embedding");
         try (QpdfCall call = new QpdfCall()) {
@@ -339,7 +357,9 @@ public final class QpdfLib {
                 data.setAtIndex(ADDRESS, i, call.copyBytes(e.getValue()));
                 lens.setAtIndex(JAVA_LONG, i++, e.getValue().length);
             }
-            int flags = (onlyMissing ? 1 : 0) | (stripSignatures ? 2 : 0);
+            int flags = (onlyMissing ? 1 : 0)
+                    | (stripSignatures ? 2 : 0)
+                    | (verifyCidMapping ? 4 : 0);
             int rc = (int) EMBED_FONTS_HANDLE.invokeExact(call.copyBytes(input), (long) input.length, n,
                     names, data, lens, flags, call.outPtr, call.outLen);
             if (rc == 0) return call.copyAndFree("qpdfEmbedFonts");
