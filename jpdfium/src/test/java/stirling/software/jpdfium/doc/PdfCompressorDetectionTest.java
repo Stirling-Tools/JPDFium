@@ -1,14 +1,24 @@
 package stirling.software.jpdfium.doc;
 
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.cos.COSName;
+import org.apache.pdfbox.cos.COSStream;
+import org.apache.pdfbox.pdmodel.PDDocument;
 import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.zip.Deflater;
+
+import stirling.software.jpdfium.panama.QpdfLib;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * PDF/A claim detection over raw bytes. Covers the attribute form
@@ -110,6 +120,65 @@ class PdfCompressorDetectionTest {
         // scan accepts a needle whose last byte is the final buffer byte.
         byte[] pdf = "%PDF-1.7\n/ByteRange\n/Type/Sig".getBytes(StandardCharsets.ISO_8859_1);
         assertTrue(PdfCompressor.looksSignedByBytes(pdf));
+    }
+
+    @Test
+    void pdfaClaimSurvivesWhenTheCatalogMovesIntoObjectStreams() throws Exception {
+        assumeTrue(QpdfLib.isPdfaPartSupported(), "native PDF/A inspection unavailable");
+        byte[] original = Files.readAllBytes(Path.of(getClass()
+                .getResource("/pdfs/external/verapdf/veraPDF test suite 6-1-13-t09-pass-a.pdf")
+                .toURI()));
+        assertEquals(2, PdfCompressor.pdfaPart(original), "fixture must claim PDF/A-2 raw");
+
+        // Build the layout the raw sweep cannot read: the catalog packed into
+        // an object stream hides its /Metadata reference, and a Flate XMP
+        // hides the pdfaid claim itself. qpdf never compresses streams whose
+        // dict carries /Type /Metadata (32000-1 14.3.2 makes /Type optional),
+        // so the type is dropped first and the pipeline's own object-stream
+        // generation does the rest - exactly the shape Acrobat-class producers
+        // emit. The raw qpdf entry is used because the convenience wrapper
+        // refuses results that grow a tiny file.
+        byte[] stripped = stripMetadataType(original);
+        byte[] objstm = QpdfLib.optimize(stripped, 0, -1,
+                PdfOptimizer.OBJECT_STREAMS_GENERATE, PdfOptimizer.STREAM_DATA_COMPRESS,
+                PdfOptimizer.DECODE_LEVEL_GENERALIZED);
+        assertNotNull(objstm, "qpdf must produce the object-stream variant");
+        assertEquals(2, PdfCompressor.pdfaPart(objstm),
+                "an object-stream catalog must still be recognized as PDF/A-2");
+    }
+
+    @Test
+    void objectStreamsAloneDoNotCreateAPdfaClaim() throws Exception {
+        assumeTrue(QpdfLib.isPdfaPartSupported(), "native PDF/A inspection unavailable");
+        byte[] original = Files.readAllBytes(Path.of(getClass()
+                .getResource("/pdfs/general/minimal.pdf").toURI()));
+        assertEquals(-1, PdfCompressor.pdfaPart(original));
+
+        byte[] objstm = QpdfLib.optimize(original, 0, -1,
+                PdfOptimizer.OBJECT_STREAMS_GENERATE, PdfOptimizer.STREAM_DATA_COMPRESS,
+                PdfOptimizer.DECODE_LEVEL_GENERALIZED);
+        assertNotNull(objstm, "qpdf must produce the object-stream variant");
+        assertEquals(-1, PdfCompressor.pdfaPart(objstm),
+                "the catalog fallback must not invent a claim for a plain document");
+    }
+
+    /**
+     * Drops the optional /Type entry from the catalog's metadata stream so the
+     * object-stream pass can Flate-compress it. qpdf exempts /Type /Metadata
+     * streams from compression; 32000-1 14.3.2 makes the /Type optional, so
+     * removing it leaves a valid metadata stream that compresses like any
+     * other.
+     */
+    private static byte[] stripMetadataType(byte[] pdf) throws Exception {
+        try (PDDocument doc = Loader.loadPDF(pdf)) {
+            COSStream meta = (COSStream) doc.getDocumentCatalog().getCOSObject()
+                    .getDictionaryObject(COSName.METADATA);
+            assertNotNull(meta, "fixture must carry catalog /Metadata");
+            meta.removeItem(COSName.TYPE);
+            ByteArrayOutputStream saved = new ByteArrayOutputStream();
+            doc.save(saved);
+            return saved.toByteArray();
+        }
     }
 
     private static byte[] pdfWithMetadata(String claim, String filter, boolean flate)

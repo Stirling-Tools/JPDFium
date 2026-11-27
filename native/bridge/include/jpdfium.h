@@ -636,6 +636,15 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_inspect_fonts(const uint8_t* input, int64_t 
 // File-backed font inventory; no document-sized buffer.
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_inspect_fonts_file(const char* in_path, char** json);
 
+// PDF/A conformance part from the parsed catalog: *outPart is -1 when no
+// claim is present, 1 for PDF/A-1, 2 for PDF/A-2 or later. Unlike a raw byte
+// sweep this is object-stream and Flate aware: a catalog (with its /Metadata
+// reference) compressed into an object stream is still read. Returns 0 on
+// success (including "no claim"), -1 when the input cannot be parsed; the
+// claim is then unknown and callers must not treat the file as PDF/A.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_pdfa_part(const uint8_t* input, int64_t inputLen,
+                                              int32_t* outPart);
+
 // Update/remove /Info entries; NULL value removes a key. Caller frees *output.
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_set_docinfo(const uint8_t* input, int64_t inputLen,
                                                 const char* const* keys, const char* const* values,
@@ -667,20 +676,21 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_replace_font_stream(const uint8_t* input, in
                                                         uint8_t** output, int64_t* outputLen);
 
 // Embed font programs into fonts whose /BaseFont matches names[i] exactly, in one pass.
-// onlyMissing leaves fonts that already carry a program untouched.
+// flags: bit 0 (0x1) = onlyMissing, bit 1 (0x2) = stripSignatures.
 // Caller frees *output with jpdfium_free_buffer.
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_embed_fonts(const uint8_t* input, int64_t inputLen,
                                                 int32_t count, const char* const* names,
                                                 const uint8_t* const* fonts,
-                                                const int64_t* fontLens, int32_t onlyMissing,
+                                                const int64_t* fontLens, int32_t flags,
                                                 uint8_t** output, int64_t* outputLen);
 
 // File-backed form of jpdfium_qpdf_embed_fonts: reads in_path and writes out_path,
 // so callers do not materialize the PDF bytes in the Java heap.
+// flags: bit 0 (0x1) = onlyMissing, bit 1 (0x2) = stripSignatures.
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_embed_fonts_file(const char* in_path, const char* out_path,
                                                      int32_t count, const char* const* names,
                                                      const uint8_t* const* fonts,
-                                                     const int64_t* fontLens, int32_t onlyMissing);
+                                                     const int64_t* fontLens, int32_t flags);
 
 // Subset already-embedded TrueType/OpenType fonts in-place using HarfBuzz
 // RETAIN_GIDS. Returns 0 when at least one font was subsetted (*output populated),
