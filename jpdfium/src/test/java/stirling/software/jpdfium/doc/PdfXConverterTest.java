@@ -1232,6 +1232,78 @@ class PdfXConverterTest {
     }
 
     @Test
+    void deviceNProcessComponentsRemainConsistentWhenAlternateBecomesCmyk() throws Exception {
+        assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
+        byte[] input;
+        try (PDDocument doc = new PDDocument();
+                ByteArrayOutputStream bytes = new ByteArrayOutputStream()) {
+            PDPage page = new PDPage();
+            doc.addPage(page);
+
+            COSStream dnFn = doc.getDocument().createCOSStream();
+            dnFn.setInt(COSName.FUNCTION_TYPE, 4);
+            dnFn.setItem(COSName.DOMAIN, cosFloats(0f, 1f, 0f, 1f, 0f, 1f));
+            dnFn.setItem(COSName.RANGE, cosFloats(0f, 1f, 0f, 1f, 0f, 1f));
+            try (var os = dnFn.createOutputStream()) {
+                os.write("{ }".getBytes(StandardCharsets.US_ASCII));
+            }
+            COSArray inks = new COSArray();
+            inks.add(COSName.getPDFName("Red"));
+            inks.add(COSName.getPDFName("Green"));
+            inks.add(COSName.getPDFName("Blue"));
+            COSArray deviceN = new COSArray();
+            deviceN.add(COSName.DEVICEN);
+            deviceN.add(inks);
+            deviceN.add(COSName.DEVICERGB);
+            deviceN.add(dnFn);
+            COSDictionary process = new COSDictionary();
+            process.setItem(COSName.COLORSPACE, COSName.DEVICERGB);
+            COSArray components = new COSArray();
+            components.add(COSName.getPDFName("Red"));
+            components.add(COSName.getPDFName("Green"));
+            components.add(COSName.getPDFName("Blue"));
+            process.setItem(COSName.getPDFName("Components"), components);
+            COSDictionary attrs = new COSDictionary();
+            attrs.setItem(COSName.getPDFName("Process"), process);
+            deviceN.add(attrs);
+
+            COSDictionary spaces = new COSDictionary();
+            spaces.setItem(COSName.getPDFName("DN"), deviceN);
+            PDResources resources = new PDResources();
+            resources.getCOSObject().setItem(COSName.COLORSPACE, spaces);
+            page.setResources(resources);
+
+            COSStream content = doc.getDocument().createCOSStream();
+            try (var os = content.createOutputStream()) {
+                os.write("/DN cs 0.4 sc 0 0 10 10 re f".getBytes(StandardCharsets.US_ASCII));
+            }
+            page.getCOSObject().setItem(COSName.CONTENTS, content);
+            doc.save(bytes);
+            input = bytes.toByteArray();
+        }
+
+        byte[] out = PdfXConverter.applyMetadata(input, PdfXOptions.builder()
+                .standard(PdfXStandard.PDF_X_4)
+                .useCompactCmyk()
+                .title("DeviceN process components")
+                .build());
+
+        try (PDDocument doc = Loader.loadPDF(out)) {
+            COSArray dn = (COSArray) doc.getPage(0).getResources().getCOSObject()
+                    .getCOSDictionary(COSName.COLORSPACE)
+                    .getDictionaryObject(COSName.getPDFName("DN"));
+            assertEquals(COSName.DEVICECMYK, dn.getObject(2));
+            COSDictionary process =
+                    ((COSDictionary) dn.getObject(4)).getCOSDictionary(COSName.getPDFName("Process"));
+            assertNotNull(process);
+            assertEquals(COSName.DEVICERGB,
+                    process.getDictionaryObject(COSName.COLORSPACE),
+                    "process mapping must be preserved when its component count cannot follow");
+            assertEquals(3, process.getCOSArray(COSName.getPDFName("Components")).size());
+        }
+    }
+
+    @Test
     void shadingDefaultRgbAndDeviceNColorantsConvertToCmyk() throws Exception {
         assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
         byte[] input;

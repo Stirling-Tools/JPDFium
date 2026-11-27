@@ -327,6 +327,37 @@ std::string Name(QPDFObjectHandle const& h) {
     return h.isName() ? h.getName() : std::string();
 }
 
+// Component count of a process/alternate colour space. ICCBased stores it in
+// /N; DeviceN stores it as the length of the names array; Separation and
+// DeviceGray are one component.
+int ColourSpaceComponents(QPDFObjectHandle const& cs) {
+    if (!cs.isName() && !cs.isArray()) return 0;
+    if (cs.isName()) {
+        const std::string n = Name(cs);
+        if (n == "/DeviceGray" || n == "/CalGray") return 1;
+        if (n == "/DeviceRGB" || n == "/CalRGB" || n == "/Lab") return 3;
+        if (n == "/DeviceCMYK") return 4;
+        return 0;
+    }
+    if (cs.getArrayNItems() == 0) return 0;
+    const std::string family = Name(cs.getArrayItem(0));
+    if (family == "/ICCBased" && cs.getArrayNItems() >= 2) {
+        QPDFObjectHandle stream = cs.getArrayItem(1);
+        if (stream.isStream()) {
+            QPDFObjectHandle n = stream.getDict().getKey("/N");
+            if (n.isInteger() && n.getIntValue() > 0) return n.getIntValueAsInt();
+        }
+    }
+    if ((family == "/DeviceN" || family == "/Separation") && cs.getArrayNItems() >= 2) {
+        if (family == "/Separation") return 1;
+        QPDFObjectHandle names = cs.getArrayItem(1);
+        if (names.isArray()) return names.getArrayNItems();
+    }
+    if (family == "/Indexed" || family == "/CalGray") return 1;
+    if (family == "/CalRGB" || family == "/Lab") return 3;
+    return 0;
+}
+
 // Replace only missing/non-finite/zero tiling-pattern steps. ISO 32000-1
 // 8.7.3.1 permits finite nonzero fractional and large steps; changing those
 // would alter the rendered tile spacing.
@@ -458,7 +489,16 @@ ColourSpaceInfo Converter::ClassifySpecial(const std::string& family, QPDFObject
         if (proc.isDictionary() && proc.hasKey("/ColorSpace")) {
             ColourSpaceInfo pinfo = Classify(proc.getKey("/ColorSpace"), depth + 1);
             if (pinfo.replacement.isInitialized() && !pinfo.replacement.isNull()) {
-                proc.replaceKey("/ColorSpace", pinfo.replacement);
+                // ISO 32000-1 Table 72: /Components names the process space's
+                // components in order. Rebinding Process to a space with a
+                // different component count while retaining the names would
+                // break the DeviceN contract; preserve the RGB mapping instead.
+                const int targetComponents = ColourSpaceComponents(pinfo.replacement);
+                QPDFObjectHandle components = proc.getKey("/Components");
+                if (targetComponents == 0 || !components.isArray() ||
+                    components.getArrayNItems() == targetComponents) {
+                    proc.replaceKey("/ColorSpace", pinfo.replacement);
+                }
             }
         }
     }

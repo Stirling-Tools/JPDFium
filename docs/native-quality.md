@@ -54,9 +54,12 @@ ASAN_OPTIONS=detect_container_overflow=0 ctest --test-dir native/build-asan
   `/stream` name as the stream keyword.
 - **Review-feedback batch.** Corrected finite tiling-pattern steps (ISO 32000-1
   §8.7.3.1), CFF header `offSize` validation, trailer `/Size` counting for the
-  rebuilt page tree, and unsigned `/ByteRange` text handling. Unresolved
-  CodeRabbit feedback was audited across 48 PRs (129 open threads); fixes were
-  limited to confirmed current-tip defects.
+  rebuilt page tree, and unsigned `/ByteRange` text handling. DeviceN `/Process`
+  rebinding now preserves the original process mapping when its `/Components`
+  array cannot follow the new component count (ISO 32000-1 Table 72); a
+  regression checks both `/ColorSpace` and `/Components`. Unresolved CodeRabbit
+  feedback was audited across 48 PRs (129 open threads); fixes were limited to
+  confirmed current-tip defects.
 
 ## CodeRabbit review batch
 
@@ -96,7 +99,7 @@ There are **zero** `clang-analyzer-*`, `bugprone-exception-escape`,
 
 ## Verification
 
-- Integration suite: `4900` tests, `0` failures, `0` errors, `315` skipped.
+- Integration suite: `4901` tests, `0` failures, `0` errors, `315` skipped.
 - Release ctest: `6/6` passed.
 - ASan+UBSan ctest: `6/6` passed with
   `ASAN_OPTIONS=detect_container_overflow=0`. Default ASan still reports the
