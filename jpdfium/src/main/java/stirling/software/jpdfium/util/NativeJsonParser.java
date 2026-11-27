@@ -8,7 +8,7 @@ import java.util.Map;
 /**
  * Lightweight parser for the simple JSON arrays returned by native bridge functions.
  *
- * <p>Native functions return flat JSON arrays of objects with string/int/bool values.
+ * Native functions return flat JSON arrays of objects with string/int/bool values.
  * This avoids pulling in a full JSON library for these trivial shapes.
  */
 public final class NativeJsonParser {
@@ -29,7 +29,21 @@ public final class NativeJsonParser {
         while (pos < json.length()) {
             int objStart = json.indexOf('{', pos);
             if (objStart < 0) break;
-            int objEnd = json.indexOf('}', objStart);
+            // Skip '}' inside string values; report text may contain one.
+            int objEnd = -1;
+            boolean objQuotes = false;
+            for (int i = objStart + 1; i < json.length(); i++) {
+                char c = json.charAt(i);
+                if (c == '\\' && objQuotes) {
+                    i++;
+                    continue;
+                }
+                if (c == '"') objQuotes = !objQuotes;
+                else if (c == '}' && !objQuotes) {
+                    objEnd = i;
+                    break;
+                }
+            }
             if (objEnd < 0) break;
 
             String obj = json.substring(objStart + 1, objEnd);

@@ -36,7 +36,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * FFM bindings for the in-process qpdf structural operations.
  * These drive the bundled qpdf library directly (no CLI subprocess).
  *
- * <p><strong>Concurrency:</strong> none of these methods enters the PDFium
+ * <strong>Concurrency:</strong> none of these methods enters the PDFium
  * domain. Every call owns a private {@link QpdfCall} confined
  * arena for all FFM argument/output storage, and the native bridge creates
  * independent {@code QPDF}/{@code QPDFWriter} instances per invocation, so
@@ -44,7 +44,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * to the domain. A single input/output path must still not be used
  * concurrently by the caller.
  *
- * <p>File-backed variants ({@link #mergeFiles}, {@link #extractPagesToFile})
+ * File-backed variants ({@link #mergeFiles}, {@link #extractPagesToFile})
  * never publish a partial destination: the native writer targets a sibling
  * staging file and the result is moved into place only after the bridge
  * reports success and the staging file validates non-empty.
@@ -120,9 +120,46 @@ public final class QpdfLib {
                             JAVA_INT, ADDRESS, ADDRESS, JAVA_INT, ADDRESS, ADDRESS, ADDRESS,
                             JAVA_INT));
 
+    private static final MethodHandle INSPECT_FONTS_HANDLE = Symbols.downcallOptionalUnguarded(
+            "jpdfium_qpdf_inspect_fonts",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS));
+
     /** True when this native build can embed font programs. */
     public static boolean isFontReplacementSupported() {
         return EMBED_FONTS_HANDLE != null;
+    }
+
+    /** True when this native build can inventory every font resource. */
+    public static boolean isFontInventorySupported() {
+        return INSPECT_FONTS_HANDLE != null;
+    }
+
+    /**
+     * Every font dictionary in the document as a JSON array, including fonts that only appear
+     * in unused resource dictionaries or AcroForm {@code /DR}. Returns {@code null} when the
+     * native build cannot inventory fonts or the document cannot be parsed.
+     */
+    public static String inspectFonts(byte[] input) {
+        if (INSPECT_FONTS_HANDLE == null || input == null || input.length == 0) return null;
+        Semaphore held = acquireSlotOrThrow("font inspection");
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment jsonPtr = arena.allocate(ADDRESS);
+            int rc = (int) INSPECT_FONTS_HANDLE.invokeExact(
+                    arena.allocateFrom(JAVA_BYTE, input), (long) input.length, jsonPtr);
+            if (rc != 0) return null;
+            MemorySegment json = jsonPtr.get(ADDRESS, 0);
+            if (json.equals(MemorySegment.NULL)) return null;
+            try {
+                return FfmHelper.readNativeString(json);
+            } finally {
+                JpdfiumH.jpdfium_free_string(json);
+            }
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw new JPDFiumException("qpdf font inspection failed", t);
+        } finally {
+            releaseSlot(held);
+        }
     }
 
     /** Single-font form of {@link #embedFonts}, embedding into every font named {@code baseFont}. */
@@ -232,7 +269,7 @@ public final class QpdfLib {
     /**
      * Acquire a slot when bounded; no-op when unlimited.
      *
-     * <p>The returned semaphore is the one that granted the slot. Pass it back
+     * The returned semaphore is the one that granted the slot. Pass it back
      * to {@link #releaseSlot}: the bound can be swapped while a job runs, and
      * releasing to the new semaphore would inflate its limit while waiters
      * stayed parked on the old one.
@@ -872,7 +909,7 @@ public final class QpdfLib {
      * input from disk and writing the result straight to disk. No document
      * bytes cross the FFI boundary, so this stays flat in Java heap.
      *
-     * <p>The native writer targets a sibling staging file; {@code output} is
+     * The native writer targets a sibling staging file; {@code output} is
      * replaced only after success plus a non-empty staging check, so a failed
      * optimize never leaves a partial destination behind.
      *
@@ -1000,7 +1037,7 @@ public final class QpdfLib {
      * writing the result straight to disk. No document bytes cross the
      * FFI boundary, so this stays flat in Java heap regardless of size.
      *
-     * <p>The native writer targets a sibling staging file; {@code output} is
+     * The native writer targets a sibling staging file; {@code output} is
      * replaced only after success plus a non-empty staging check, so a failed
      * merge never leaves a partial destination behind.
      *
@@ -1070,7 +1107,7 @@ public final class QpdfLib {
      * Extract specific pages (by zero-based index) from a file on disk,
      * writing the result straight to disk without heap copies.
      *
-     * <p>Same staging/publish contract as {@link #mergeFiles}: {@code output}
+     * Same staging/publish contract as {@link #mergeFiles}: {@code output}
      * is replaced only after a successful native write plus validation.
      *
      * @param input       input PDF file path
@@ -1377,7 +1414,7 @@ public final class QpdfLib {
     /**
      * Refuse to publish an output that is still password protected.
      *
-     * <p>Decryption that reports success while leaving {@code /Encrypt} in place
+     * Decryption that reports success while leaving {@code /Encrypt} in place
      * is the worst possible outcome here: the caller believes the protection is
      * gone. Opening the staged file with no password is the only check that
      * proves it, and it costs one parse against a full qpdf rewrite.
