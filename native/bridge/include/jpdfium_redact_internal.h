@@ -205,7 +205,16 @@ void alignMatchesToShapedClusters(FPDF_TEXTPAGE tp, std::vector<TextMatch>& matc
 // Sets the quad of each match on text that is not upright, for its REDACT mark's
 // /QuadPoints. Must run while `tp` still describes the page the matches came from.
 void orientMatchQuads(FPDF_TEXTPAGE tp, std::vector<TextMatch>& matches);
-void markRedactionCover(FPDF_PAGEOBJECT cover);
+struct CoverAnchors {
+    FPDF_DOCUMENT doc = nullptr;
+    unsigned int pageObjNum = 0;
+    std::vector<std::pair<FS_RECTF, int>> taggedChars;
+};
+CoverAnchors snapshotCoverAnchors(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tp,
+                                  int32_t pageIndex, DocCore* core);
+FPDF_PAGEOBJECTMARK markRedactionCover(FPDF_PAGEOBJECT cover, const FS_RECTF& area,
+                                       const CoverAnchors* anchors, DocCore* core,
+                                       FPDF_PAGEOBJECTMARK shared);
 bool auditNoSurvivorsInRegion(FPDF_PAGE page, const std::vector<FS_RECTF>& regions,
                               const std::vector<FPDF_PAGEOBJECT>& exclude);
 void deletePatternCache(void* p);

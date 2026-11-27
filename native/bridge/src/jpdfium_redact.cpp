@@ -6,10 +6,12 @@
 
 #include <epdf_annot.h>
 #include <epdf_redact.h>
+#include <epdf_view.h>
 #include <fpdf_annot.h>
 #include <fpdf_edit.h>
 #include <fpdf_flatten.h>
 #include <fpdf_save.h>
+#include <fpdf_structtree.h>
 #include <fpdf_text.h>
 #include <fpdfview.h>
 
@@ -150,14 +152,87 @@ static void markRedactionIncomplete(PageWrapper* pw, const std::vector<TextMatch
     markRedactionIncomplete(pw, areas);
 }
 
-void markRedactionCover(FPDF_PAGEOBJECT cover) {
-    FPDFPageObj_AddMark(cover, "Artifact");
+static void maxStructMcid(FPDF_STRUCTELEMENT el, int depth, int& maxMcid) {
+    if (!el || depth > 512) return;
+    const int ids = FPDF_StructElement_GetMarkedContentIdCount(el);
+    for (int i = 0; i < ids; ++i)
+        maxMcid = std::max(maxMcid, FPDF_StructElement_GetMarkedContentIdAtIndex(el, i));
+    const int kids = FPDF_StructElement_CountChildren(el);
+    for (int i = 0; i < kids; ++i)
+        maxStructMcid(FPDF_StructElement_GetChildAtIndex(el, i), depth + 1, maxMcid);
+}
+
+CoverAnchors snapshotCoverAnchors(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tp,
+                                  int32_t pageIndex, DocCore* core) {
+    CoverAnchors anchors;
+    anchors.doc = doc;
+    if (!core || !page) return anchors;
+    std::unordered_set<FPDF_PAGEOBJECT> pageLevel;
+    int maxMcid = -1;
+    const int objCount = FPDFPage_CountObjects(page);
+    for (int i = 0; i < objCount; ++i) {
+        FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page, i);
+        pageLevel.insert(obj);
+        maxMcid = std::max(maxMcid, FPDFPageObj_GetMarkedContentID(obj));
+    }
+    if (maxMcid < 0) return anchors;
+    anchors.pageObjNum = EPDFDoc_GetPageObjectNumberByIndex(doc, pageIndex);
+    if (!anchors.pageObjNum) return anchors;
+    if (FPDF_STRUCTTREE tree = FPDF_StructTree_GetForPage(page)) {
+        const int roots = FPDF_StructTree_CountChildren(tree);
+        for (int i = 0; i < roots; ++i)
+            maxStructMcid(FPDF_StructTree_GetChildAtIndex(tree, i), 0, maxMcid);
+        FPDF_StructTree_Close(tree);
+    }
+    int& next = core->nextCoverMcid[anchors.pageObjNum];
+    next = std::max(next, maxMcid + 1);
+    if (!tp) return anchors;
+    const int chars = FPDFText_CountChars(tp);
+    for (int ci = 0; ci < chars; ++ci) {
+        FPDF_PAGEOBJECT obj = FPDFText_GetTextObject(tp, ci);
+        if (!obj || !pageLevel.count(obj)) continue;
+        const int mcid = FPDFPageObj_GetMarkedContentID(obj);
+        if (mcid < 0) continue;
+        double l, r, b, t;
+        if (!FPDFText_GetCharBox(tp, ci, &l, &r, &b, &t)) continue;
+        anchors.taggedChars.push_back({makePageRect(static_cast<float>(l), static_cast<float>(b),
+                                                    static_cast<float>(r), static_cast<float>(t)),
+                                       mcid});
+    }
+    return anchors;
+}
+
+static int anchorMcidIn(const CoverAnchors& anchors, const FS_RECTF& area) {
+    for (const auto& [box, mcid] : anchors.taggedChars) {
+        const float cx = (box.left + box.right) / 2.0f;
+        const float cy = (box.bottom + box.top) / 2.0f;
+        if (cx >= area.left && cx <= area.right && cy >= area.bottom && cy <= area.top) return mcid;
+    }
+    return -1;
+}
+
+FPDF_PAGEOBJECTMARK markRedactionCover(FPDF_PAGEOBJECT cover, const FS_RECTF& area,
+                                       const CoverAnchors* anchors, DocCore* core,
+                                       FPDF_PAGEOBJECTMARK shared) {
+    if (shared) {
+        FPDFPageObj_AddExistingMark(cover, shared);
+        return shared;
+    }
+    const int anchor = anchors && core && anchors->pageObjNum ? anchorMcidIn(*anchors, area) : -1;
+    if (anchor < 0) return FPDFPageObj_AddMark(cover, "Artifact");
+    FPDF_PAGEOBJECTMARK mark = FPDFPageObj_AddMark(cover, "Figure");
+    if (!mark) return nullptr;
+    const int mcid = core->nextCoverMcid[anchors->pageObjNum]++;
+    FPDFPageObjMark_SetIntParam(anchors->doc, cover, mark, "MCID", mcid);
+    core->coverTags[anchors->pageObjNum].push_back({mcid, anchor, area.top, area.left});
+    return mark;
 }
 
 // Paints the cover over a redacted area in `argb` (nothing when fully
 // transparent): over each quad where the area has them, so a cover on rotated
 // text stops at the word as the redaction did, else over its rect.
-static void paintCover(FPDF_PAGE page, const RedactArea& area, uint32_t argb) {
+static void paintCover(FPDF_PAGE page, const RedactArea& area, uint32_t argb,
+                       const CoverAnchors& anchors, DocCore* core) {
     unsigned int alf = (argb >> 24) & 0xFF;
     if (alf == 0) return;
     unsigned int red = (argb >> 16) & 0xFF;
@@ -179,11 +254,12 @@ static void paintCover(FPDF_PAGE page, const RedactArea& area, uint32_t argb) {
             shapes.push_back(path);
         }
     }
+    FPDF_PAGEOBJECTMARK mark = nullptr;
     for (FPDF_PAGEOBJECT shape : shapes) {
         if (!shape) continue;
         FPDFPageObj_SetFillColor(shape, red, grn, blu, alf);
         FPDFPath_SetDrawMode(shape, FPDF_FILLMODE_ALTERNATE, 0);
-        markRedactionCover(shape);
+        mark = markRedactionCover(shape, area.rect, &anchors, core, mark);
         FPDFPage_InsertObject(page, shape);
     }
 }
@@ -526,6 +602,8 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
                       return a.bboxL > b.bboxL;
                   });
 
+        const CoverAnchors anchors =
+            snapshotCoverAnchors(pw->doc, pw->page, tp, pw->pageIndex, pw->core.get());
         std::vector<FS_RECTF> appliedRects;
         appliedRects.reserve(sortedMatches.size());
         bool epdfOk = true;
@@ -570,7 +648,8 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
             FPDFText_ClosePage(tp);
             tp = nullptr;
 
-            for (const TextMatch& m : sortedMatches) paintCover(pw->page, areaOf(m), argb);
+            for (const TextMatch& m : sortedMatches)
+                paintCover(pw->page, areaOf(m), argb, anchors, pw->core.get());
             FPDFPage_GenerateContent(pw->page);
 
             if (pw->core) {
@@ -894,6 +973,8 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
                       return a.bboxL > b.bboxL;
                   });
 
+        const CoverAnchors anchors =
+            snapshotCoverAnchors(pw->doc, pw->page, tp, pw->pageIndex, pw->core.get());
         std::vector<FS_RECTF>& appliedRects = t_redactScratch.appliedRects;
         appliedRects.reserve(sortedMatches.size());
         bool epdfOk = true;
@@ -944,7 +1025,8 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
             FPDFText_ClosePage(tp);
             tp = nullptr;
 
-            for (const TextMatch& m : sortedMatches) paintCover(pw->page, areaOf(m), argb);
+            for (const TextMatch& m : sortedMatches)
+                paintCover(pw->page, areaOf(m), argb, anchors, pw->core.get());
             FPDFPage_GenerateContent(pw->page);
 
             if (pw->core) {
@@ -1304,6 +1386,12 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
             appendRedactorAreas(item.area, redactAreas);
         }
 
+        CoverAnchors anchors;
+        if (FPDF_TEXTPAGE before = FPDFText_LoadPage(pw->page)) {
+            anchors =
+                snapshotCoverAnchors(pw->doc, pw->page, before, pw->pageIndex, pw->core.get());
+            FPDFText_ClosePage(before);
+        }
         bool epdfOk = true;
         std::vector<FPDF_ANNOTATION> marks;
         marks.reserve(redactAnnots.size());
@@ -1323,7 +1411,8 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
         }
         for (FPDF_ANNOTATION mark : marks) FPDFPage_CloseAnnot(mark);
         if (epdfOk) {
-            for (const RedactArea& area : redactAreas) paintCover(pw->page, area, argb);
+            for (const RedactArea& area : redactAreas)
+                paintCover(pw->page, area, argb, anchors, pw->core.get());
             FPDFPage_GenerateContent(pw->page);
 
             // The redactor removed the marks it applied, so they no longer hold a

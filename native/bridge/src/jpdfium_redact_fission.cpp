@@ -182,6 +182,10 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
                             bool skipTextObjects, bool* refusedUnmodified) {
     if (matches.empty()) return JPDFIUM_OK;
 
+    const CoverAnchors coverAnchors =
+        cropRect ? CoverAnchors{}
+                 : snapshotCoverAnchors(doc, page, textPage, pageIndex, core.get());
+
     unsigned int alf = (argb >> 24) & 0xFF;
     unsigned int red = (argb >> 16) & 0xFF;
     unsigned int grn = (argb >> 8) & 0xFF;
@@ -2119,7 +2123,8 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
             if (!rect) continue;
             FPDFPageObj_SetFillColor(rect, red, grn, blu, alf);
             FPDFPath_SetDrawMode(rect, FPDF_FILLMODE_ALTERNATE, 0);
-            markRedactionCover(rect);
+            markRedactionCover(rect, makePageRect(m.bboxL, m.bboxB, m.bboxR, m.bboxT),
+                               &coverAnchors, core.get(), nullptr);
             FPDFPage_InsertObject(page, rect);
             if (paintedCovers) paintedCovers->push_back(rect);
         }

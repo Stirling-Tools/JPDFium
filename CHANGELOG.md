@@ -146,8 +146,11 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Fixed
 
-- Redaction cover boxes are written inside `/Artifact` marked content, so they
-  no longer add untagged content to a tagged PDF.
+- On a tagged page, each redaction cover box is tagged as a `Figure` with the
+  alternate text "Redacted", placed in the structure tree right after the
+  element whose text it hides, so a screen reader announces the redaction.
+  Covers over untagged content are written inside `/Artifact` marked content,
+  so neither adds untagged content to a tagged PDF.
 - Text and paths that object fission rebuilds around a redaction keep the
   marked content of the object they came from, instead of becoming untagged.
 - Redaction drops `/ActualText`, `/Alt` and `/E` from the marked content and

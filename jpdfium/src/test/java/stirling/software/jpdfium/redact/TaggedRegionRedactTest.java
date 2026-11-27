@@ -36,6 +36,7 @@ import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 
+import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.model.Rect;
 
 @EnabledIfSystemProperty(named = "jpdfium.integration", matches = "true")
@@ -63,7 +64,8 @@ class TaggedRegionRedactTest {
             PDStructureTreeRoot root = doc.getDocumentCatalog().getStructureTreeRoot();
             List<PDStructureElement> elements = new ArrayList<>();
             collect(root, elements);
-            assertEquals(4, elements.size(), "structure elements are kept");
+            assertEquals(4, elements.stream().filter(e -> !"Figure".equals(e.getStructureType())).count(),
+                    "structure elements are kept");
             for (PDStructureElement e : elements) {
                 assertNull(e.getActualText(), e.getStructureType() + " still has ActualText");
             }
@@ -84,6 +86,55 @@ class TaggedRegionRedactTest {
             List<PDStructureElement> elements = new ArrayList<>();
             collect(doc.getDocumentCatalog().getStructureTreeRoot(), elements);
             assertTrue(elements.stream().anyMatch(e -> DESCRIBED_LINE.equals(e.getActualText())));
+        }
+    }
+
+    @Test
+    void regionCoverIsAnnouncedAfterTheTextItHides() throws Exception {
+        assertCoverAnnouncedAfterMcid0(redactRegion(wordRect("Please redact ", "SECRET", 700f)));
+    }
+
+    @Test
+    void wordCoverIsAnnouncedAfterTheTextItHides() throws Exception {
+        RedactOptions options = RedactOptions.builder()
+                .addWord("redact")
+                .boxColor(0xFF000000)
+                .removeContent(true)
+                .build();
+        try (PdfDocument doc = PdfDocument.open(taggedPdf())) {
+            RedactResult result = PdfRedactor.redact(doc, options);
+            assertEquals(1, result.totalMatches());
+            assertCoverAnnouncedAfterMcid0(result.document().saveBytes());
+        }
+    }
+
+    private static void assertCoverAnnouncedAfterMcid0(byte[] pdf) throws IOException {
+        try (PDDocument doc = Loader.loadPDF(pdf)) {
+            PDStructureTreeRoot root = doc.getDocumentCatalog().getStructureTreeRoot();
+            List<PDStructureElement> elements = new ArrayList<>();
+            collect(root, elements);
+            List<PDStructureElement> figures = elements.stream()
+                    .filter(e -> "Figure".equals(e.getStructureType()))
+                    .toList();
+            assertEquals(1, figures.size());
+            PDStructureElement figure = figures.get(0);
+            assertEquals("Redacted", figure.getAlternateDescription());
+
+            COSArray kids = (COSArray) figure.getParent().getCOSObject().getDictionaryObject(COSName.K);
+            int anchorAt = -1;
+            int figureAt = -1;
+            for (int i = 0; i < kids.size(); i++) {
+                COSBase kid = kids.getObject(i);
+                if (kid instanceof COSInteger n && n.intValue() == 0) anchorAt = i;
+                if (kid == figure.getCOSObject()) figureAt = i;
+            }
+            assertEquals(anchorAt + 1, figureAt, "figure follows the text it hides");
+
+            int coverMcid = ((COSNumber) figure.getCOSObject().getDictionaryObject(COSName.K)).intValue();
+            COSArray nums = (COSArray) root.getParentTree().getCOSObject().getDictionaryObject(COSName.NUMS);
+            COSArray owners = (COSArray) nums.getObject(1);
+            assertEquals(figure.getCOSObject(), owners.getObject(coverMcid));
+            assertEquals(List.of(coverMcid), fillMcids(doc.getPage(0)));
         }
     }
 
@@ -129,6 +180,29 @@ class TaggedRegionRedactTest {
             operands.clear();
         }
         assertTrue(open.isEmpty(), "unbalanced marked content");
+        return mcids;
+    }
+
+    private static List<Integer> fillMcids(PDPage page) throws IOException {
+        Deque<Integer> open = new ArrayDeque<>();
+        List<COSBase> operands = new ArrayList<>();
+        List<Integer> mcids = new ArrayList<>();
+        for (Object token : new PDFStreamParser(page).parse()) {
+            if (!(token instanceof Operator operator)) {
+                operands.add((COSBase) token);
+                continue;
+            }
+            switch (operator.getName()) {
+                case "BMC" -> open.push(-1);
+                case "BDC" -> open.push(COSName.getPDFName("Figure").equals(operands.get(0))
+                        ? mcid(operands.get(1), page.getResources())
+                        : -1);
+                case "EMC" -> open.pop();
+                case "f", "F", "f*" -> mcids.add(open.isEmpty() ? -1 : open.peek());
+                default -> {}
+            }
+            operands.clear();
+        }
         return mcids;
     }
 
