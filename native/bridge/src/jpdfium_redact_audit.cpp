@@ -667,13 +667,13 @@ int32_t jpdfium_crop_remove_content_ex(int64_t page, float x, float y, float w, 
             // (pixel-erasing images outside crop, clipping path vectors)
             int32_t rc =
                 objectFissionRedact(pw->doc, pw->page, tp.get(), matches, 0xFFFFFFFF, pw->core,
-                                    nullptr, &keepRect, /*skipTextObjects=*/true);
+                                    pw->pageIndex, nullptr, &keepRect, /*skipTextObjects=*/true);
             if (rc != JPDFIUM_OK) return rc;
         } else {
             // Fallback: full Object Fission if EPDF redactions were not available
             int32_t rc =
                 objectFissionRedact(pw->doc, pw->page, tp.get(), matches, 0xFFFFFFFF, pw->core,
-                                    nullptr, &keepRect, /*skipTextObjects=*/false);
+                                    pw->pageIndex, nullptr, &keepRect, /*skipTextObjects=*/false);
             if (rc != JPDFIUM_OK) return rc;
         }
 

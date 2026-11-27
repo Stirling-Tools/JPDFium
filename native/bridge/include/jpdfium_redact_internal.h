@@ -167,7 +167,7 @@ const char* getStandard14FontName(const char* baseName);
 bool isStandard14Font(FPDF_FONT font);
 int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE textPage,
                             const std::vector<TextMatch>& matches, uint32_t argb,
-                            const std::shared_ptr<DocCore>& core,
+                            const std::shared_ptr<DocCore>& core, int32_t pageIndex,
                             std::vector<FPDF_PAGEOBJECT>* paintedCovers = nullptr,
                             const FS_RECTF* cropRect = nullptr, bool skipTextObjects = false,
                             bool* refusedUnmodified = nullptr);
@@ -205,6 +205,16 @@ void alignMatchesToShapedClusters(FPDF_TEXTPAGE tp, std::vector<TextMatch>& matc
 // Sets the quad of each match on text that is not upright, for its REDACT mark's
 // /QuadPoints. Must run while `tp` still describes the page the matches came from.
 void orientMatchQuads(FPDF_TEXTPAGE tp, std::vector<TextMatch>& matches);
+struct CoverAnchors {
+    FPDF_DOCUMENT doc = nullptr;
+    unsigned int pageObjNum = 0;
+    std::vector<std::pair<FS_RECTF, int>> taggedChars;
+};
+CoverAnchors snapshotCoverAnchors(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tp,
+                                  int32_t pageIndex, DocCore* core);
+FPDF_PAGEOBJECTMARK markRedactionCover(FPDF_PAGEOBJECT cover, const FS_RECTF& area,
+                                       const CoverAnchors* anchors, DocCore* core,
+                                       FPDF_PAGEOBJECTMARK shared);
 bool auditNoSurvivorsInRegion(FPDF_PAGE page, const std::vector<FS_RECTF>& regions,
                               const std::vector<FPDF_PAGEOBJECT>& exclude);
 void deletePatternCache(void* p);

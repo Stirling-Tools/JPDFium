@@ -71,6 +71,12 @@ struct RedactZone {
     float left = 0, bottom = 0, right = 0, top = 0;
 };
 
+struct RedactionCoverTag {
+    int mcid = -1;
+    int anchorMcid = -1;
+    float top = 0, left = 0;
+};
+
 // Reusable raster frame: the bitmap owns its pixels and the geometry it was
 // allocated for travels with it, so reuse and byte accounting cannot drift.
 class RasterFrame {
@@ -166,6 +172,9 @@ struct DocCore {
     std::string sanitizeReport{};
     std::vector<FPDF_FONT> loadedFonts{};
     std::vector<ErasedGrayImage> erasedGrayImages{};
+    std::map<unsigned int, std::set<int>> redactedMcids{};
+    std::map<unsigned int, std::vector<RedactionCoverTag>> coverTags{};
+    std::map<unsigned int, int> nextCoverMcid{};
 
     // Filesystem path this document was opened from, or empty for in-memory
     // documents. Retained only so save can refuse to write over its own input:
@@ -477,6 +486,8 @@ int sanitizeRedactedPdf(const uint8_t* input, size_t inputLen, const DocCore& co
 // replaced |bytes|; false leaves them as PDFium wrote them (nothing matched,
 // qpdf unavailable, or the pass failed), which is still a complete redaction.
 bool compactErasedGrayImages(const DocCore& core, std::vector<uint8_t>& bytes);
+
+bool rewriteRedactedStructure(const DocCore& core, std::vector<uint8_t>& bytes);
 
 // File-backed form of the same stage: reads |inputPath| and, when an image is
 // rewritten, writes the complete PDF to |output|. The caller owns |output| and

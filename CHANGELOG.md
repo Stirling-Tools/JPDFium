@@ -146,6 +146,17 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Fixed
 
+- On a tagged page, each redaction cover box is tagged as a `Figure` with the
+  alternate text "Redacted", placed in the structure tree right after the
+  element whose text it hides, so a screen reader announces the redaction.
+  Covers over untagged content are written inside `/Artifact` marked content,
+  so neither adds untagged content to a tagged PDF.
+- Text and paths that object fission rebuilds around a redaction keep the
+  marked content of the object they came from, instead of becoming untagged.
+- Redaction drops `/ActualText`, `/Alt` and `/E` from the marked content and
+  structure elements of content it removes or cuts, so a region redaction no
+  longer leaves the removed text readable there.
+
 - The bundled `JPDFiumCompactCmyk.icc` fallback is now generated only from the
   CC0 `CGATS001Compat-v2-micro.icc` measurements. Its B2A table inverts the same
   CMYK -> Lab data with a strong black-generation preference and a 245% total

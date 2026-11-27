@@ -1,6 +1,7 @@
 // jpdfium_sanitize.cpp - Post-redaction document sanitization.
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <map>
@@ -17,6 +18,7 @@
 #include <qpdf/BufferInputSource.hh>
 #include <qpdf/QPDF.hh>
 #include <qpdf/QPDFExc.hh>
+#include <qpdf/QPDFNumberTreeObjectHelper.hh>
 #include <qpdf/QPDFObjectHandle.hh>
 #include <qpdf/QPDFTokenizer.hh>
 #include <qpdf/QPDFWriter.hh>
@@ -759,7 +761,117 @@ int sanitizeRedactedPdf(const uint8_t* input, size_t inputLen, const DocCore& co
     }
 }
 
+namespace {
+
+void dropReplacementTextFromBranch(QPDFObjectHandle element, std::set<QPDFObjGen>& visited) {
+    for (int depth = 0; depth < 512 && element.isDictionary(); ++depth) {
+        if (element.isIndirect() && !visited.insert(element.getObjGen()).second) return;
+        if (!element.hasKey("/S")) return;
+        for (const char* key : {"/ActualText", "/Alt", "/E"}) element.removeKey(key);
+        element = element.getKey("/P");
+    }
+}
+
+bool refersToMcid(QPDFObjectHandle kid, int mcid) {
+    if (kid.isInteger()) return kid.getIntValue() == mcid;
+    return kid.isDictionary() && kid.getKey("/MCID").isInteger() &&
+           kid.getKey("/MCID").getIntValue() == mcid && !kid.hasKey("/Stm");
+}
+
+void addCoverFigures(QPDF& q, QPDFObjectHandle page, QPDFObjectHandle owners,
+                     std::vector<RedactionCoverTag> tags) {
+    std::stable_sort(tags.begin(), tags.end(),
+                     [](const RedactionCoverTag& a, const RedactionCoverTag& b) {
+                         if (std::abs(a.top - b.top) > 2.0f) return a.top > b.top;
+                         return a.left < b.left;
+                     });
+    std::map<int, int> insertedAfter;
+    for (const RedactionCoverTag& tag : tags) {
+        if (tag.anchorMcid >= owners.getArrayNItems()) continue;
+        if (tag.mcid < owners.getArrayNItems() && !owners.getArrayItem(tag.mcid).isNull()) continue;
+        QPDFObjectHandle owner = owners.getArrayItem(tag.anchorMcid);
+        if (!owner.isDictionary() || !owner.hasKey("/S")) continue;
+
+        QPDFObjectHandle kids = owner.getKey("/K");
+        if (!kids.isArray()) {
+            QPDFObjectHandle wrapped = QPDFObjectHandle::newArray();
+            if (!kids.isNull()) wrapped.appendItem(kids);
+            owner.replaceKey("/K", wrapped);
+            kids = wrapped;
+        }
+        int at = kids.getArrayNItems();
+        for (int i = 0; i < kids.getArrayNItems(); ++i) {
+            if (refersToMcid(kids.getArrayItem(i), tag.anchorMcid)) {
+                at = i + 1;
+                break;
+            }
+        }
+        at += insertedAfter[tag.anchorMcid]++;
+        at = std::min(at, kids.getArrayNItems());
+
+        QPDFObjectHandle figure = q.makeIndirectObject(QPDFObjectHandle::newDictionary());
+        figure.replaceKey("/Type", QPDFObjectHandle::newName("/StructElem"));
+        figure.replaceKey("/S", QPDFObjectHandle::newName("/Figure"));
+        figure.replaceKey("/P", owner);
+        figure.replaceKey("/Pg", page);
+        figure.replaceKey("/K", QPDFObjectHandle::newInteger(tag.mcid));
+        figure.replaceKey("/Alt", QPDFObjectHandle::newUnicodeString("Redacted"));
+        kids.insertItem(at, figure);
+
+        while (owners.getArrayNItems() <= tag.mcid) owners.appendItem(QPDFObjectHandle::newNull());
+        owners.setArrayItem(tag.mcid, figure);
+    }
+}
+
+}  // namespace
+
+bool rewriteRedactedStructure(const DocCore& core, std::vector<uint8_t>& bytes) {
+    if (core.redactedMcids.empty() && core.coverTags.empty()) return true;
+    try {
+        QPDF q;
+        q.processMemoryFile("redacted-structure.pdf", reinterpret_cast<const char*>(bytes.data()),
+                            bytes.size());
+        QPDFObjectHandle treeRoot = q.getRoot().getKey("/StructTreeRoot");
+        if (!treeRoot.isDictionary() || !treeRoot.getKey("/ParentTree").isDictionary()) return true;
+        QPDFNumberTreeObjectHelper parentTree(treeRoot.getKey("/ParentTree"), q);
+        std::set<QPDFObjGen> visited;
+        for (QPDFObjectHandle page : q.getAllPages()) {
+            const unsigned int pageObjNum = static_cast<unsigned int>(page.getObjectID());
+            auto stripped = core.redactedMcids.find(pageObjNum);
+            auto covers = core.coverTags.find(pageObjNum);
+            if (stripped == core.redactedMcids.end() && covers == core.coverTags.end()) continue;
+            QPDFObjectHandle key = page.getKey("/StructParents");
+            if (!key.isInteger()) continue;
+            QPDFObjectHandle owners;
+            if (!parentTree.findObject(key.getIntValue(), owners) || !owners.isArray()) continue;
+            if (stripped != core.redactedMcids.end()) {
+                for (int mcid : stripped->second) {
+                    if (mcid < owners.getArrayNItems())
+                        dropReplacementTextFromBranch(owners.getArrayItem(mcid), visited);
+                }
+            }
+            if (covers != core.coverTags.end()) addCoverFigures(q, page, owners, covers->second);
+        }
+        QPDFWriter writer(q);
+        writer.setOutputMemory();
+        {
+            jpdfium_qpdf_internal::WriterLock lock{-1};
+            writer.write();
+        }
+        std::shared_ptr<Buffer> out = writer.getBufferSharedPointer();
+        if (!out || out->getSize() == 0) return false;
+        bytes.assign(out->getBuffer(), out->getBuffer() + out->getSize());
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
 #else  // !JPDFIUM_HAS_QPDF
+
+bool rewriteRedactedStructure(const DocCore& core, std::vector<uint8_t>&) {
+    return core.redactedMcids.empty() && core.coverTags.empty();
+}
 
 int sanitizeRedactedPdf(const uint8_t*, size_t, const DocCore&, std::vector<uint8_t>&,
                         std::string& reportJson) {

@@ -5,6 +5,7 @@
 // because its phases share one traversal state.
 
 #include <epdf_redact.h>
+#include <epdf_view.h>
 #include <fpdf_annot.h>
 #include <fpdf_edit.h>
 #include <fpdf_flatten.h>
@@ -117,6 +118,29 @@ struct ImageDataKey {
     uint64_t hash = 0;
 };
 
+static void inheritContentMarks(FPDF_PAGEOBJECT from, FPDF_PAGEOBJECT to) {
+    if (!from || !to) return;
+    const int count = FPDFPageObj_CountMarks(from);
+    for (int i = 0; i < count; ++i) {
+        FPDF_PAGEOBJECTMARK mark = FPDFPageObj_GetMark(from, static_cast<unsigned long>(i));
+        if (mark) FPDFPageObj_AddExistingMark(to, mark);
+    }
+}
+
+static constexpr const char* kReplacementTextKeys[] = {"ActualText", "Alt", "E"};
+
+static void dropMarkReplacementText(FPDF_PAGEOBJECT obj, std::set<int>* mcids) {
+    const int count = FPDFPageObj_CountMarks(obj);
+    for (int i = 0; i < count; ++i) {
+        FPDF_PAGEOBJECTMARK mark = FPDFPageObj_GetMark(obj, static_cast<unsigned long>(i));
+        if (!mark) continue;
+        for (const char* key : kReplacementTextKeys) FPDFPageObjMark_RemoveParam(obj, mark, key);
+        int mcid = -1;
+        if (mcids && FPDFPageObjMark_GetParamIntValue(mark, "MCID", &mcid) && mcid >= 0)
+            mcids->insert(mcid);
+    }
+}
+
 static bool readImageData(FPDF_PAGEOBJECT image, std::vector<uint8_t>& out) {
     const unsigned long len = FPDFImageObj_GetImageDataRaw(image, nullptr, 0);
     if (len == 0) return false;
@@ -153,10 +177,14 @@ static bool sameImageData(FPDF_PAGEOBJECT a, const ImageDataKey& aKey, FPDF_PAGE
 // by the page boxes).
 int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE textPage,
                             const std::vector<TextMatch>& matches, uint32_t argb,
-                            const std::shared_ptr<DocCore>& core,
+                            const std::shared_ptr<DocCore>& core, int32_t pageIndex,
                             std::vector<FPDF_PAGEOBJECT>* paintedCovers, const FS_RECTF* cropRect,
                             bool skipTextObjects, bool* refusedUnmodified) {
     if (matches.empty()) return JPDFIUM_OK;
+
+    const CoverAnchors coverAnchors =
+        cropRect ? CoverAnchors{}
+                 : snapshotCoverAnchors(doc, page, textPage, pageIndex, core.get());
 
     unsigned int alf = (argb >> 24) & 0xFF;
     unsigned int red = (argb >> 16) & 0xFF;
@@ -535,6 +563,7 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
 
     std::vector<FissionPlan> plans;
     std::unordered_set<FPDF_PAGEOBJECT> objsToDestroy;
+    std::vector<FPDF_PAGEOBJECT> contentChanged;
 
     if (!skipTextObjects)
         for (int oi = 0; oi < static_cast<int>(objChars.size()); oi++) {
@@ -988,6 +1017,7 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
             promotionFailed = true;
             return;
         }
+        contentChanged.push_back(child);
         auto pit = objPtrToIndex.find(reinterpret_cast<uintptr_t>(child));
         if (pit == objPtrToIndex.end()) return;
         const ObjRef& ref = allObjs[pit->second];
@@ -1304,6 +1334,7 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
                         doc, page, obj, imgMatrix, std::span<const FS_RECTF>(eraseRectsBuffer),
                         argb, &pixelsErased, core ? &core->erasedGrayImages : nullptr);
                 }
+                if (erased) contentChanged.push_back(obj);
                 if (!erased) {
                     if (cropRect) {
                         // Drop nothing: the visible part must survive. The
@@ -1463,6 +1494,7 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
 
                     // Deferred insertion at the original's index keeps paint
                     // order (applied together with fission fragments below).
+                    inheritContentMarks(obj, newPath);
                     insertions.push_back({newPath, i, 0, 0});
                     objsToDestroy.insert(obj);
                 } else {
@@ -1844,6 +1876,7 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
                 allOk = false;
                 break;
             }
+            inheritContentMarks(plan.parentForm ? plan.topFormObj : plan.originalObj, fragObj);
             createdObjs.push_back(fragObj);
         }
 
@@ -1936,6 +1969,25 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
     //    IMPORTANT: after the first FPDFPage_RemoveObject of a TEXT object
     //    every FPDF_TEXTPAGE handle is invalid - all text-page reads happened
     //    in the analysis phase above, nothing below queries the text page.
+    {
+        std::set<FPDF_PAGEOBJECT> changed(objsToDestroy.begin(), objsToDestroy.end());
+        changed.insert(contentChanged.begin(), contentChanged.end());
+        for (const FissionPlan& plan : plans) changed.insert(plan.originalObj);
+        std::set<int> mcids;
+        for (FPDF_PAGEOBJECT obj : changed) {
+            dropMarkReplacementText(obj, nullptr);
+            auto it = objPtrToIndex.find(reinterpret_cast<uintptr_t>(obj));
+            FPDF_PAGEOBJECT owner = obj;
+            if (it != objPtrToIndex.end() && allObjs[it->second].topFormObj)
+                owner = allObjs[it->second].topFormObj;
+            dropMarkReplacementText(owner, &mcids);
+        }
+        if (core && !mcids.empty()) {
+            const unsigned int pageObjNum = EPDFDoc_GetPageObjectNumberByIndex(doc, pageIndex);
+            if (pageObjNum) core->redactedMcids[pageObjNum].insert(mcids.begin(), mcids.end());
+        }
+    }
+
     std::vector<FPDF_PAGEOBJECT> destroyList(objsToDestroy.begin(), objsToDestroy.end());
 
     // Shallowest first: page-level objects (depth 0) before form children;
@@ -2071,6 +2123,8 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
             if (!rect) continue;
             FPDFPageObj_SetFillColor(rect, red, grn, blu, alf);
             FPDFPath_SetDrawMode(rect, FPDF_FILLMODE_ALTERNATE, 0);
+            markRedactionCover(rect, makePageRect(m.bboxL, m.bboxB, m.bboxR, m.bboxT),
+                               &coverAnchors, core.get(), nullptr);
             FPDFPage_InsertObject(page, rect);
             if (paintedCovers) paintedCovers->push_back(rect);
         }
