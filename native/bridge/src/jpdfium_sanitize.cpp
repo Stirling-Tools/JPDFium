@@ -198,16 +198,26 @@ bool parseToUnicode(const std::shared_ptr<Buffer>& buf, std::vector<CmapEntry>& 
         code = value;
         return true;
     };
-    // UTF-16 surrogate units are not valid mapping targets: consecutive-form
-    // ranges that walk into the surrogate block stop at the first bad unit.
-    auto hasSurrogateUnit = [](std::string const& uni) {
-        if (uni.size() % 2 != 0) return false;
+    // Validate a UTF-16BE destination as a sequence of BMP scalars or
+    // well-formed surrogate pairs. Consecutive-form ranges stop only when the
+    // increment walks into a lone surrogate, not merely because the starting
+    // value contains a valid pair.
+    auto validUtf16be = [](std::string const& uni) {
+        if (uni.empty() || uni.size() % 2 != 0) return false;
         for (size_t i = 0; i + 1 < uni.size(); i += 2) {
             const unsigned unit =
                 (static_cast<unsigned char>(uni[i]) << 8) | static_cast<unsigned char>(uni[i + 1]);
-            if (unit >= 0xD800U && unit <= 0xDFFFU) return true;
+            if (unit >= 0xD800U && unit <= 0xDBFFU) {
+                if (i + 3 >= uni.size()) return false;
+                const unsigned low = (static_cast<unsigned char>(uni[i + 2]) << 8) |
+                                     static_cast<unsigned char>(uni[i + 3]);
+                if (low < 0xDC00U || low > 0xDFFFU) return false;
+                i += 2;
+            } else if (unit >= 0xDC00U && unit <= 0xDFFFU) {
+                return false;
+            }
         }
-        return false;
+        return true;
     };
 
     auto flushBfChar = [&]() {
@@ -257,7 +267,7 @@ bool parseToUnicode(const std::shared_ptr<Buffer>& buf, std::vector<CmapEntry>& 
                 return;
             }
             for (uint64_t code = lo; code <= hi && out.size() < kMaxEntries; code++) {
-                if (hasSurrogateUnit(ub)) break;
+                if (!validUtf16be(ub)) break;
                 totalDestBytes += ub.size();
                 out.push_back(CmapEntry{static_cast<int>(code), loBytes, ub});
                 for (size_t idx = ub.size(); idx-- > 0;) {

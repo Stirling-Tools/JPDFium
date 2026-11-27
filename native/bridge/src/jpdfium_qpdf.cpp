@@ -525,9 +525,9 @@ int32_t encodeBilevelImages(QPDF& pdf) {
         });
 }
 
-// Chromium 445740322: a non-finite or unbounded tiling-pattern step overflows
-// the renderer's tile raster dimensions. Clamp to the positive range that PDF
-// rasterisers accept.
+// Replace only missing/non-finite/zero tiling-pattern steps. ISO 32000-1
+// 8.7.3.1 permits finite nonzero fractional and large steps; changing those
+// would alter the rendered tile spacing.
 void clampTilingPatternStep(QPDFObjectHandle const& pattern) {
     if (!pattern.isDictionary() && !pattern.isStream()) return;
     QPDFObjectHandle dict = pattern.isStream() ? pattern.getDict() : pattern;
@@ -537,14 +537,11 @@ void clampTilingPatternStep(QPDFObjectHandle const& pattern) {
         QPDFObjectHandle value = dict.getKey(key);
         bool replace = !value.isNumber();
         double step = value.isNumber() ? value.getNumericValue() : 1.0;
-        if (!std::isfinite(step) || std::fabs(step) < std::numeric_limits<double>::min()) {
+        // ISO 32000-1 8.7.3.1 permits any nonzero finite step, including
+        // fractional and large values. Only replace values that cannot be
+        // rendered meaningfully: missing, non-finite, or zero.
+        if (replace || !std::isfinite(step) || step == 0.0) {
             step = 1.0;
-            replace = true;
-        } else if (std::fabs(step) < 1.0) {
-            step = std::copysign(1.0, step);
-            replace = true;
-        } else if (std::fabs(step) > 32767.0) {
-            step = std::copysign(32767.0, step);
             replace = true;
         }
         if (replace) dict.replaceKey(key, QPDFObjectHandle::newReal(step, 4));

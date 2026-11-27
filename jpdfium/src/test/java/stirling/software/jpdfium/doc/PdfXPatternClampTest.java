@@ -21,9 +21,9 @@ import org.apache.pdfbox.pdmodel.graphics.pattern.PDTilingPattern;
 import org.junit.jupiter.api.Test;
 
 /**
- * The PDF/X preparation pass clamps tiling-pattern steps that would overflow a
- * renderer's tile raster (Chromium 445740322). Steps must stay finite, nonzero,
- * and within {@code [-32767, 32767]}.
+ * The PDF/X preparation pass replaces only missing, non-finite, or zero
+ * tiling-pattern steps. ISO 32000-1 8.7.3.1 permits finite nonzero fractional
+ * and large steps, and changing them would alter the rendered tile spacing.
  */
 class PdfXPatternClampTest {
 
@@ -75,20 +75,33 @@ class PdfXPatternClampTest {
     }
 
     @Test
-    void hugeAndNegativeStepsAreClamped() throws Exception {
+    void finiteStepsArePreserved() throws Exception {
         assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
-        PDTilingPattern pattern = convertedPattern(1e9f, -1e9f);
-        assertEquals(32767f, pattern.getXStep(), 0.01f, "huge XStep must be clamped");
-        assertEquals(-32767f, pattern.getYStep(), 0.01f,
-                "huge negative YStep keeps its sign");
+        PDTilingPattern pattern = convertedPattern(90000f, -90000f);
+        assertEquals(90000f, pattern.getXStep(), 0.01f, "large finite XStep is valid");
+        assertEquals(-90000f, pattern.getYStep(), 0.01f,
+                "large negative YStep keeps its sign");
     }
 
     @Test
-    void zeroAndSubUnitStepsBecomeUnitStep() throws Exception {
+    void zeroBecomesUnitButFractionalStepIsPreserved() throws Exception {
         assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
         PDTilingPattern pattern = convertedPattern(0f, 0.25f);
         assertEquals(1f, pattern.getXStep(), 0.01f, "zero XStep must become 1");
-        assertEquals(1f, pattern.getYStep(), 0.01f,
-                "a positive sub-unit YStep must become 1");
+        assertEquals(0.25f, pattern.getYStep(), 0.01f,
+                "a finite fractional YStep must be preserved");
+    }
+
+    @Test
+    void optimizerPreservesFractionalSteps() throws Exception {
+        assumeTrue(PdfOptimizer.isSupported(), "native qpdf optimizer unavailable");
+        byte[] optimized = PdfOptimizer.compress(patternPdf(0.5f, 0.5f), 9, false, false);
+        try (PDDocument doc = Loader.loadPDF(optimized)) {
+            PDTilingPattern pattern = (PDTilingPattern) doc.getPage(0).getResources()
+                    .getPattern(COSName.getPDFName("P1"));
+            assertNotNull(pattern, "pattern survived optimization");
+            assertEquals(0.5f, pattern.getXStep(), 0.01f, "optimizer must preserve XStep");
+            assertEquals(0.5f, pattern.getYStep(), 0.01f, "optimizer must preserve YStep");
+        }
     }
 }

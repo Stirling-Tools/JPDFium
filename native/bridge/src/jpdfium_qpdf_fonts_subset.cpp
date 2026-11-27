@@ -939,7 +939,11 @@ void appendFontInventoryEntryJson(FontInventoryEntry const& entry, std::string& 
         if (!data || data->getSize() < 4) return false;
         auto const* b = reinterpret_cast<uint8_t const*>(data->getBuffer());
         if (b[0] == 0x00 && b[1] == 0x01 && b[2] == 0x00 && b[3] == 0x00) return true;
-        if (b[0] == 0x01 && b[1] == 0x00 && b[2] == 0x04 && b[3] == 0x04) return true;
+        // CFF header: major=1, minor=0, hdrSize>=4, offSize in 1..4. OffSize
+        // selects the byte width of the Top DICT INDEX offsets (CFF spec 5176).
+        if (b[0] == 0x01 && b[1] == 0x00 && b[2] >= 0x04 &&
+            static_cast<size_t>(b[2]) < data->getSize() && b[3] >= 0x01 && b[3] <= 0x04)
+            return true;
         if ((b[0] == 'O' && b[1] == 'T' && b[2] == 'T' && b[3] == 'O') ||
             (b[0] == 't' && b[1] == 'r' && b[2] == 'u' && b[3] == 'e') ||
             (b[0] == 't' && b[1] == 't' && b[2] == 'c' && b[3] == 'f'))

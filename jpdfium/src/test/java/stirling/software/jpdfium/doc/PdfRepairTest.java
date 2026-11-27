@@ -21,9 +21,9 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.stream.Collectors;
 
-import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -752,20 +752,25 @@ class PdfRepairTest {
     }
 
     @Test
-    void signedDocumentsAreNotRewritten() {
-        byte[] marker = "\n% /ByteRange [0 1 2 3]\n".getBytes(StandardCharsets.US_ASCII);
-        byte[] signed = new byte[MINIMAL_PDF.length + marker.length];
-        System.arraycopy(MINIMAL_PDF, 0, signed, 0, MINIMAL_PDF.length);
-        System.arraycopy(marker, 0, signed, MINIMAL_PDF.length, marker.length);
+    void unsignedByteRangeTextDoesNotSuppressRepair() throws Exception {
+        byte[] marker =
+                "\n% Subject: this document mentions /ByteRange without a signature array\n"
+                        .getBytes(StandardCharsets.US_ASCII);
+        byte[] unsigned = new byte[MINIMAL_PDF.length + marker.length];
+        System.arraycopy(MINIMAL_PDF, 0, unsigned, 0, MINIMAL_PDF.length);
+        System.arraycopy(marker, 0, unsigned, MINIMAL_PDF.length, marker.length);
 
-        RepairResult qdf = PdfRepair.repairQdf(signed);
-        assertEquals(RepairResult.Status.CLEAN, qdf.status());
-        assertArrayEquals(signed, qdf.repairedPdf(),
-                "a signed document must not be rewritten by QDF repair");
+        RepairResult qdf = PdfRepair.repairQdf(unsigned);
+        assertNotEquals(RepairResult.Status.CLEAN, qdf.status(),
+                "unsigned /ByteRange text must not pass through as signed");
+        assertTrue(qdf.isUsable(), "repair failed: " + qdf.status());
+        try (PDDocument reopened = Loader.loadPDF(qdf.repairedPdf())) {
+            assertEquals(1, reopened.getNumberOfPages(), "the page must survive the repair");
+        }
 
-        RepairResult cascade = PdfRepair.builder().input(signed).all().build().execute();
-        assertEquals(RepairResult.Status.CLEAN, cascade.status());
-        assertArrayEquals(signed, cascade.repairedPdf(),
-                "a signed document must not be rewritten by the repair cascade");
+        RepairResult cascade = PdfRepair.builder().input(unsigned).all().build().execute();
+        assertNotEquals(RepairResult.Status.CLEAN, cascade.status(),
+                "unsigned /ByteRange text must not pass through the cascade");
+        assertTrue(cascade.isUsable(), "cascade repair failed: " + cascade.status());
     }
 }

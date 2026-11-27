@@ -207,9 +207,28 @@ class PdfRepairStructuralDamageTest {
                 .build()
                 .execute();
         assertTrue(result.isUsable(), "missing /Pages tree must be rebuilt: " + result.status());
+        assertTrue(trailerSize(result.repairedPdf()) > highestObject(result.repairedPdf()),
+                "trailer /Size must include the rebuilt /Pages object");
         try (PdfDocument doc = PdfDocument.open(result.repairedPdf())) {
             assertEquals(1, doc.pageCount(), "the orphaned page dictionary must survive");
         }
+    }
+
+    private static int trailerSize(byte[] pdf) {
+        String text = new String(pdf, StandardCharsets.ISO_8859_1);
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("/Size\\s+(\\d+)").matcher(text);
+        int size = -1;
+        while (m.find()) size = Integer.parseInt(m.group(1));
+        return size;
+    }
+
+    private static int highestObject(byte[] pdf) {
+        String text = new String(pdf, StandardCharsets.ISO_8859_1);
+        java.util.regex.Matcher m =
+                java.util.regex.Pattern.compile("(?m)(\\d+)\\s+\\d+\\s+obj").matcher(text);
+        int highest = 0;
+        while (m.find()) highest = Math.max(highest, Integer.parseInt(m.group(1)));
+        return highest;
     }
 
     @Test

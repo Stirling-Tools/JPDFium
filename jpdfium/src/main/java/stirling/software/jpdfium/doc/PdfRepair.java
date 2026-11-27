@@ -6,7 +6,6 @@ import stirling.software.jpdfium.panama.RepairLib;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
@@ -66,10 +65,6 @@ public final class PdfRepair {
     private static final int FLAG_NORMALIZE_XREF = 0x0001;
     private static final int FLAG_FIX_STARTXREF = 0x0002;
     private static final int FLAG_FORCE_V14 = 0x0004;
-
-    // Signature-dictionary marker. /ByteRange appears in every signature field;
-    // repair rewrites the document, which always breaks its digest.
-    private static final byte[] BYTE_RANGE = "/ByteRange".getBytes(StandardCharsets.ISO_8859_1);
 
     private final byte[] inputBytes;
     private final int flags;
@@ -136,14 +131,18 @@ public final class PdfRepair {
      */
     public static RepairResult.Status repairFile(Path input, Path output, int flags)
             throws IOException {
-        if (containsMarker(input, BYTE_RANGE)) {
+        // Only a structural /ByteRange array counts as a signature marker.
+        // Plain "/ByteRange" text in metadata/content must not suppress repair.
+        boolean marker = PdfDocument.containsByteRangeArray(input);
+        if (marker) {
             try (PdfDocument doc = PdfDocument.open(input)) {
                 if (doc.pageCount() > 0) {
                     publishPassThrough(input, output);
                     return RepairResult.Status.CLEAN;
                 }
             } catch (Exception _) {
-                // damaged: fall through to the refusal below
+                // Unopenable and carrying a /ByteRange array: fail closed.
+                return RepairResult.Status.FAILED;
             }
             return RepairResult.Status.FAILED;
         }
@@ -179,33 +178,6 @@ public final class PdfRepair {
             }
         } finally {
             Files.deleteIfExists(tmp);
-        }
-    }
-
-    /**
-     * Streams a file looking for a byte marker. Uses a sliding window so a marker
-     * spanning a buffer boundary is still found; the file is never materialized.
-     */
-    private static boolean containsMarker(Path file, byte[] needle) throws IOException {
-        try (InputStream in = Files.newInputStream(file)) {
-            byte[] buffer = new byte[64 * 1024];
-            final int overlap = needle.length - 1;
-            int carry = 0; // bytes retained from the previous buffer tail
-            int read;
-            while ((read = in.read(buffer, carry, buffer.length - carry)) > 0) {
-                int window = carry + read;
-                outer:
-                for (int i = 0; i + needle.length <= window; i++) {
-                    for (int j = 0; j < needle.length; j++) {
-                        if (buffer[i + j] != needle[j]) continue outer;
-                    }
-                    return true;
-                }
-                int keep = Math.min(overlap, window);
-                System.arraycopy(buffer, window - keep, buffer, 0, keep);
-                carry = keep;
-            }
-            return false;
         }
     }
 
@@ -786,13 +758,15 @@ public final class PdfRepair {
     // output whose signature silently no longer verifies.
     private static RepairResult signedDocumentResult(byte[] pdf, boolean diagnostics) {
         if (pdf == null) return null;
-        boolean marker = contains(pdf, BYTE_RANGE);
+        boolean marker = PdfDocument.containsByteRangeArray(pdf, pdf.length);
         try (PdfDocument doc = PdfDocument.open(pdf)) {
-            if (doc.pageCount() > 0 && (marker || doc.signatureCount() > 0)) {
+            // A structural /ByteRange array marks a signed document; bare
+            // "/ByteRange" text does not.
+            if (doc.pageCount() > 0 && marker) {
                 return new RepairResult(RepairResult.Status.CLEAN, pdf,
                         diagnostics ? inspect(pdf) : null);
             }
-            if (!marker) return null;
+            return null;
         } catch (Exception _) {
             if (!marker) return null;
         }
@@ -1440,8 +1414,10 @@ public final class PdfRepair {
             result = out.toString() + rootObj + " 0 obj\n<< /Type /Catalog /Pages " + pagesObj
                     + " 0 R >>\nendobj\n";
         }
+        // /Size is one greater than the highest object number. pagesObj is
+        // maxObj + 1, and a newly created catalog is maxObj + 2.
         result += "trailer\n<< /Root " + rootObj + " 0 R /Size "
-                + Math.max(maxObj + 1, rootObj + 1) + " >>\nstartxref\n0\n%%EOF\n";
+                + Math.max(maxObj + 2, rootObj + 1) + " >>\nstartxref\n0\n%%EOF\n";
         return result.getBytes(StandardCharsets.ISO_8859_1);
     }
 

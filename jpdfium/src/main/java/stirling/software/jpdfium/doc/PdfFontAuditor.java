@@ -799,7 +799,13 @@ public final class PdfFontAuditor {
     static boolean looksLikeFontProgram(byte[] data) {
         if (data == null || data.length < 4) return false;
         if (data[0] == 0x00 && data[1] == 0x01 && data[2] == 0x00 && data[3] == 0x00) return true;
-        if (data[0] == 0x01 && data[1] == 0x00 && data[2] == 0x04 && data[3] == 0x04) return true;
+        // CFF header: major=1, minor=0, hdrSize>=4, offSize in 1..4. OffSize
+        // selects the byte width of the Top DICT INDEX offsets (CFF spec 5176).
+        if (data[0] == 0x01 && data[1] == 0x00 && (data[2] & 0xFF) >= 0x04
+                && (data[2] & 0xFF) < data.length && (data[3] & 0xFF) >= 0x01
+                && (data[3] & 0xFF) <= 0x04) {
+            return true;
+        }
         String head = new String(data, 0, Math.min(4, data.length), StandardCharsets.ISO_8859_1);
         if ("OTTO".equals(head) || "true".equals(head) || "ttcf".equals(head)) return true;
         return (data[0] == '%' && data[1] == '!')

@@ -49,6 +49,31 @@ ASAN_OPTIONS=detect_container_overflow=0 ctest --test-dir native/build-asan
 - **Dead logic.** Removed an unused `requiresFission` flag whose only remaining
   effect was to stop a scan.
 
+## CodeRabbit review batch
+
+- **Tiling-pattern steps.** The PDF/X and qpdf passes previously rewrote any
+  finite step below 1 to 1 and capped large steps at 32767. ISO 32000-1 8.7.3.1
+  allows any finite nonzero step, and changing it alters tile spacing. Both
+  passes now replace only missing, non-finite, or zero steps. Regression:
+  `PdfXPatternClampTest` verifies fractional `0.5`, large `90000`, and the
+  qpdf optimizer path. Reference:
+  https://opensource.adobe.com/dc-acrobat-sdk-docs/pdfstandards/pdfreference1.7old.pdf
+- **CFF header validation.** `PdfFontAuditor.looksLikeFontProgram` and the native
+  font-inventory validator required `offSize == 4`; the CFF header permits
+  1..4. Both now validate `major=1, minor=0, hdrSize>=4, offSize=1..4`.
+  Regression: `PdfFontEmbedderTest.acceptsBareCffProgramMagic`. Reference:
+  https://adobe-type-tools.github.io/font-tech-notes/pdfs/5176.CFF.pdf
+- **Trailer `/Size` after page-tree rebuild.** The rebuilt `/Pages` object was
+  not counted in `/Size`; it is now one greater than the highest object
+  (`maxObj + 2` or new catalog + 1). Regression:
+  `PdfRepairStructuralDamageTest.rebuildsMissingPageTreeFromPageDictionaries`.
+- **Unsigned `/ByteRange` text.** `PdfRepair` used a raw substring scan, so an
+  unsigned PDF whose metadata contained `/ByteRange` skipped repair and
+  sanitization. It now uses the structural `PdfDocument.containsByteRangeArray`
+  check; bare text no longer suppresses repair. Regression:
+  `PdfRepairTest.unsignedByteRangeTextDoesNotSuppressRepair`; the real signed
+  fixture still passes through untouched.
+
 ## Residual diagnostics
 
 After this pass, the project `.clang-tidy` checks and cppcheck report no
@@ -62,7 +87,7 @@ There are **zero** `clang-analyzer-*`, `bugprone-exception-escape`,
 
 ## Verification
 
-- Integration suite: `4895` tests, `0` failures, `0` errors, `315` skipped.
+- Integration suite: `4896` tests, `0` failures, `0` errors, `315` skipped.
 - Release ctest: `6/6` passed.
 - ASan+UBSan ctest: `6/6` passed with
   `ASAN_OPTIONS=detect_container_overflow=0`. Default ASan still reports the

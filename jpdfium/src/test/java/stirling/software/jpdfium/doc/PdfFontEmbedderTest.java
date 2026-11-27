@@ -1370,9 +1370,14 @@ class PdfFontEmbedderTest {
 
     @Test
     void acceptsBareCffProgramMagic() {
-        byte[] cff = {(byte) 0x01, 0, (byte) 0x04, (byte) 0x04, 0, 0, 0, 0};
-        assertTrue(PdfFontAuditor.looksLikeFontProgram(cff),
-                "bare CFF programs begin with 01 00 04 04");
+        for (int offSize = 1; offSize <= 4; offSize++) {
+            byte[] cff = {(byte) 0x01, 0, (byte) 0x04, (byte) offSize, 0, 0, 0, 0};
+            assertTrue(PdfFontAuditor.looksLikeFontProgram(cff),
+                    "bare CFF programs accept offSize " + offSize);
+        }
+        assertFalse(PdfFontAuditor.looksLikeFontProgram(
+                new byte[] {(byte) 0x01, 0, (byte) 0x04, 0, 0, 0, 0, 0}),
+                "CFF offSize 0 is invalid");
     }
 
     @Test
