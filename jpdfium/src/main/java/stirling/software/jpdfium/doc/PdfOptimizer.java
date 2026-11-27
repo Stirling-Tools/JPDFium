@@ -33,6 +33,8 @@ public final class PdfOptimizer {
     public static final int CCITT_G4 = 0x200;
     /** Re-encode 1-bit DeviceGray images as JBIG2 when smaller. */
     public static final int JBIG2 = 0x400;
+    /** Subset already-embedded TrueType/OpenType fonts in-place. */
+    public static final int SUBSET_FONTS = 0x800;
 
     public static final int OBJECT_STREAMS_DISABLE = 0;
     public static final int OBJECT_STREAMS_PRESERVE = 1;
