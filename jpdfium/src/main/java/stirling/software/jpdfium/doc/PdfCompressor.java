@@ -656,21 +656,26 @@ public final class PdfCompressor {
         if (pdf == null) {
             return -1;
         }
-        boolean rawPdfa = m.first[N_PDFA_PART] >= 0 || m.first[N_PDFA_PART_ATTR] >= 0
-                || m.first[N_PDFA_PART_SQ] >= 0 || m.first[N_PDFA_CONF] >= 0
-                || m.first[N_PDFA_CONF_ATTR] >= 0 || m.first[N_PDFA_CONF_SQ] >= 0
-                || m.first[N_GTS_PDFA1] >= 0;
-        byte[] xmp = null;
-        if (!rawPdfa) {
-            xmp = catalogMetadata(pdf, m);
-            if (xmp == null || !containsAny(xmp, PDFA_MARKERS)) {
-                return -1;
-            }
+        boolean rawPart = m.first[N_PDFA_PART] >= 0 || m.first[N_PDFA_PART_ATTR] >= 0
+                || m.first[N_PDFA_PART_SQ] >= 0 || m.first[N_GTS_PDFA1] >= 0;
+        boolean rawPart1 = m.first[N_PDFA1_PART] >= 0 || m.first[N_PDFA1_PART_ATTR] >= 0
+                || m.first[N_PDFA1_PART_SQ] >= 0 || m.first[N_GTS_PDFA1] >= 0;
+        boolean rawClaim = rawPart || m.first[N_PDFA_CONF] >= 0
+                || m.first[N_PDFA_CONF_ATTR] >= 0 || m.first[N_PDFA_CONF_SQ] >= 0;
+        if (rawPart) {
+            // An explicit raw part marker is authoritative; metadata cannot
+            // downgrade a visible part-2 claim to part 1.
+            return rawPart1 ? 1 : 2;
         }
-        boolean part1 = m.first[N_PDFA1_PART] >= 0 || m.first[N_PDFA1_PART_ATTR] >= 0
-                || m.first[N_PDFA1_PART_SQ] >= 0 || m.first[N_GTS_PDFA1] >= 0
-                || (xmp != null && containsAny(xmp, PDFA_PART1_MARKERS));
-        return part1 ? 1 : 2;
+        // A conformance-only marker (for example an Info string) establishes
+        // that this is PDF/A but not which part. Read the catalog XMP before
+        // choosing the structural policy; compressed XMP can carry part 1
+        // while the raw sweep sees only conformance.
+        byte[] xmp = catalogMetadata(pdf, m);
+        if (xmp != null && containsAny(xmp, PDFA_MARKERS)) {
+            return containsAny(xmp, PDFA_PART1_MARKERS) ? 1 : 2;
+        }
+        return rawClaim ? 2 : -1;
     }
 
     // Reads only the catalog's /Metadata stream: resolves the "/Metadata N 0 R"

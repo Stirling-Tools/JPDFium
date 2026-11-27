@@ -60,6 +60,18 @@ ASAN_OPTIONS=detect_container_overflow=0 ctest --test-dir native/build-asan
   regression checks both `/ColorSpace` and `/Components`. Unresolved CodeRabbit
   feedback was audited across 48 PRs (129 open threads); fixes were limited to
   confirmed current-tip defects.
+- **PDF/A part after a conformance-only marker.** A raw Info string such as
+  `pdfaid:conformance='B'` made the scanner treat the document as a PDF/A
+  claim, but without a raw `pdfaid:part` it defaulted to part 2 and skipped the
+  catalog XMP that actually said part 1. Compression then generated object
+  streams and an xref stream, both forbidden by PDF/A-1. A conformance-only
+  match now decodes the catalog metadata before choosing the structural policy;
+  an explicit raw part marker remains authoritative. Regressions:
+  `PdfCompressorDetectionTest.conformanceOnlyInfoResolvesPartFromCompressedXmp`
+  (failed with `expected <1> but was <2>`) and
+  `PdfCompressorTest.conformanceOnlyInfoDoesNotHideCompressedPdfA1Claim`, which
+  compresses the document and asserts no `/ObjStm`, no `/XRef`, and uncompressed
+  metadata.
 - **Type 2 colour functions.** Rewriting only `/C0` and `/C1` preserved the
   gradient endpoints but shifted every intermediate colour because the
   RGB-to-CMYK LUT is nonlinear. Type 2 functions are now sampled at 257 points
@@ -165,7 +177,7 @@ There are **zero** `clang-analyzer-*`, `bugprone-exception-escape`,
 
 ## Verification
 
-- Integration suite: `4914` tests, `0` failures, `0` errors, `314` skipped.
+- Integration suite: `4916` tests, `0` failures, `0` errors, `314` skipped.
 - Release ctest: `6/6` passed.
 - ASan+UBSan ctest: `6/6` passed with
   `ASAN_OPTIONS=detect_container_overflow=0`. Default ASan still reports the

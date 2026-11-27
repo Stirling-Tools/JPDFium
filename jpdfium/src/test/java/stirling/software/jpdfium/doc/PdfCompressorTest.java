@@ -705,6 +705,73 @@ class PdfCompressorTest {
     }
 
     @Test
+    void conformanceOnlyInfoDoesNotHideCompressedPdfA1Claim(@TempDir Path tmp) throws Exception {
+        assumeTrue(QpdfLib.isSupported(), "QPDF support unavailable");
+        String xmp = "<?xpacket begin=\"\uFEFF\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>"
+                + "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF "
+                + "xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">"
+                + "<rdf:Description rdf:about=\"\" "
+                + "xmlns:pdfaid=\"http://www.aiim.org/pdfa/ns/id/\" "
+                + "pdfaid:part='1' pdfaid:conformance='B'/>"
+                + "</rdf:RDF></x:xmpmeta><?xpacket end=\"w\"?>";
+
+        Path src = tmp.resolve("pdfa1-compressed-xmp.pdf");
+        try (PDDocument doc = new PDDocument()) {
+            doc.setVersion(1.4f);
+            PDPage page = new PDPage();
+            doc.addPage(page);
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                for (int i = 0; i < 60; i++) {
+                    cs.addRect(10 + i, 20, 40, 40);
+                    cs.stroke();
+                }
+            }
+            var metadata = new org.apache.pdfbox.pdmodel.common.PDMetadata(doc);
+            try (OutputStream out =
+                    metadata.getCOSObject().createOutputStream(COSName.FLATE_DECODE)) {
+                out.write(xmp.getBytes(StandardCharsets.UTF_8));
+            }
+            metadata.getCOSObject().setItem(COSName.TYPE, COSName.METADATA);
+            metadata.getCOSObject().setItem(COSName.SUBTYPE, COSName.getPDFName("XML"));
+            doc.getDocumentCatalog().setMetadata(metadata);
+            doc.save(src.toFile());
+        }
+
+        byte[] saved = Files.readAllBytes(src);
+        String raw = new String(saved, StandardCharsets.ISO_8859_1)
+                + "\n% pdfaid:conformance='B'\n";
+        assertFalse(raw.contains("pdfaid:part"),
+                "fixture must hide the part claim inside the compressed XMP stream");
+        assertTrue(raw.contains("pdfaid:conformance='B'"),
+                "fixture must expose a conformance-only raw marker");
+        byte[] sourceBytes = raw.getBytes(StandardCharsets.ISO_8859_1);
+        Files.write(src, sourceBytes);
+        assertEquals(1, PdfCompressor.pdfaPart(sourceBytes),
+                "compressed part-1 XMP must win over a conformance-only Info string");
+
+        try (PdfDocument doc = PdfDocument.open(src)) {
+            PdfCompressor.CompressResultWithBytes res = PdfCompressor.compress(
+                    doc, CompressOptions.builder()
+                            .preset(CompressPreset.LOSSLESS)
+                            .optimizeStreams(true)
+                            .useZopfliDeflate(true)
+                            .build());
+            try (PDDocument outDoc = Loader.loadPDF(res.bytes())) {
+                assertTrue(outDoc.getDocument()
+                                .getObjectsByType(COSName.getPDFName("ObjStm")).isEmpty(),
+                        "PDF/A-1 must not contain object streams");
+                assertTrue(outDoc.getDocument()
+                                .getObjectsByType(COSName.getPDFName("XRef")).isEmpty(),
+                        "PDF/A-1 must not contain xref streams");
+                var outMeta = outDoc.getDocumentCatalog().getMetadata();
+                assertNotNull(outMeta, "PDF/A-1 metadata stream must remain present");
+                assertNull(outMeta.getCOSObject().getDictionaryObject(COSName.FILTER),
+                        "PDF/A-1 metadata stream must remain uncompressed");
+            }
+        }
+    }
+
+    @Test
     void compressPreservesPdfA1StructureAndUncompressedMetadata(@TempDir Path tmp)
             throws Exception {
         assumeTrue(QpdfLib.isSupported(), "QPDF support unavailable");

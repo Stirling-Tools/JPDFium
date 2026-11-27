@@ -95,6 +95,25 @@ class PdfCompressorDetectionTest {
     }
 
     @Test
+    void conformanceOnlyInfoResolvesPartFromCompressedXmp() throws Exception {
+        byte[] pdf = pdfWithMetadata(
+                "<x:xmpmeta><rdf:Description pdfaid:part='1' pdfaid:conformance='B'/></x:xmpmeta>",
+                "/FlateDecode", true);
+        pdf = withRawInfoTitle(pdf, "pdfaid:conformance='B'");
+        assertEquals(1, PdfCompressor.pdfaPart(pdf),
+                "a raw conformance claim must not hide a compressed part-1 XMP");
+    }
+
+    private static byte[] withRawInfoTitle(byte[] pdf, String title) {
+        String text = new String(pdf, StandardCharsets.ISO_8859_1);
+        int eof = text.lastIndexOf("%%EOF");
+        return (text.substring(0, eof)
+                        + "6 0 obj\n<< /Title (" + title + ") >>\nendobj\n"
+                        + text.substring(eof))
+                .getBytes(StandardCharsets.ISO_8859_1);
+    }
+
+    @Test
     void unsupportedMetadataFilterIsNotAClaim() throws Exception {
         byte[] pdf = pdfWithMetadata("ENCODED", "/DCTDecode", false);
         assertEquals(-1, PdfCompressor.pdfaPart(pdf));
