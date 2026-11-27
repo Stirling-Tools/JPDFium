@@ -150,6 +150,8 @@ static void markRedactionIncomplete(PageWrapper* pw, const std::vector<TextMatch
     markRedactionIncomplete(pw, areas);
 }
 
+void markRedactionCover(FPDF_PAGEOBJECT cover) { FPDFPageObj_AddMark(cover, "Artifact"); }
+
 // Paints the cover over a redacted area in `argb` (nothing when fully
 // transparent): over each quad where the area has them, so a cover on rotated
 // text stops at the word as the redaction did, else over its rect.
@@ -179,6 +181,7 @@ static void paintCover(FPDF_PAGE page, const RedactArea& area, uint32_t argb) {
         if (!shape) continue;
         FPDFPageObj_SetFillColor(shape, red, grn, blu, alf);
         FPDFPath_SetDrawMode(shape, FPDF_FILLMODE_ALTERNATE, 0);
+        markRedactionCover(shape);
         FPDFPage_InsertObject(page, shape);
     }
 }

@@ -146,6 +146,9 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Fixed
 
+- Redaction cover boxes are written inside `/Artifact` marked content, so
+  redacting a tagged PDF no longer leaves untagged content that fails PDF/UA.
+
 - The bundled `JPDFiumCompactCmyk.icc` fallback is now generated only from the
   CC0 `CGATS001Compat-v2-micro.icc` measurements. Its B2A table inverts the same
   CMYK -> Lab data with a strong black-generation preference and a 245% total

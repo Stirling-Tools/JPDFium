@@ -2071,6 +2071,7 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
             if (!rect) continue;
             FPDFPageObj_SetFillColor(rect, red, grn, blu, alf);
             FPDFPath_SetDrawMode(rect, FPDF_FILLMODE_ALTERNATE, 0);
+            markRedactionCover(rect);
             FPDFPage_InsertObject(page, rect);
             if (paintedCovers) paintedCovers->push_back(rect);
         }

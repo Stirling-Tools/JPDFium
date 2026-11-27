@@ -205,6 +205,7 @@ void alignMatchesToShapedClusters(FPDF_TEXTPAGE tp, std::vector<TextMatch>& matc
 // Sets the quad of each match on text that is not upright, for its REDACT mark's
 // /QuadPoints. Must run while `tp` still describes the page the matches came from.
 void orientMatchQuads(FPDF_TEXTPAGE tp, std::vector<TextMatch>& matches);
+void markRedactionCover(FPDF_PAGEOBJECT cover);
 bool auditNoSurvivorsInRegion(FPDF_PAGE page, const std::vector<FS_RECTF>& regions,
                               const std::vector<FPDF_PAGEOBJECT>& exclude);
 void deletePatternCache(void* p);
