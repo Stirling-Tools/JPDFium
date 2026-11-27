@@ -1,6 +1,10 @@
 package stirling.software.jpdfium.doc;
 
 import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.cos.COSArray;
+import org.apache.pdfbox.cos.COSDictionary;
+import org.apache.pdfbox.cos.COSName;
+import org.apache.pdfbox.cos.COSObject;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
@@ -57,6 +61,32 @@ class PdfCompressorTest {
             pdf.save(src.toFile());
         }
         return src;
+    }
+
+
+    /** Full embedded program relabelled as a producer subset, so it has removable glyphs. */
+    private static Path taggedFullFontPdf(Path temp) throws Exception {
+        Path tagged = temp.resolve("tagged-full-font.pdf");
+        try (PDDocument pdf = Loader.loadPDF(fullFontPdf(temp).toFile())) {
+            for (COSObject object : pdf.getDocument().getObjectsByType(COSName.FONT)) {
+                if (!(object.getObject() instanceof COSDictionary font)) continue;
+                COSDictionary target = font;
+                if (font.getDictionaryObject(COSName.DESCENDANT_FONTS) instanceof COSArray kids
+                        && kids.size() > 0
+                        && kids.getObject(0) instanceof COSDictionary kid) {
+                    target = kid;
+                }
+                COSName base = target.getCOSName(COSName.BASE_FONT);
+                if (base == null || base.getName().startsWith("ABCDEF+")) continue;
+                COSName taggedName = COSName.getPDFName("ABCDEF+" + base.getName());
+                target.setItem(COSName.BASE_FONT, taggedName);
+                font.setItem(COSName.BASE_FONT, taggedName);
+                COSDictionary descriptor = target.getCOSDictionary(COSName.FONT_DESC);
+                if (descriptor != null) descriptor.setItem(COSName.FONT_NAME, taggedName);
+            }
+            pdf.save(tagged.toFile());
+        }
+        return tagged;
     }
 
     private static BufferedImage render(byte[] pdf, int pageIndex) throws Exception {
@@ -217,6 +247,40 @@ class PdfCompressorTest {
                     doc, CompressOptions.builder().preset(CompressPreset.WEB).subsetFonts(false).build());
             assertFalse(out.result().actions().stream().anyMatch(a -> a.contains("Subsetted")),
                     "subsetFonts(false) must disable the subsetting pass");
+        }
+    }
+
+    @Test
+    void taggedFontSubsettingIsStrictlyOptIn(@TempDir Path temp) throws Exception {
+        assumeTrue(QpdfLib.isSubsetFontsSupported(), "native font subsetting unavailable");
+        assertFalse(CompressOptions.builder().build().reSubsetTaggedFonts(),
+                "tagged font re-subsetting must default to false");
+        Path src = taggedFullFontPdf(temp);
+        long fullSize = Files.size(src);
+        BufferedImage before = render(Files.readAllBytes(src), 0);
+
+        try (PdfDocument doc = PdfDocument.open(src)) {
+            PdfCompressor.CompressResultWithBytes out = PdfCompressor.compress(
+                    doc, CompressOptions.builder().preset(CompressPreset.WEB).subsetFonts(true).build());
+            assertFalse(out.result().actions().stream().anyMatch(a -> a.contains("Subsetted")),
+                    "a tagged font must not be re-subsetted by default");
+        }
+
+        try (PdfDocument doc = PdfDocument.open(src)) {
+            PdfCompressor.CompressResultWithBytes out = PdfCompressor.compress(
+                    doc, CompressOptions.builder().preset(CompressPreset.WEB)
+                            .subsetFonts(true).reSubsetTaggedFonts(true).build());
+            assertTrue(out.result().actions().contains("Subsetted 1 embedded font(s)"),
+                    "opt-in must re-subset the tagged full program, actions=" + out.result().actions());
+            assertTrue(out.bytes().length < fullSize / 2,
+                    "re-subsetting must shrink the full program: " + out.bytes().length
+                            + " vs " + fullSize);
+            try (PDDocument reopened = Loader.loadPDF(out.bytes())) {
+                assertEquals("Hello World", new PDFTextStripper().getText(reopened).strip(),
+                        "re-subset font must keep the original text");
+            }
+            assertEquals(0, differingPixels(before, render(out.bytes(), 0)),
+                    "re-subset font must render identically");
         }
     }
 }
