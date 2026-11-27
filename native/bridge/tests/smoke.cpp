@@ -302,6 +302,112 @@ static void runFontEncodingChecks() {
     CHECK(rehyeh.size() == 4 && rehyeh[0] == 0x631 && rehyeh[1] == 0xFEF3 && rehyeh[2] == 0xFE8E &&
               rehyeh[3] == 0x644,
           "AGL rehyehaleflamarabic sequence");
+
+    // Targeted assertions for PDF-specific encoding exceptions:
+    // 1. StandardEncoding apostrophe (0x27) and grave (0x60) mappings
+    CHECK(baseEncodingUnicode(BaseEncoding::Standard, 0x27) == 0x2019, "Standard 0x27 quoteright");
+    CHECK(baseEncodingUnicode(BaseEncoding::Standard, 0x60) == 0x2018, "Standard 0x60 quoteleft");
+    CHECK(baseEncodingUnicode(BaseEncoding::Standard, 0x20) == 0x0020, "Standard 0x20 space");
+    CHECK(baseEncodingUnicode(BaseEncoding::Standard, 0xA4) == 0x2044, "Standard 0xA4 fraction");
+    CHECK(baseEncodingUnicode(BaseEncoding::Standard, 0xA8) == 0x00A4, "Standard 0xA8 currency");
+    CHECK(baseEncodingUnicode(BaseEncoding::Standard, 0xAE) == 0xFB01, "Standard 0xAE fi ligature");
+    CHECK(baseEncodingUnicode(BaseEncoding::Standard, 0xAF) == 0xFB02, "Standard 0xAF fl ligature");
+    CHECK(baseEncodingUnicode(BaseEncoding::Standard, 0xD0) == 0x2014, "Standard 0xD0 emdash");
+    CHECK(baseEncodingUnicode(BaseEncoding::Standard, 0x80) == kUnmapped, "Standard 0x80 unmapped");
+    CHECK(baseEncodingUnicode(BaseEncoding::Standard, 0xFF) == kUnmapped, "Standard 0xFF unmapped");
+
+    // 2. WinAnsi bullet substitutions (ISO 32000-1 Annex D.2 Notes 3-5)
+    CHECK(baseEncodingUnicode(BaseEncoding::WinAnsi, 0x7F) == 0x2022, "WinAnsi 0x7F bullet");
+    CHECK(baseEncodingUnicode(BaseEncoding::WinAnsi, 0x80) == 0x20AC, "WinAnsi 0x80 Euro");
+    CHECK(baseEncodingUnicode(BaseEncoding::WinAnsi, 0x81) == 0x2022, "WinAnsi 0x81 bullet");
+    CHECK(baseEncodingUnicode(BaseEncoding::WinAnsi, 0x8D) == 0x2022, "WinAnsi 0x8D bullet");
+    CHECK(baseEncodingUnicode(BaseEncoding::WinAnsi, 0x8F) == 0x2022, "WinAnsi 0x8F bullet");
+    CHECK(baseEncodingUnicode(BaseEncoding::WinAnsi, 0x90) == 0x2022, "WinAnsi 0x90 bullet");
+    CHECK(baseEncodingUnicode(BaseEncoding::WinAnsi, 0x95) == 0x2022, "WinAnsi 0x95 bullet");
+    CHECK(baseEncodingUnicode(BaseEncoding::WinAnsi, 0x9D) == 0x2022, "WinAnsi 0x9D bullet");
+    CHECK(baseEncodingUnicode(BaseEncoding::WinAnsi, 0x99) == 0x2122, "WinAnsi 0x99 trademark");
+
+    // 3. WinAnsi space (0xA0) and hyphen (0xAD) aliases
+    CHECK(baseEncodingUnicode(BaseEncoding::WinAnsi, 0xA0) == 0x0020, "WinAnsi 0xA0 space alias");
+    CHECK(baseEncodingUnicode(BaseEncoding::WinAnsi, 0xAD) == 0x002D, "WinAnsi 0xAD hyphen alias");
+    CHECK(baseEncodingUnicode(BaseEncoding::WinAnsi, 0xA1) == 0x00A1, "WinAnsi 0xA1 exclamdown");
+    CHECK(baseEncodingUnicode(BaseEncoding::WinAnsi, 0xFF) == 0x00FF, "WinAnsi 0xFF ydieresis");
+
+    // 4. MacRoman currency (0xDB) vs Euro: must be currency U+00A4 per PDF Annex D.4
+    CHECK(baseEncodingUnicode(BaseEncoding::MacRoman, 0xDB) == 0x00A4,
+          "MacRoman 0xDB currency (not euro)");
+    CHECK(baseEncodingUnicode(BaseEncoding::MacRoman, 0xA4) == 0x00A7, "MacRoman 0xA4 section");
+    CHECK(baseEncodingUnicode(BaseEncoding::MacRoman, 0x80) == 0x00C4, "MacRoman 0x80 Adieresis");
+    CHECK(baseEncodingUnicode(BaseEncoding::MacRoman, 0xCA) == 0x0020, "MacRoman 0xCA space");
+
+    // 5. Exhaustive check of all 256 byte values for all three encodings:
+    for (int code = 0; code < 256; ++code) {
+        // Out-of-printable control codes (0x00..0x1F) must always be unmapped (0).
+        if (code < 0x20) {
+            CHECK(baseEncodingUnicode(BaseEncoding::Standard, code) == kUnmapped,
+                  "Standard control code");
+            CHECK(baseEncodingUnicode(BaseEncoding::WinAnsi, code) == kUnmapped,
+                  "WinAnsi control code");
+            CHECK(baseEncodingUnicode(BaseEncoding::MacRoman, code) == kUnmapped,
+                  "MacRoman control code");
+            continue;
+        }
+
+        // ASCII range 0x20..0x7E:
+        if (code < 0x7F) {
+            uint32_t win = baseEncodingUnicode(BaseEncoding::WinAnsi, code);
+            uint32_t mac = baseEncodingUnicode(BaseEncoding::MacRoman, code);
+            uint32_t std_val = baseEncodingUnicode(BaseEncoding::Standard, code);
+            CHECK(win == static_cast<uint32_t>(code), "WinAnsi ASCII identity");
+            CHECK(mac == static_cast<uint32_t>(code), "MacRoman ASCII identity");
+            if (code == 0x27) {
+                CHECK(std_val == 0x2019, "Standard 0x27");
+            } else if (code == 0x60) {
+                CHECK(std_val == 0x2018, "Standard 0x60");
+            } else {
+                CHECK(std_val == static_cast<uint32_t>(code), "Standard ASCII identity");
+            }
+            continue;
+        }
+
+        // DEL (0x7F):
+        if (code == 0x7F) {
+            CHECK(baseEncodingUnicode(BaseEncoding::WinAnsi, code) == 0x2022, "WinAnsi 0x7F");
+            CHECK(baseEncodingUnicode(BaseEncoding::Standard, code) == kUnmapped, "Standard 0x7F");
+            CHECK(baseEncodingUnicode(BaseEncoding::MacRoman, code) == kUnmapped, "MacRoman 0x7F");
+            continue;
+        }
+
+        // High bytes 0x80..0xFF:
+        uint32_t win = baseEncodingUnicode(BaseEncoding::WinAnsi, code);
+        uint32_t mac = baseEncodingUnicode(BaseEncoding::MacRoman, code);
+        uint32_t std_val = baseEncodingUnicode(BaseEncoding::Standard, code);
+
+        // WinAnsi high bytes:
+        if (code >= 0x80 && code <= 0x9F) {
+            CHECK(win == kWinAnsiHigh[code - 0x80], "WinAnsi high table match");
+            CHECK(std_val == kUnmapped, "Standard 0x80..0x9F must be unmapped");
+        } else if (code == 0xA0) {
+            CHECK(win == 0x0020, "WinAnsi 0xA0 space");
+        } else if (code == 0xAD) {
+            CHECK(win == 0x002D, "WinAnsi 0xAD hyphen");
+        } else {
+            CHECK(win == static_cast<uint32_t>(code), "WinAnsi 0xA1..0xFF identity");
+        }
+
+        // MacRoman high bytes:
+        CHECK(mac == kMacRomanHigh[code - 0x80], "MacRoman high table match");
+
+        // StandardEncoding high bytes:
+        if (code >= 0xA0) {
+            CHECK(std_val == kStandardHigh[code - 0xA0], "Standard high table match");
+        }
+    }
+
+    // Out-of-bounds guards:
+    CHECK(baseEncodingUnicode(BaseEncoding::Standard, -1) == kUnmapped, "negative code");
+    CHECK(baseEncodingUnicode(BaseEncoding::WinAnsi, 256) == kUnmapped, "code 256");
+    CHECK(baseEncodingUnicode(BaseEncoding::MacRoman, 1000) == kUnmapped, "code 1000");
 }
 
 }  // namespace
