@@ -2847,9 +2847,53 @@ bool sameFont(QPDFObjectHandle const& a, QPDFObjectHandle const& b) {
     }
 }
 
-enum class CidEncoding { TwoByte, SingleByte, Rksj, RksjProp, KscEuc, GbEuc };
+enum class CidEncoding {
+    TwoByte,
+    SingleByte,
+    Rksj,
+    RksjProp,
+    RksjVert,
+    RksjPropVert,
+    KscEuc,
+    KscEucVert,
+    GbEuc,
+    GbEucVert
+};
 
-bool japan1CidForCode(uint16_t code, uint32_t& cid, bool proportional = false) {
+constexpr bool isRksjCidEncoding(CidEncoding enc) {
+    return enc == CidEncoding::Rksj || enc == CidEncoding::RksjProp ||
+           enc == CidEncoding::RksjVert || enc == CidEncoding::RksjPropVert;
+}
+
+constexpr bool isRksjPropCidEncoding(CidEncoding enc) {
+    return enc == CidEncoding::RksjProp || enc == CidEncoding::RksjPropVert;
+}
+
+constexpr bool isKscEucCidEncoding(CidEncoding enc) {
+    return enc == CidEncoding::KscEuc || enc == CidEncoding::KscEucVert;
+}
+
+constexpr bool isGbEucCidEncoding(CidEncoding enc) {
+    return enc == CidEncoding::GbEuc || enc == CidEncoding::GbEucVert;
+}
+
+constexpr bool isVerticalCidEncoding(CidEncoding enc) {
+    return enc == CidEncoding::RksjVert || enc == CidEncoding::RksjPropVert ||
+           enc == CidEncoding::KscEucVert || enc == CidEncoding::GbEucVert;
+}
+
+template <typename Range, size_t N>
+bool lookupCMapRange(Range const (&ranges)[N], uint16_t code, uint32_t& out) {
+    auto it = std::lower_bound(std::begin(ranges), std::end(ranges), code,
+                               [](Range const& range, uint16_t value) { return range.hi < value; });
+    if (it == std::end(ranges) || code < it->lo) return false;
+    out = it->cid + (code - it->lo);
+    return true;
+}
+
+bool japan1CidForCode(uint16_t code, uint32_t& cid, bool proportional = false,
+                      bool vertical = false) {
+    if (vertical && lookupCMapRange(kJapan1VertCodeRanges, code, cid)) return true;
     // Codes in the printable ASCII block map linearly; skip the table search.
     if (proportional && code >= 0x0020 && code <= 0x007E) {
         cid = 1 + (code - 0x0020);
@@ -2892,7 +2936,8 @@ bool japan1UnicodeForCid(uint32_t cid, uint32_t& unicode) {
     return true;
 }
 
-bool korea1CidForCode(uint16_t code, uint32_t& cid) {
+bool korea1CidForCode(uint16_t code, uint32_t& cid, bool vertical = false) {
+    if (vertical && lookupCMapRange(kKorea1VertCodeRanges, code, cid)) return true;
     if (code >= 0x0020 && code <= 0x007E) {
         cid = 8094 + (code - 0x0020);
         return true;
@@ -2930,7 +2975,8 @@ bool korea1UnicodeForCid(uint32_t cid, uint32_t& unicode) {
     return true;
 }
 
-bool gb1CidForCode(uint16_t code, uint32_t& cid) {
+bool gb1CidForCode(uint16_t code, uint32_t& cid, bool vertical = false) {
+    if (vertical && lookupCMapRange(kGb1VertCodeRanges, code, cid)) return true;
     if (code == 0x0020) {
         cid = 7716;
         return true;
@@ -2981,8 +3027,9 @@ void collectStringCids(std::string_view bytes, std::set<uint32_t>& cids, std::se
         }
         return;
     }
-    if (encoding == CidEncoding::Rksj || encoding == CidEncoding::RksjProp) {
-        bool proportional = encoding == CidEncoding::RksjProp;
+    if (isRksjCidEncoding(encoding)) {
+        bool proportional = isRksjPropCidEncoding(encoding);
+        bool vertical = isVerticalCidEncoding(encoding);
         for (size_t i = 0; i < bytes.size();) {
             unsigned char lead = static_cast<unsigned char>(bytes[i]);
             uint16_t code = lead;
@@ -2998,7 +3045,7 @@ void collectStringCids(std::string_view bytes, std::set<uint32_t>& cids, std::se
                 ++i;
             }
             uint32_t cid = 0;
-            if (!japan1CidForCode(code, cid, proportional)) {
+            if (!japan1CidForCode(code, cid, proportional, vertical)) {
                 complete = false;
                 return;
             }
@@ -3007,7 +3054,9 @@ void collectStringCids(std::string_view bytes, std::set<uint32_t>& cids, std::se
         }
         return;
     }
-    if (encoding == CidEncoding::KscEuc || encoding == CidEncoding::GbEuc) {
+    if (isKscEucCidEncoding(encoding) || isGbEucCidEncoding(encoding)) {
+        bool ksc = isKscEucCidEncoding(encoding);
+        bool vertical = isVerticalCidEncoding(encoding);
         for (size_t i = 0; i < bytes.size();) {
             unsigned char lead = static_cast<unsigned char>(bytes[i]);
             uint16_t code = lead;
@@ -3023,8 +3072,8 @@ void collectStringCids(std::string_view bytes, std::set<uint32_t>& cids, std::se
                 ++i;
             }
             uint32_t cid = 0;
-            bool ok = encoding == CidEncoding::KscEuc ? korea1CidForCode(code, cid)
-                                                      : gb1CidForCode(code, cid);
+            bool ok =
+                ksc ? korea1CidForCode(code, cid, vertical) : gb1CidForCode(code, cid, vertical);
             if (!ok) {
                 complete = false;
                 return;
@@ -4496,50 +4545,115 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
         };
 
         if (stripSignatures) {
+            constexpr size_t kMaxFieldVisit = 4096;
+            constexpr int kMaxFieldDepth = 256;
+            auto isSigDict = [&](QPDFObjectHandle const& d) {
+                if (!d.isDictionary()) return false;
+                auto ft = d.getKey("/FT");
+                auto type = d.getKey("/Type");
+                return hasSignatureValue(d) || (ft.isName() && ft.getName() == "/Sig") ||
+                       (type.isName() && type.getName() == "/Sig");
+            };
+            auto collectFieldSubtree = [&](QPDFObjectHandle rootNode, std::set<QPDFObjGen>& out) {
+                struct StackItem {
+                    QPDFObjectHandle obj;
+                    int depth;
+                };
+                std::vector<StackItem> stack;
+                std::set<QPDFObjGen> visited;
+                stack.push_back({rootNode, 0});
+                size_t steps = 0;
+                while (!stack.empty() && steps < kMaxFieldVisit) {
+                    auto [cur, depth] = stack.back();
+                    stack.pop_back();
+                    ++steps;
+                    if (cur.isIndirect()) {
+                        out.insert(cur.getObjGen());
+                        if (!visited.insert(cur.getObjGen()).second) continue;
+                    }
+                    if (depth >= kMaxFieldDepth || !cur.isDictionary()) continue;
+                    auto kids = cur.getKey("/Kids");
+                    if (!kids.isArray()) continue;
+                    for (auto& kid : kids.getArrayAsVector()) {
+                        if (kid.isIndirect() && visited.count(kid.getObjGen())) continue;
+                        stack.push_back({kid, depth + 1});
+                    }
+                }
+            };
+
             std::set<QPDFObjGen> sigObjects;
+            std::vector<QPDFObjectHandle> initialSigs;
             for (auto& object : qpdf->getAllObjects()) {
                 auto dict = object.isStream() ? object.getDict() : object;
-                if (!dict.isDictionary()) continue;
-                auto ft = dict.getKey("/FT");
-                auto type = dict.getKey("/Type");
-                if (hasSignatureValue(dict) || (ft.isName() && ft.getName() == "/Sig") ||
-                    (type.isName() && type.getName() == "/Sig")) {
-                    sigObjects.insert(object.getObjGen());
-                    auto v = dict.getKey("/V");
-                    if (v.isIndirect()) sigObjects.insert(v.getObjGen());
-                }
+                if (!isSigDict(dict)) continue;
+                sigObjects.insert(object.getObjGen());
+                auto v = dict.getKey("/V");
+                if (v.isIndirect()) sigObjects.insert(v.getObjGen());
+                initialSigs.push_back(object);
             }
+            for (auto& sigObj : initialSigs) collectFieldSubtree(sigObj, sigObjects);
+
+            auto isSignatureOrChild = [&](QPDFObjectHandle obj) {
+                if (obj.isIndirect() && sigObjects.count(obj.getObjGen())) return true;
+                if (isSigDict(obj)) return true;
+                std::set<QPDFObjGen> seenParents;
+                QPDFObjectHandle cur = obj;
+                for (int hop = 0; hop < 32 && cur.isDictionary(); ++hop) {
+                    QPDFObjectHandle parent = cur.getKey("/Parent");
+                    if (!parent.isDictionary()) break;
+                    if (parent.isIndirect()) {
+                        auto og = parent.getObjGen();
+                        if (!seenParents.insert(og).second) break;
+                        if (sigObjects.count(og)) return true;
+                    }
+                    if (isSigDict(parent)) return true;
+                    cur = parent;
+                }
+                return false;
+            };
 
             auto root = qpdf->getRoot();
             if (root.hasKey("/AcroForm")) {
                 auto acroForm = root.getKey("/AcroForm");
                 if (acroForm.isDictionary()) {
-                    std::function<void(QPDFObjectHandle)> cleanFields = [&](QPDFObjectHandle node) {
+                    struct FieldFrame {
+                        QPDFObjectHandle node;
+                        int depth;
+                    };
+                    std::vector<FieldFrame> worklist;
+                    std::set<QPDFObjGen> visitedNodes;
+                    worklist.push_back({acroForm, 0});
+                    size_t visitedCount = 0;
+                    while (!worklist.empty() && visitedCount < kMaxFieldVisit) {
+                        auto [node, depth] = worklist.back();
+                        worklist.pop_back();
+                        ++visitedCount;
+                        if (!node.isDictionary()) continue;
+                        if (node.isIndirect() && !visitedNodes.insert(node.getObjGen()).second)
+                            continue;
+                        if (depth >= kMaxFieldDepth) continue;
                         for (char const* key : {"/Fields", "/Kids"}) {
-                            if (node.hasKey(key) && node.getKey(key).isArray()) {
-                                auto arr = node.getKey(key);
-                                std::vector<QPDFObjectHandle> kept;
-                                for (auto& item : arr.getArrayAsVector()) {
-                                    if (item.isIndirect() && sigObjects.count(item.getObjGen()))
-                                        continue;
-                                    if (item.isDictionary()) {
-                                        auto ft = item.getKey("/FT");
-                                        auto type = item.getKey("/Type");
-                                        if (hasSignatureValue(item) ||
-                                            (ft.isName() && ft.getName() == "/Sig") ||
-                                            (type.isName() && type.getName() == "/Sig"))
-                                            continue;
-                                        cleanFields(item);
-                                    }
-                                    kept.push_back(item);
+                            if (!node.hasKey(key) || !node.getKey(key).isArray()) continue;
+                            auto arr = node.getKey(key);
+                            auto items = arr.getArrayAsVector();
+                            std::vector<QPDFObjectHandle> kept;
+                            kept.reserve(items.size());
+                            for (auto& item : items) {
+                                if (isSignatureOrChild(item)) {
+                                    collectFieldSubtree(item, sigObjects);
+                                    continue;
                                 }
-                                if (kept.size() != arr.getArrayAsVector().size()) {
-                                    node.replaceKey(key, QPDFObjectHandle::newArray(kept));
+                                if (item.isDictionary() &&
+                                    (!item.isIndirect() || !visitedNodes.count(item.getObjGen()))) {
+                                    worklist.push_back({item, depth + 1});
                                 }
+                                kept.push_back(item);
+                            }
+                            if (kept.size() != items.size()) {
+                                node.replaceKey(key, QPDFObjectHandle::newArray(kept));
                             }
                         }
-                    };
-                    cleanFields(acroForm);
+                    }
                     if (acroForm.hasKey("/SigFlags")) acroForm.removeKey("/SigFlags");
                 }
             }
@@ -4548,20 +4662,14 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
             for (auto& page : pages) {
                 if (page.hasKey("/Annots") && page.getKey("/Annots").isArray()) {
                     auto annots = page.getKey("/Annots");
+                    auto items = annots.getArrayAsVector();
                     std::vector<QPDFObjectHandle> kept;
-                    for (auto& annot : annots.getArrayAsVector()) {
-                        if (annot.isIndirect() && sigObjects.count(annot.getObjGen())) continue;
-                        if (annot.isDictionary()) {
-                            auto ft = annot.getKey("/FT");
-                            auto type = annot.getKey("/Type");
-                            if (hasSignatureValue(annot) ||
-                                (ft.isName() && ft.getName() == "/Sig") ||
-                                (type.isName() && type.getName() == "/Sig"))
-                                continue;
-                        }
+                    kept.reserve(items.size());
+                    for (auto& annot : items) {
+                        if (isSignatureOrChild(annot)) continue;
                         kept.push_back(annot);
                     }
-                    if (kept.size() != annots.getArrayAsVector().size()) {
+                    if (kept.size() != items.size()) {
                         page.replaceKey("/Annots", QPDFObjectHandle::newArray(kept));
                     }
                 }
@@ -4699,6 +4807,11 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
             bool identityEncoding = font.getKey("/Encoding").isNameAndEquals("/Identity-H") ||
                                     font.getKey("/Encoding").isNameAndEquals("/Identity-V");
             QPDFObjectHandle cjkEncoding = font.getKey("/Encoding");
+            bool cjkVertical = cid && !hasProgram && onlyMissing &&
+                               (cjkEncoding.isNameAndEquals("/90ms-RKSJ-V") ||
+                                cjkEncoding.isNameAndEquals("/90msp-RKSJ-V") ||
+                                cjkEncoding.isNameAndEquals("/KSC-EUC-V") ||
+                                cjkEncoding.isNameAndEquals("/GB-EUC-V"));
             bool japan1Proportional = cid && !hasProgram && onlyMissing &&
                                       (cjkEncoding.isNameAndEquals("/90msp-RKSJ-H") ||
                                        cjkEncoding.isNameAndEquals("/90msp-RKSJ-V"));
@@ -4721,10 +4834,12 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
             if (cid && !hasProgram && onlyMissing) {
                 if (!identityCidMap) continue;
                 if (predefinedCjk) {
-                    CidEncoding enc = japan1Proportional ? CidEncoding::RksjProp
-                                      : japan1Rksj       ? CidEncoding::Rksj
-                                      : korea1Ksc        ? CidEncoding::KscEuc
-                                                         : CidEncoding::GbEuc;
+                    CidEncoding enc =
+                        japan1Proportional
+                            ? (cjkVertical ? CidEncoding::RksjPropVert : CidEncoding::RksjProp)
+                        : japan1Rksj ? (cjkVertical ? CidEncoding::RksjVert : CidEncoding::Rksj)
+                        : korea1Ksc  ? (cjkVertical ? CidEncoding::KscEucVert : CidEncoding::KscEuc)
+                                     : (cjkVertical ? CidEncoding::GbEucVert : CidEncoding::GbEuc);
                     auto scan = usedCidsForFont(*qpdf, font, enc);
                     usedCids = scan.cids;
                     if (!scan.complete || usedCids.empty()) continue;
@@ -4744,9 +4859,11 @@ EmbedFontsResult embedFonts(std::function<void(QPDF&)> const& load,
                         uint32_t cidFromCode = 0;
                         bool found =
                             japan1Rksj  ? japan1CidForCode(static_cast<uint16_t>(code), cidFromCode,
-                                                           japan1Proportional)
-                            : korea1Ksc ? korea1CidForCode(static_cast<uint16_t>(code), cidFromCode)
-                                        : gb1CidForCode(static_cast<uint16_t>(code), cidFromCode);
+                                                           japan1Proportional, cjkVertical)
+                            : korea1Ksc ? korea1CidForCode(static_cast<uint16_t>(code), cidFromCode,
+                                                           cjkVertical)
+                                        : gb1CidForCode(static_cast<uint16_t>(code), cidFromCode,
+                                                        cjkVertical);
                         if (!found) continue;
                         if (auto it = cidUnicode.find(cidFromCode); it != cidUnicode.end())
                             codeUnicode[code] = it->second;
