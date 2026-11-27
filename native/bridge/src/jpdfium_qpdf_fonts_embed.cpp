@@ -175,9 +175,12 @@ bool cidGlyphOrderMatches(FT_Face face, std::map<uint32_t, uint32_t> const& unic
     if (unicodeByCid.empty() || FT_Select_Charmap(face, FT_ENCODING_UNICODE)) return false;
     for (auto const& [cid, unicode] : unicodeByCid) {
         uint32_t scalar = jpdfium::font::decodeUnicodeScalar(unicode);
-        // Non-renderable scalars are pinned to .notdef below, so they impose no
-        // glyph-order constraint on the donor.
-        if (nonRenderableScalar(scalar)) continue;
+        // Non-renderable scalars are pinned to GID 0. Identity is only valid
+        // when the CID itself is 0; a nonzero CID selecting GID 0 needs a map.
+        if (nonRenderableScalar(scalar)) {
+            if (cid != 0) return false;
+            continue;
+        }
         if (FT_Get_Char_Index(face, scalar) != cid) return false;
     }
     return true;

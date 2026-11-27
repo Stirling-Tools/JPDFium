@@ -1100,6 +1100,25 @@ static bool isSfntBytes(std::string_view bytes) {
            magic == 0x4F54544FU /* 'OTTO' */ || magic == 0x74646366U /* 'ttcf' */;
 }
 
+// A replacement font stream is a new stream dictionary. Carrying the descriptor
+// key forward is not enough: /FontFile2 needs a /Length1 for the rewritten
+// decoded program, and /FontFile3 needs its /Subtype (/OpenType or /Type1C) so
+// readers know which format the stream contains.
+static void replaceFontProgramStream(QPDF& pdf, QPDFObjectHandle& descriptor,
+                                     char const* programKey, std::string const& updated,
+                                     QPDFObjectHandle const& oldStream) {
+    QPDFObjectHandle stream = QPDFObjectHandle::newStream(&pdf, updated);
+    QPDFObjectHandle dict = stream.getDict();
+    if (std::string_view(programKey) == "/FontFile2") {
+        dict.replaceKey("/Length1",
+                        QPDFObjectHandle::newInteger(static_cast<long long>(updated.size())));
+    } else if (std::string_view(programKey) == "/FontFile3" && oldStream.isStream()) {
+        QPDFObjectHandle subtype = oldStream.getDict().getKey("/Subtype");
+        if (subtype.isName()) dict.replaceKey("/Subtype", subtype);
+    }
+    descriptor.replaceKey(programKey, stream);
+}
+
 static void repairSimpleTrueTypeCmap(QPDF& pdf, QPDFObjectHandle& font,
                                      QPDFObjectHandle& descriptor, FT_Library ftLib,
                                      std::shared_ptr<Buffer> const& data, FT_Face face,
@@ -1155,7 +1174,8 @@ static void repairSimpleTrueTypeCmap(QPDF& pdf, QPDFObjectHandle& font,
         if (codeToGid.empty()) return;
         std::string updated = bytes;
         if (!ensureSfntCmapSubtable(updated, 3, 0, codeToGid)) return;
-        descriptor.replaceKey(programKey, QPDFObjectHandle::newStream(&pdf, updated));
+        QPDFObjectHandle oldStream = descriptor.getKey(programKey);
+        replaceFontProgramStream(pdf, descriptor, programKey, updated, oldStream);
         state.changed = true;
         return;
     }
@@ -1183,16 +1203,7 @@ static void repairSimpleTrueTypeCmap(QPDF& pdf, QPDFObjectHandle& font,
     std::string updated = bytes;
     if (!ensureSfntCmapSubtable(updated, 3, 1, unicodeByGid)) return;
     QPDFObjectHandle oldStream = descriptor.getKey(programKey);
-    QPDFObjectHandle newStream = QPDFObjectHandle::newStream(&pdf, updated);
-    QPDFObjectHandle newDict = newStream.getDict();
-    if (std::string_view(programKey) == "/FontFile2") {
-        newDict.replaceKey("/Length1",
-                           QPDFObjectHandle::newInteger(static_cast<long long>(updated.size())));
-    } else if (std::string_view(programKey) == "/FontFile3" && oldStream.isStream()) {
-        QPDFObjectHandle subtype = oldStream.getDict().getKey("/Subtype");
-        if (subtype.isName()) newDict.replaceKey("/Subtype", subtype);
-    }
-    descriptor.replaceKey(programKey, newStream);
+    replaceFontProgramStream(pdf, descriptor, programKey, updated, oldStream);
     state.changed = true;
 }
 

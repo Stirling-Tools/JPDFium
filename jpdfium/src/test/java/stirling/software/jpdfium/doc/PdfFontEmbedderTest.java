@@ -3020,6 +3020,19 @@ class PdfFontEmbedderTest {
             assertFalse(PdfFontAuditor.hasNonEmbeddedFonts(doc),
                     "the font must be embedded in the output");
         }
+        try (PDDocument boxed = Loader.loadPDF(result.pdf())) {
+            COSBase mapping = identityCidDescendant(boxed)
+                    .getDictionaryObject(COSName.CID_TO_GID_MAP);
+            assertTrue(mapping instanceof COSStream,
+                    "CID 1 must not use Identity when it selects non-renderable GID 0");
+            byte[] bytes;
+            try (var in = ((COSStream) mapping).createInputStream()) {
+                bytes = in.readAllBytes();
+            }
+            assertTrue(bytes.length >= 4, "CID 1 must have a mapping entry");
+            assertEquals(0, ((bytes[2] & 0xFF) << 8) | (bytes[3] & 0xFF),
+                    "CID 1 must map to GID 0 for the non-renderable control code");
+        }
     }
 
     @Test

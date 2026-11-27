@@ -94,6 +94,21 @@ ASAN_OPTIONS=detect_container_overflow=0 ctest --test-dir native/build-asan
   `PdfFontEmbedderTest.replacesCorruptCidProgramWithVerifiedCidToGidMapping`
   and `corruptCidWithoutToUnicodeStaysUnresolved` (the latter failed before the
   mapping flag was passed).
+- **Font stream metadata after cmap surgery.** Replacing an embedded program
+  creates a new stream dictionary, so carrying the descriptor key forward is
+  not enough. The normalizer now rebuilds `/FontFile2` with `/Length1` equal to
+  the new decoded size and copies `/FontFile3 /Subtype` (`/OpenType` or
+  `/Type1C`); both stream-replacement paths share one helper instead of
+  duplicating the metadata logic. Regression:
+  `FontNormalizerTest.cmapRepairPreservesFontFile2Length1`; removing the helper's
+  metadata writes reproduces `rewritten /FontFile2 must keep /Length1`.
+- **Nonzero CID selecting GID 0.** A CID whose `/ToUnicode` maps to a control or
+  replacement scalar is pinned to GID 0. `cidGlyphOrderMatches` previously
+  skipped those scalars, accepted `/CIDToGIDMap /Identity`, and then kept
+  Identity in the fallback, so CID 1 selected donor GID 1. Identity is now
+  accepted only when the CID itself is 0; otherwise a remap stream is written.
+  Regression: `PdfFontEmbedderTest.controlCodepointsDoNotBlockSubstitution`
+  now asserts CID 1 → GID 0 (failed before the fix with a name-valued map).
 - **ToUnicode codespaces.** Rebuilt CMaps now declare one codespace range for
   every retained source width and emit each code at its full width. A
   resource-limited parse clears its partial entries and leaves the original
@@ -150,7 +165,7 @@ There are **zero** `clang-analyzer-*`, `bugprone-exception-escape`,
 
 ## Verification
 
-- Integration suite: `4913` tests, `0` failures, `0` errors, `314` skipped.
+- Integration suite: `4914` tests, `0` failures, `0` errors, `314` skipped.
 - Release ctest: `6/6` passed.
 - ASan+UBSan ctest: `6/6` passed with
   `ASAN_OPTIONS=detect_container_overflow=0`. Default ASan still reports the

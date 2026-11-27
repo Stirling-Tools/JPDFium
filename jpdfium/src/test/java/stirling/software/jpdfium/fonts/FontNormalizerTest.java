@@ -1627,6 +1627,50 @@ class FontNormalizerTest {
     }
 
     @Test
+    void cmapRepairPreservesFontFile2Length1() throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real native library");
+        byte[] pdf;
+        try (PDDocument doc = Loader.loadPDF(embeddedTrueTypePdf(true, false))) {
+            COSDictionary font = firstFontDictionary(doc);
+            assertNotNull(font);
+            COSDictionary descriptor = font.getCOSDictionary(COSName.FONT_DESC);
+            assertNotNull(descriptor);
+            byte[] program = streamBytes(descriptor, COSName.FONT_FILE2);
+            byte[] cmapFree = withoutCmapSubtables(program);
+            PDStream replacement = new PDStream(doc, new ByteArrayInputStream(cmapFree));
+            replacement.getCOSObject().setInt(COSName.LENGTH1, cmapFree.length);
+            descriptor.setItem(COSName.FONT_FILE2, replacement.getCOSObject());
+            descriptor.setInt(COSName.FLAGS, 32);
+            font.setItem(COSName.ENCODING, COSName.WIN_ANSI_ENCODING);
+
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            doc.save(out);
+            pdf = out.toByteArray();
+        }
+
+        try (PdfDocument doc = PdfDocument.open(pdf)) {
+            FontNormalizer.Result result = FontNormalizer.normalizePage(doc, 0);
+            assertTrue(result.fontsProcessed() > 0, "font must be normalized: " + result);
+
+            byte[] normalized = doc.saveBytes();
+            try (PDDocument loaded = Loader.loadPDF(normalized)) {
+                COSDictionary descriptor = firstFontDictionary(loaded)
+                        .getCOSDictionary(COSName.FONT_DESC);
+                assertNotNull(descriptor);
+                byte[] program = streamBytes(descriptor, COSName.FONT_FILE2);
+                assertTrue(hasCmapSubtable(program, 3, 1),
+                        "non-symbolic cmap surgery must install a (3,1) subtable");
+                COSStream stream =
+                        (COSStream) descriptor.getDictionaryObject(COSName.FONT_FILE2);
+                assertTrue(stream.containsKey(COSName.LENGTH1),
+                        "rewritten /FontFile2 must keep /Length1");
+                assertEquals(program.length, stream.getInt(COSName.LENGTH1),
+                        "/Length1 must describe the rewritten decoded program");
+            }
+        }
+    }
+
+    @Test
     void nonSymbolicDifferencesGetsMicrosoftUnicodeCmap() throws Exception {
         assumeTrue(NativeRuntime.isFull(), "needs real native library");
         byte[] pdf;
@@ -1947,6 +1991,15 @@ class FontNormalizerTest {
                     && (buf.getShort(rec + 2) & 0xFFFF) == encodingId) return true;
         }
         return false;
+    }
+
+    /** Keeps the cmap table record but declares no subtables in its header. */
+    private static byte[] withoutCmapSubtables(byte[] sfnt) {
+        int[] cmapLoc = findSfntTable(sfnt, "cmap");
+        assertNotNull(cmapLoc, "fixture needs a cmap table");
+        byte[] out = sfnt.clone();
+        ByteBuffer.wrap(out).order(ByteOrder.BIG_ENDIAN).putShort(cmapLoc[0] + 2, (short) 0);
+        return out;
     }
 
     /** Rebuilds a cmap table with one (0,3) Format 4 subtable copied from the font. */
