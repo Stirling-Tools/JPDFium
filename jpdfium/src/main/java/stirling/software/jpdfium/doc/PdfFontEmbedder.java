@@ -7,7 +7,9 @@ import java.io.InputStreamReader;
 import java.io.StringReader;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.charset.CharacterCodingException;
 import java.nio.charset.Charset;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
@@ -277,19 +279,22 @@ public final class PdfFontEmbedder {
             if (face != null && !face.embeddable()) face = null;
             if (face == null) {
                 if (index == null) index = indexFor(fontDirs);
-                face = index.get(key);
-                if (face != null && !face.embeddable()) face = null;
+                for (String candidate : nameKeys(name)) {
+                    face = index.get(candidate);
+                    if (face != null && face.embeddable()) break;
+                    face = null;
+                }
             }
             if (face == null && bundled != null) {
-                face = resolve(bundled, key);
+                face = resolveName(bundled, name);
             }
             if (face == null) {
                 if (index == null) index = indexFor(fontDirs);
-                face = resolve(index, key);
+                face = resolveName(index, name);
             }
             if (face == null) {
                 if (index == null) index = indexFor(fontDirs);
-                Face restricted = restricted(index, key);
+                Face restricted = restrictedName(index, name);
                 statuses.add(restricted == null
                         ? new FontStatus(name, "", -1, false, "no matching font")
                         : new FontStatus(name, source(restricted), restricted.fsType(), false,
@@ -336,18 +341,24 @@ public final class PdfFontEmbedder {
      *     predefined CMap whose code-to-glyph mapping cannot be preserved
      */
     public static Result embedMissingStrict(byte[] pdf, Path... fontDirs) throws IOException {
+        if (!QpdfLib.isFontInventorySupported()) {
+            throw new JPDFiumException(
+                    "strict font embedding requires the native font inventory");
+        }
         return embedMissing(pdf, fontDirs).requireAllEmbedded();
     }
 
     /**
      * The native bridge can rewrite {@code /CIDToGIDMap} and {@code /ToUnicode} for
      * Identity-encoded CID fonts and for predefined CJK CMaps (Adobe-Japan1 {@code 90ms-RKSJ-H},
-     * Adobe-Korea1 {@code KSC-EUC-H}, Adobe-GB1 {@code GB-EUC-H}), whose code-to-CID and
+     * {@code 90ms-RKSJ-V}, {@code 90msp-RKSJ-H}, {@code 90msp-RKSJ-V}, Adobe-Korea1 {@code KSC-EUC-H},
+     * {@code KSC-EUC-V}, Adobe-GB1 {@code GB-EUC-H}, {@code GB-EUC-V}), whose code-to-CID and
      * CID-to-Unicode mappings are bundled. Other predefined CMaps or an existing CID-to-GID stream carry an ordering that a substitute program does not
      * share; embedding them would keep the document renderable but change its text.
      */
     private static String substitutionBlocker(PdfFontAuditor.FontResource resource) {
-        if (!resource.hasToUnicode() && !isAscii(resource.baseName())) {
+        boolean supportedCjk = isSupportedCjkPredefinedCMap(resource.encoding());
+        if (!resource.hasToUnicode() && !isAscii(resource.baseName()) && !supportedCjk) {
             // Legacy CJK producers put GBK/Shift-JIS bytes in /BaseFont and rely on the
             // original font's glyph order. A substitute would change both text extraction
             // and the drawn glyphs because there is no /ToUnicode to preserve.
@@ -378,9 +389,7 @@ public final class PdfFontEmbedder {
         }
         boolean identityEncoding = "Identity-H".equals(resource.encoding())
                 || "Identity-V".equals(resource.encoding())
-                || "90ms-RKSJ-H".equals(resource.encoding())
-                || "KSC-EUC-H".equals(resource.encoding())
-                || "GB-EUC-H".equals(resource.encoding());
+                || supportedCjk;
         if (!identityEncoding) {
             return "CID encoding: predefined CMap " + resource.encoding()
                     + " cannot be rewritten without a verified code-to-glyph mapping";
@@ -392,6 +401,17 @@ public final class PdfFontEmbedder {
                     + " carries a glyph order a substitute program does not share";
         }
         return null;
+    }
+
+    private static boolean isSupportedCjkPredefinedCMap(String encoding) {
+        return "90ms-RKSJ-H".equals(encoding)
+                || "90ms-RKSJ-V".equals(encoding)
+                || "90msp-RKSJ-H".equals(encoding)
+                || "90msp-RKSJ-V".equals(encoding)
+                || "KSC-EUC-H".equals(encoding)
+                || "KSC-EUC-V".equals(encoding)
+                || "GB-EUC-H".equals(encoding)
+                || "GB-EUC-V".equals(encoding);
     }
 
     private static boolean isAscii(String value) {
@@ -426,11 +446,11 @@ public final class PdfFontEmbedder {
                         "available");
             }
         }
-        face = resolve(index, key);
+        face = resolveName(index, baseName);
         if (face != null) {
             return new FontStatus(baseName, source(face), face.fsType(), true, "available");
         }
-        Face restricted = restricted(index, key);
+        Face restricted = restrictedName(index, baseName);
         return restricted == null
                 ? new FontStatus(baseName, "", -1, false, "no matching font")
                 : new FontStatus(baseName, source(restricted), restricted.fsType(), false,
@@ -487,7 +507,7 @@ public final class PdfFontEmbedder {
         Map<Face, byte[]> operationPrograms = new HashMap<>();
         for (String name : missing) {
             if (blockers.containsKey(name)) continue;
-            Face face = resolve(index, key(name));
+            Face face = resolveName(index, name);
             if (face == null) continue;
             byte[] data = program(face, operationPrograms);
             if (!embeddableProgram(programFsType(face, data))) continue;
@@ -504,6 +524,43 @@ public final class PdfFontEmbedder {
     /** File-backed variant of {@link #embedMissing(byte[], Path...)}. */
     public static Result embedMissing(Path input, Path... fontDirs) throws IOException {
         return embedMissing(Files.readAllBytes(input), fontDirs);
+    }
+
+    private static Face resolveName(Map<String, Face> index, String name) {
+        for (String candidate : nameKeys(name)) {
+            Face face = resolve(index, candidate);
+            if (face != null) return face;
+        }
+        return null;
+    }
+
+    private static Face restrictedName(Map<String, Face> index, String name) {
+        for (String candidate : nameKeys(name)) {
+            Face face = restricted(index, candidate);
+            if (face != null) return face;
+        }
+        return null;
+    }
+
+    static List<String> nameKeys(String name) {
+        List<String> keys = new ArrayList<>(2);
+        String direct = key(name);
+        if (!direct.isEmpty()) keys.add(direct);
+        boolean latin1 = !name.isEmpty() && name.chars().allMatch(c -> c <= 0xFF);
+        if (latin1) {
+            try {
+                String decoded = StandardCharsets.UTF_8.newDecoder()
+                        .onMalformedInput(CodingErrorAction.REPORT)
+                        .onUnmappableCharacter(CodingErrorAction.REPORT)
+                        .decode(ByteBuffer.wrap(name.getBytes(StandardCharsets.ISO_8859_1)))
+                        .toString();
+                String decodedKey = key(decoded);
+                if (!decodedKey.isEmpty() && !keys.contains(decodedKey)) keys.add(decodedKey);
+            } catch (CharacterCodingException ignored) {
+                // Not a UTF-8 byte sequence after the Latin-1 round trip.
+            }
+        }
+        return keys;
     }
 
     static String key(String name) {
@@ -996,6 +1053,8 @@ public final class PdfFontEmbedder {
             if (subRec + 8 > cmapOffset + cmapLength) break;
             int platformId = buf.getShort(subRec) & 0xFFFF;
             int encodingId = buf.getShort(subRec + 2) & 0xFFFF;
+            int subtableOffset = buf.getInt(subRec + 4);
+            if (subtableOffset < 0 || subtableOffset > cmapLength - 4) continue;
             if (platformId == 3 && encodingId == 0) {
                 return fontData;
             }
@@ -1009,6 +1068,8 @@ public final class PdfFontEmbedder {
             selectedSubtableOffset = cmapOffset + 4;
         }
         if (selectedSubtableOffset + 8 > fontData.length) return fontData;
+        int selectedOffset = buf.getInt(selectedSubtableOffset + 4);
+        if (selectedOffset < 0 || selectedOffset > cmapLength - 4) return fontData;
 
         byte[] modified = fontData.clone();
         ByteBuffer out = ByteBuffer.wrap(modified);
