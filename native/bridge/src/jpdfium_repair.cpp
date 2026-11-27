@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <cerrno>
 #include <cmath>
 #include <cstddef>
@@ -514,6 +515,230 @@ std::shared_ptr<QPDF> loadAndRepairMemory(const uint8_t* input, size_t inputLen,
 
 }  // namespace
 
+// Scan one decompressed content stream for a degenerate clipping path: a
+// "re" whose width or height operand is zero, later applied as the active
+// clip with W/W*. Blank-looking PDFs whose text is present but hidden behind
+// a zero-area clip are a common producer bug; qpdf --qdf exposes them only
+// to patient humans, so inspect reports them mechanically.
+//
+// State machine over PDF content tokens: comments, literal and hex strings
+// are skipped; the four numeric operands preceding each "re" are kept; the
+// current path is "degenerate" while it consists solely of zero-area
+// rectangles. W/W* only flags the page when every subpath so far was
+// zero-area, so a clip built from a real rectangle never trips the warning.
+static bool content_has_zero_area_clip(const char* data, size_t len) {
+    // Path construction state for the subpaths seen since the last paint.
+    bool saw_zero_rect = false;     // a "re" with zero width or height
+    bool saw_area_path = false;     // any "re" with real area, or m/l/c/v/y/h
+    bool clip_requested = false;    // W or W* seen, clip applies at next paint
+    double nums[4] = {0, 0, 0, 0};  // most recent numbers, x y w h for a "re"
+    bool inInlineDict = false;      // between BI and ID
+    bool expectInlineLength = false;
+    size_t inlineLength = 0;
+
+    size_t i = 0;
+    while (i < len) {
+        char c = data[i];
+        if (c == '\0') break;
+        if (std::isspace(static_cast<unsigned char>(c)) || c == '\014') {
+            i++;
+            continue;
+        }
+        // Comment: skip to end of line.
+        if (c == '%') {
+            while (i < len && data[i] != '\n' && data[i] != '\r') i++;
+            continue;
+        }
+        // Literal string: skip with escape and nesting handling.
+        if (c == '(') {
+            int depth = 1;
+            i++;
+            while (i < len && depth > 0) {
+                if (data[i] == '\\') {
+                    i += 2;
+                    continue;
+                }
+                if (data[i] == '(')
+                    depth++;
+                else if (data[i] == ')')
+                    depth--;
+                i++;
+            }
+            continue;
+        }
+        // Hex string: skip to the closing '>'.
+        if (c == '<' && i + 1 < len && data[i + 1] == '<') {
+            // Dictionary start: a delimiter like any other.
+            i += 2;
+            continue;
+        }
+        if (c == '<') {
+            i++;
+            while (i < len && data[i] != '>') i++;
+            if (i < len) i++;
+            continue;
+        }
+        // Structural delimiters that end a token.
+        if (c == '>' || c == '[' || c == ']' || c == '{' || c == '}' || c == ')') {
+            i++;
+            continue;
+        }
+        if (c == '/') {
+            i++;
+            while (i < len && !std::isspace(static_cast<unsigned char>(data[i])) &&
+                   !strchr("()<>[]{}/%", data[i]))
+                i++;
+            continue;
+        }
+        // Read a token: operators, numbers, inline-image bytes.
+        size_t start = i;
+        while (i < len && !std::isspace(static_cast<unsigned char>(data[i])) &&
+               !strchr("()<>[]{}/%", data[i])) {
+            i++;
+        }
+        if (i == start) {
+            i++;
+            continue;
+        }
+        std::string token(data + start, i - start);
+        if (token == "BI") {
+            inInlineDict = true;
+            expectInlineLength = false;
+            inlineLength = 0;
+            nums[0] = nums[1] = nums[2] = nums[3] = 0;
+            continue;
+        }
+        if (inInlineDict) {
+            if (token == "/L") {
+                expectInlineLength = true;
+            } else if (expectInlineLength && token != "ID") {
+                char* lenEnd = nullptr;
+                unsigned long long value = std::strtoull(token.c_str(), &lenEnd, 10);
+                if (lenEnd && *lenEnd == '\0' && lenEnd != token.c_str()) {
+                    inlineLength = static_cast<size_t>(value);
+                }
+                expectInlineLength = false;
+            } else if (token == "ID") {
+                // ID is followed by one whitespace byte, then binary image data
+                // that must never be tokenized as content-stream operators.
+                if (i < len && isPdfWs(data[i])) ++i;
+                if (inlineLength > 0 && inlineLength <= len - i) {
+                    i += inlineLength;
+                } else {
+                    while (i + 1 < len) {
+                        if (data[i] == 'E' && data[i + 1] == 'I' &&
+                            (i == 0 || isPdfWs(data[i - 1])) &&
+                            (i + 2 >= len || isPdfWs(data[i + 2]) || isPdfDelim(data[i + 2]))) {
+                            i += 2;
+                            break;
+                        }
+                        ++i;
+                    }
+                }
+                inInlineDict = false;
+                expectInlineLength = false;
+                inlineLength = 0;
+                nums[0] = nums[1] = nums[2] = nums[3] = 0;
+            }
+            continue;
+        }
+        // Number: slide the last-four-operands window.
+        char* end = nullptr;
+        double value = std::strtod(token.c_str(), &end);
+        if (end && *end == '\0' && end != token.c_str() &&
+            token.find_first_not_of("+-.0123456789") == std::string::npos) {
+            nums[0] = nums[1];
+            nums[1] = nums[2];
+            nums[2] = nums[3];
+            nums[3] = value;
+            continue;
+        }
+        if (token == "re") {
+            // Operands survive in nums[] from the trailing numbers; only the
+            // count is cleared, so re still reads its x y w h.
+            double w = nums[2];
+            double h = nums[3];
+            if (w == 0.0 || h == 0.0)
+                saw_zero_rect = true;
+            else
+                saw_area_path = true;
+        } else if (token == "m" || token == "l" || token == "c" || token == "v" || token == "y" ||
+                   token == "h") {
+            saw_area_path = true;  // unknown area: be conservative
+        } else if (token == "W" || token == "W*") {
+            clip_requested = true;
+        } else if (token == "n" || token == "S" || token == "s" || token == "f" || token == "F" ||
+                   token == "B" || token == "B*" || token == "b" || token == "b*") {
+            // Path painted: the pending clip (if any) becomes active.
+            if (clip_requested && saw_zero_rect && !saw_area_path) return true;
+            saw_zero_rect = false;
+            saw_area_path = false;
+            clip_requested = false;
+        }
+    }
+    return false;
+}
+
+// Collects 1-based indices of pages whose content paints under a zero-area
+// clipping path. Bounded per page: streams larger than the cap are skipped
+// (diagnostics must never be a decompression-bomb vector), and undecodable
+// content simply contributes nothing.
+static void collect_zero_area_clip_pages(QPDF& pdf, std::vector<int>& out) {
+    const size_t kMaxScanBytes = 8u << 20;  // 8 MB decompressed per page
+    std::vector<QPDFObjectHandle> pages;
+    try {
+        pages = pdf.getAllPages();
+    } catch (...) {
+        return;
+    }
+    for (size_t p = 0; p < pages.size(); p++) {
+        QPDFObjectHandle contents;
+        try {
+            contents = pages[p].getKey("/Contents");
+        } catch (...) {
+            continue;
+        }
+        std::string combined;
+        bool overflow = false;
+        if (contents.isStream()) {
+            try {
+                std::shared_ptr<Buffer> buf = jpdfium::qpdf_detail::readStreamBufferBounded(
+                    contents, qpdf_dl_generalized, kMaxScanBytes);
+                if (buf && buf->getSize() <= kMaxScanBytes) {
+                    combined.assign(reinterpret_cast<const char*>(buf->getBuffer()),
+                                    buf->getSize());
+                } else
+                    overflow = true;
+            } catch (...) {
+                continue;
+            }
+        } else if (contents.isArray()) {
+            try {
+                for (auto& part : contents.getArrayAsVector()) {
+                    if (!part.isStream()) continue;
+                    std::shared_ptr<Buffer> buf = jpdfium::qpdf_detail::readStreamBufferBounded(
+                        part, qpdf_dl_generalized, kMaxScanBytes - combined.size());
+                    if (!buf || combined.size() + buf->getSize() > kMaxScanBytes) {
+                        overflow = true;
+                        break;
+                    }
+                    combined.append(reinterpret_cast<const char*>(buf->getBuffer()),
+                                    buf->getSize());
+                    combined.push_back('\n');
+                }
+            } catch (...) {
+                continue;
+            }
+        } else {
+            continue;
+        }
+        if (overflow) continue;
+        if (content_has_zero_area_clip(combined.data(), combined.size())) {
+            out.push_back(static_cast<int>(p + 1));
+        }
+    }
+}
+
 // Helper: serialize qpdf warnings to JSON array
 static std::string warnings_to_json(const std::vector<QPDFExc>& warnings) {
     std::ostringstream os;
@@ -842,9 +1067,34 @@ JPDFIUM_EXPORT int32_t jpdfium_repair_inspect(const uint8_t* input, int64_t inpu
         os << "\"status\":\"loaded\",";
         os << "\"warning_count\":" << warnings.size() << ",";
         os << "\"page_count\":" << pageCount << ",";
+
+        // Degenerate-clip detection: pages that paint under a zero-area
+        // clipping path render blank while their text and objects are intact.
+        std::vector<int> zeroClipPages;
+        collect_zero_area_clip_pages(pdf, zeroClipPages);
+        os << "\"zero_area_clip_pages\":[";
+        for (size_t i = 0; i < zeroClipPages.size(); i++) {
+            if (i) os << ",";
+            os << zeroClipPages[i];
+        }
+        os << "],";
+
+        std::string issues = warnings_to_json(warnings);
+        if (issues.size() >= 2 && issues[issues.size() - 1] == ']') {
+            issues.resize(issues.size() - 1);  // drop the closing bracket
+        }
+        for (int page : zeroClipPages) {
+            if (issues.size() > 1) issues += ',';
+            issues += "{\"message\":\"page " + std::to_string(page) +
+                      ": zero-area clipping path applied (re with zero width or height"
+                      " followed by W) - page content may be invisible\",\"page\":" +
+                      std::to_string(page) + "}";
+        }
+        issues += ']';
+
         os << "\"xref_valid\":true,";
         os << "\"trailer_valid\":true,";
-        os << "\"issues\":" << warnings_to_json(warnings);
+        os << "\"issues\":" << issues;
 
     } catch (std::exception& e) {
         std::string msg = e.what();

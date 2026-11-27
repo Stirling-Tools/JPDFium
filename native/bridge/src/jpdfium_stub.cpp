@@ -1183,6 +1183,16 @@ int32_t jpdfium_text_shape(const uint8_t*, int64_t, const char*, float, char** j
     return JPDFIUM_OK;
 }
 
+int32_t jpdfium_shape_verify(const uint8_t*, int64_t, const char*, int32_t, int32_t, int32_t,
+                             char** json) {
+    if (!json) return JPDFIUM_ERR_INVALID;
+    *json = dup_cstring(
+        "{\"safe\":false,\"mode\":0,\"reason\":\"not in this native build\",\"diff\":-1,"
+        "\"full_glyphs\":0,\"part_glyphs\":0,\"hb_predicted\":false,"
+        "\"unsafe_break_glyphs\":0,\"unsafe_concat_glyphs\":0}");
+    return JPDFIUM_ERR_NOT_FOUND;
+}
+
 // Glyph-Level Redaction stub
 
 int32_t jpdfium_redact_glyph_aware(int64_t, const char**, int32_t, uint32_t, float, uint32_t,
@@ -1852,6 +1862,15 @@ int32_t jpdfium_qpdf_decrypt(const uint8_t* in, int64_t in_len, const char*, uin
     if (out_ptr) *out_ptr = nullptr;
     if (out_len) *out_len = 0;
     return -1;
+}
+
+int32_t jpdfium_qpdf_encrypt_file(const char*, const char*, const char*, const char*, int32_t,
+                                  int32_t) {
+    return JPDFIUM_ERR_NATIVE;
+}
+
+int32_t jpdfium_qpdf_decrypt_file(const char*, const char*, const char*) {
+    return JPDFIUM_ERR_NATIVE;
 }
 
 int32_t jpdfium_signature_count(int64_t, int32_t* count) {

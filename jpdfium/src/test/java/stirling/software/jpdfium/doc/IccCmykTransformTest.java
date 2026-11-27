@@ -4,14 +4,24 @@ import org.junit.jupiter.api.Test;
 
 import java.awt.color.ICC_ColorSpace;
 import java.awt.color.ICC_Profile;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import stirling.software.jpdfium.exception.JPDFiumException;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -192,6 +202,45 @@ class IccCmykTransformTest {
         JPDFiumException error = assertThrows(JPDFiumException.class,
                 () -> new IccCmykTransform(malformed));
         assertTrue(error.getMessage().contains("tag"), "unexpected error: " + error.getMessage());
+    }
+
+    @Test
+    void cachedTransformReusesImmutableLutAndSegmentAcrossThreads() throws Exception {
+        byte[] profile = PdfIccProfiles.compactCmyk();
+        IccCmykTransform first = IccCmykTransform.cached(profile);
+        IccCmykTransform second = IccCmykTransform.cached(profile.clone());
+        assertSame(first, second, "Identical profile bytes must reuse the cached LUT");
+
+        MemorySegment seg = first.lutSegment();
+        assertNotNull(seg);
+        assertTrue(seg.isReadOnly(), "Cached LUT segment must be read-only");
+        assertArrayEquals(first.lutBytes(), seg.toArray(ValueLayout.JAVA_BYTE));
+
+        CountDownLatch gate = new CountDownLatch(1);
+        List<Future<IccCmykTransform>> futures = new ArrayList<>();
+        try (ExecutorService pool = Executors.newFixedThreadPool(6)) {
+            for (int i = 0; i < 6; i++) {
+                futures.add(pool.submit(() -> {
+                    gate.await();
+                    IccCmykTransform xform = IccCmykTransform.cached(profile);
+                    int[] cmyk = new int[4];
+                    xform.toCmyk(42, 128, 210, cmyk);
+                    return xform;
+                }));
+            }
+            gate.countDown();
+            for (Future<IccCmykTransform> f : futures) {
+                assertSame(first, f.get());
+            }
+        }
+
+        // Exercise LRU eviction past MAX_TRANSFORM_CACHE (8) without throwing or corrupting output.
+        for (int i = 1; i <= 10; i++) {
+            byte[] variant = profile.clone();
+            variant[84] = (byte) (variant[84] ^ i);
+            IccCmykTransform evictedOrCached = IccCmykTransform.cached(variant);
+            assertEquals(first.lutBytes().length, evictedOrCached.lutSegment().byteSize());
+        }
     }
 
     private static int tac(int[] cmyk) {

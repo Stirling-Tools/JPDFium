@@ -49,6 +49,7 @@ import java.util.zip.GZIPInputStream;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -552,6 +553,44 @@ class FontNormalizerTest {
             assertTrue(hasToUnicodeStream(repaired), "/ToUnicode missing after normalizePage");
             assertTrue(hasWidthsArray(repaired), "/Widths missing after normalizePage");
         }
+    }
+
+    @Test
+    void normalizeAllRewritesUnusedCidWidthEntries() throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real native library");
+        byte[] pdf = withCidWidth(cidTrueTypePdf(), 37, 500);
+
+        try (PdfDocument doc = PdfDocument.open(pdf)) {
+            FontNormalizer.Result result = FontNormalizer.normalizeAll(doc);
+            assertTrue(result.widthsRepaired() >= 1, "the wrong CID width must be repaired: " + result);
+
+            try (PDDocument loaded = Loader.loadPDF(doc.saveBytes())) {
+                COSArray widths = (COSArray) cidDescendant(loaded)
+                        .getDictionaryObject(COSName.W);
+                assertNotNull(widths);
+                assertNotEquals(500, cidWidth(widths, 37),
+                        "a wrong /W entry for an unused CID must be rewritten");
+                assertTrue(cidWidth(widths, 37) > 0,
+                        "the repaired CID must keep the program advance");
+            }
+        }
+    }
+
+    private static int cidWidth(COSArray widths, int cid) {
+        for (int i = 0; i < widths.size(); ) {
+            int first = widths.getInt(i++);
+            if (i >= widths.size()) return -1;
+            if (widths.getObject(i) instanceof COSArray run) {
+                i++;
+                if (cid >= first && cid - first < run.size()) return run.getInt(cid - first);
+            } else {
+                int last = widths.getInt(i++);
+                if (i >= widths.size()) return -1;
+                int width = widths.getInt(i++);
+                if (cid >= first && cid <= last) return width;
+            }
+        }
+        return -1;
     }
 
     @Test
@@ -1588,6 +1627,67 @@ class FontNormalizerTest {
     }
 
     @Test
+    void nonSymbolicDifferencesGetsMicrosoftUnicodeCmap() throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real native library");
+        byte[] pdf;
+        try (PDDocument doc = Loader.loadPDF(embeddedTrueTypePdf(false, false))) {
+            COSDictionary font = firstFontDictionary(doc);
+            assertNotNull(font);
+            COSDictionary descriptor = font.getCOSDictionary(COSName.FONT_DESC);
+            assertNotNull(descriptor);
+            byte[] program = streamBytes(descriptor, COSName.FONT_FILE2);
+            byte[] only03 = withOnlyCmap03(program);
+            assertTrue(hasCmapSubtable(only03, 0, 3), "fixture must keep a Unicode BMP cmap");
+            assertFalse(hasCmapSubtable(only03, 3, 1), "fixture must not gain (3,1) yet");
+
+            PDStream replacement = new PDStream(doc, new ByteArrayInputStream(only03));
+            replacement.getCOSObject().setInt(COSName.LENGTH1, only03.length);
+            descriptor.setItem(COSName.FONT_FILE2, replacement.getCOSObject());
+            descriptor.setInt(COSName.FLAGS, 32);
+
+            COSDictionary encoding = new COSDictionary();
+            encoding.setItem(COSName.TYPE, COSName.ENCODING);
+            encoding.setItem(COSName.BASE_ENCODING, COSName.WIN_ANSI_ENCODING);
+            COSArray differences = new COSArray();
+            differences.add(COSInteger.get(128));
+            differences.add(COSName.getPDFName("Euro"));
+            encoding.setItem(COSName.DIFFERENCES, differences);
+            font.setItem(COSName.ENCODING, encoding);
+
+            PDPage page = doc.getPage(0);
+            COSName fontKey = page.getResources().getFontNames().iterator().next();
+            String stream = "BT /" + fontKey.getName() + " 12 Tf 72 700 Td <80> Tj ET";
+            page.setContents(new PDStream(doc, new ByteArrayInputStream(
+                    stream.getBytes(StandardCharsets.US_ASCII))));
+
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            doc.save(out);
+            pdf = out.toByteArray();
+        }
+
+        try (PdfDocument doc = PdfDocument.open(pdf)) {
+            FontNormalizer.Result result = FontNormalizer.normalizePage(doc, 0);
+            assertTrue(result.fontsProcessed() > 0, "font must be normalized: " + result);
+
+            byte[] normalized = doc.saveBytes();
+            try (PDDocument loaded = Loader.loadPDF(normalized)) {
+                COSDictionary font = firstFontDictionary(loaded);
+                assertNotNull(font);
+                COSDictionary descriptor = font.getCOSDictionary(COSName.FONT_DESC);
+                assertNotNull(descriptor);
+                byte[] program = streamBytes(descriptor, COSName.FONT_FILE2);
+                assertTrue(hasCmapSubtable(program, 3, 1),
+                        "non-symbolic Differences must gain a Microsoft Unicode (3,1) cmap");
+                int unicodeGid = cmapGid(program, 3, 1, 0x20AC);
+                assertTrue(unicodeGid > 0,
+                        "injected (3,1) cmap must map the Euro sign; gid=" + unicodeGid);
+                assertTrue(new PDFTextStripper().getText(loaded).contains("\u20AC"),
+                        "the Euro code must still extract as U+20AC");
+            }
+        }
+    }
+
+    @Test
     void resubsettingOpenTypeCffUpdatesCharSetToRetainedGlyphs() throws Exception {
         assumeTrue(NativeRuntime.isFull(), "needs real native library");
         byte[] otf = gunzipBase64(CFF_MULTI_OTF_BASE64);
@@ -1731,8 +1831,8 @@ class FontNormalizerTest {
         byte[] pdf = cidVerticalTrueTypePdf(null, null);
 
         try (PdfDocument doc = PdfDocument.open(pdf)) {
-            assertEquals(1, FontNormalizer.repairWidths(doc, 0),
-                    "vertical CID font without /DW2 must be repaired");
+            assertEquals(2, FontNormalizer.repairWidths(doc, 0),
+                    "vertical CID font must repair both /W and /DW2//W2");
             byte[] repaired = doc.saveBytes();
             try (PDDocument loaded = Loader.loadPDF(repaired)) {
                 COSDictionary descendant = cidDescendant(loaded);
@@ -1740,13 +1840,15 @@ class FontNormalizerTest {
                 COSBase dw2Obj = descendant.getDictionaryObject(COSName.getPDFName("DW2"));
                 assertTrue(dw2Obj instanceof COSArray dw2 && dw2.size() == 2,
                         "expected synthesized /DW2 [v, w1y], got " + dw2Obj);
+                assertNotNull(descendant.getDictionaryObject(COSName.W),
+                        "vertical fonts also need a repaired horizontal /W");
             }
         }
 
         // With explicit non-default /DW2 [880 -500] and no /W2, /W2 entries must be emitted.
         byte[] pdfCustomDw2 = cidVerticalTrueTypePdf(new int[] {880, -500}, null);
         try (PdfDocument doc = PdfDocument.open(pdfCustomDw2)) {
-            assertEquals(1, FontNormalizer.repairWidths(doc, 0));
+            assertEquals(2, FontNormalizer.repairWidths(doc, 0));
             byte[] repaired = doc.saveBytes();
             try (PDDocument loaded = Loader.loadPDF(repaired)) {
                 COSDictionary descendant = cidDescendant(loaded);
@@ -1832,6 +1934,91 @@ class FontNormalizerTest {
             }
         }
         return null;
+    }
+
+    private static boolean hasCmapSubtable(byte[] sfnt, int platformId, int encodingId) {
+        int[] cmapLoc = findSfntTable(sfnt, "cmap");
+        if (cmapLoc == null) return false;
+        ByteBuffer buf = tableBuffer(sfnt);
+        int numSub = buf.getShort(cmapLoc[0] + 2) & 0xFFFF;
+        for (int i = 0; i < numSub; i++) {
+            int rec = cmapLoc[0] + 4 + i * 8;
+            if ((buf.getShort(rec) & 0xFFFF) == platformId
+                    && (buf.getShort(rec + 2) & 0xFFFF) == encodingId) return true;
+        }
+        return false;
+    }
+
+    /** Rebuilds a cmap table with one (0,3) Format 4 subtable copied from the font. */
+    private static byte[] withOnlyCmap03(byte[] sfnt) {
+        int[] cmapLoc = findSfntTable(sfnt, "cmap");
+        assertNotNull(cmapLoc);
+        ByteBuffer src = tableBuffer(sfnt);
+        int numSub = src.getShort(cmapLoc[0] + 2) & 0xFFFF;
+        byte[] fmt4 = null;
+        for (int i = 0; i < numSub; i++) {
+            int rec = cmapLoc[0] + 4 + i * 8;
+            int pid = src.getShort(rec) & 0xFFFF;
+            int eid = src.getShort(rec + 2) & 0xFFFF;
+            int subOff = cmapLoc[0] + src.getInt(rec + 4);
+            if ((src.getShort(subOff) & 0xFFFF) == 4 && (fmt4 == null || (pid == 3 && eid == 1))) {
+                int len = src.getShort(subOff + 2) & 0xFFFF;
+                fmt4 = Arrays.copyOfRange(sfnt, subOff, subOff + len);
+            }
+        }
+        assertNotNull(fmt4, "fixture needs a Format 4 cmap to relabel as (0,3)");
+
+        int newCmapLen = 12 + fmt4.length;
+        byte[] newCmap = new byte[newCmapLen];
+        ByteBuffer cb = ByteBuffer.wrap(newCmap).order(ByteOrder.BIG_ENDIAN);
+        cb.putShort((short) 0);
+        cb.putShort((short) 1);
+        cb.putShort((short) 0);
+        cb.putShort((short) 3);
+        cb.putInt(12);
+        System.arraycopy(fmt4, 0, newCmap, 12, fmt4.length);
+
+        int alignedEnd = (sfnt.length + 3) & ~3;
+        byte[] out = new byte[alignedEnd + newCmapLen];
+        System.arraycopy(sfnt, 0, out, 0, sfnt.length);
+        System.arraycopy(newCmap, 0, out, alignedEnd, newCmapLen);
+        ByteBuffer ob = ByteBuffer.wrap(out).order(ByteOrder.BIG_ENDIAN);
+        ob.putInt(cmapLoc[2] + 8, alignedEnd);
+        ob.putInt(cmapLoc[2] + 12, newCmapLen);
+        return out;
+    }
+
+    /** Looks up a BMP code point in a Format 4 cmap subtable. */
+    private static int cmapGid(byte[] sfnt, int platformId, int encodingId, int codePoint) {
+        int[] cmapLoc = findSfntTable(sfnt, "cmap");
+        if (cmapLoc == null) return -1;
+        ByteBuffer buf = tableBuffer(sfnt);
+        int numSub = buf.getShort(cmapLoc[0] + 2) & 0xFFFF;
+        for (int i = 0; i < numSub; i++) {
+            int rec = cmapLoc[0] + 4 + i * 8;
+            if ((buf.getShort(rec) & 0xFFFF) != platformId
+                    || (buf.getShort(rec + 2) & 0xFFFF) != encodingId) continue;
+            int sub = cmapLoc[0] + buf.getInt(rec + 4);
+            if ((buf.getShort(sub) & 0xFFFF) != 4) continue;
+            int segCount = (buf.getShort(sub + 6) & 0xFFFF) / 2;
+            int ends = sub + 14;
+            int starts = ends + segCount * 2 + 2;
+            int deltas = starts + segCount * 2;
+            int ranges = deltas + segCount * 2;
+            for (int s = 0; s < segCount; s++) {
+                int start = buf.getShort(starts + s * 2) & 0xFFFF;
+                int end = buf.getShort(ends + s * 2) & 0xFFFF;
+                if (codePoint < start || codePoint > end) continue;
+                int delta = buf.getShort(deltas + s * 2) & 0xFFFF;
+                int range = buf.getShort(ranges + s * 2) & 0xFFFF;
+                if (range == 0) return (codePoint + delta) & 0xFFFF;
+                int pos = ranges + s * 2 + range + (codePoint - start) * 2;
+                int gid = buf.getShort(pos) & 0xFFFF;
+                return gid == 0 ? 0 : (gid + delta) & 0xFFFF;
+            }
+            return -1;
+        }
+        return -1;
     }
 
     private static byte[] injectFormat12Subtable(byte[] sfnt, int cp, int gid) {

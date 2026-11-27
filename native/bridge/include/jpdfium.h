@@ -448,10 +448,28 @@ JPDFIUM_EXPORT int32_t jpdfium_font_covers_text(const uint8_t* data, int64_t len
 
 // Shape UTF-8 text with a font program via HarfBuzz.
 // Returns a flat JSON array, one object per glyph:
-// [{"g":gid,"ax":x_advance,"ay":y_advance,"dx":x_offset,"dy":y_offset,"cluster":byte_index}]
-// Advances and offsets are 26.6 fractional points at font_size. Caller frees *json.
+// [{"g":gid,"ax":x_advance,"ay":y_advance,"dx":x_offset,"dy":y_offset,"cluster":byte_index,
+//   "f":flags}]
+// Advances and offsets are 26.6 fractional points at font_size. `flags` carries
+// HarfBuzz glyph flags (bit 0: UNSAFE_TO_BREAK, bit 1: UNSAFE_TO_CONCAT when the
+// HarfBuzz build supports it). Caller frees *json.
 JPDFIUM_EXPORT int32_t jpdfium_text_shape(const uint8_t* font_data, int64_t font_len,
                                           const char* utf8_text, float font_size, char** json);
+
+// Verify that editing UTF-8 text at a shaping boundary is shape-safe, using
+// the same re-shape-and-compare approach as `hb-shape --verify` (empirical, so
+// it is authoritative where HarfBuzz's conservative UNSAFE_TO_BREAK /
+// UNSAFE_TO_CONCAT glyph flags only predict):
+//   mode 0: would splitting the text at byte offset `a` change the shaping?
+//   mode 1: would removing the span [a, b) change the surviving glyphs?
+// Offsets are byte indexes into utf8_text and must land on cluster starts.
+// Returns JSON:
+// {"safe":bool,"mode":n,"reason":"...","diff":n,"full_glyphs":n,"part_glyphs":n,
+//  "hb_predicted":bool,"unsafe_break_glyphs":n,"unsafe_concat_glyphs":n}
+// `diff` is the first differing glyph index (-1 when none). Caller frees *json.
+JPDFIUM_EXPORT int32_t jpdfium_shape_verify(const uint8_t* font_data, int64_t font_len,
+                                            const char* utf8_text, int32_t mode, int32_t a,
+                                            int32_t b, char** json);
 
 // Fix /ToUnicode CMap for all fonts on a page using the font's internal cmap table.
 // This is the most critical step for reliable auto-redact: wrong ToUnicode -> wrong text

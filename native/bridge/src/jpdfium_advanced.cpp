@@ -25,6 +25,57 @@
 #include <fpdf_edit.h>
 #include <fpdf_text.h>
 
+// HB_GLYPH_FLAG_UNSAFE_TO_CONCAT and HB_BUFFER_FLAG_PRODUCE_UNSAFE_TO_CONCAT
+// arrived in HarfBuzz 3.0.0; older builds (e.g. Ubuntu 22.04 harfbuzz 2.7.4)
+// still produce UNSAFE_TO_BREAK but never UNSAFE_TO_CONCAT.
+#if (HB_VERSION_MAJOR * 100 + HB_VERSION_MINOR) >= 300
+#define JPDFIUM_HB_HAS_UNSAFE_TO_CONCAT 1
+#else
+#define JPDFIUM_HB_HAS_UNSAFE_TO_CONCAT 0
+#endif
+
+namespace {
+
+struct ShapeEntry {
+    hb_codepoint_t glyph = 0;
+    unsigned int cluster = 0;
+    int32_t ax = 0;
+    int32_t ay = 0;
+    int32_t dx = 0;
+    int32_t dy = 0;
+};
+
+bool sameShaping(const ShapeEntry& x, const ShapeEntry& y) {
+    return x.glyph == y.glyph && x.cluster == y.cluster && x.ax == y.ax && x.ay == y.ay &&
+           x.dx == y.dx && x.dy == y.dy;
+}
+
+// Shapes text[itemOffset, itemOffset + itemLength) under the given segment
+// properties. Clusters stay absolute byte offsets into text (HarfBuzz
+// itemization semantics), so pieces concatenate comparably with a full run.
+bool shapeSlice(hb_font_t* font, const char* text, int textLen, unsigned itemOffset, int itemLength,
+                const hb_segment_properties_t* props, std::vector<ShapeEntry>* out) {
+    hb_buffer_t* buf = hb_buffer_create();
+    if (!buf) return false;
+    hb_buffer_set_segment_properties(buf, props);
+#if JPDFIUM_HB_HAS_UNSAFE_TO_CONCAT
+    hb_buffer_set_flags(buf, HB_BUFFER_FLAG_PRODUCE_UNSAFE_TO_CONCAT);
+#endif
+    hb_buffer_add_utf8(buf, text, textLen, itemOffset, itemLength);
+    hb_shape(font, buf, nullptr, 0);
+    unsigned int count = 0;
+    hb_glyph_info_t* infos = hb_buffer_get_glyph_infos(buf, &count);
+    hb_glyph_position_t* pos = hb_buffer_get_glyph_positions(buf, &count);
+    for (unsigned int i = 0; i < count; i++) {
+        out->push_back(ShapeEntry{infos[i].codepoint, infos[i].cluster, pos[i].x_advance,
+                                  pos[i].y_advance, pos[i].x_offset, pos[i].y_offset});
+    }
+    hb_buffer_destroy(buf);
+    return true;
+}
+
+}  // namespace
+
 int32_t jpdfium_font_get_data(int64_t page, int32_t font_index, uint8_t** data, int64_t* len) {
     try {
         PageWrapper* pw = decodePage(page);
@@ -173,6 +224,9 @@ int32_t jpdfium_text_shape(const uint8_t* font_data, int64_t font_len, const cha
         hb_buffer_t* buf = hb_buffer_create();
         hb_buffer_add_utf8(buf, utf8_text, -1, 0, -1);
         hb_buffer_guess_segment_properties(buf);
+#if JPDFIUM_HB_HAS_UNSAFE_TO_CONCAT
+        hb_buffer_set_flags(buf, HB_BUFFER_FLAG_PRODUCE_UNSAFE_TO_CONCAT);
+#endif
         hb_shape(font, buf, nullptr, 0);
 
         unsigned int count = 0;
@@ -180,19 +234,230 @@ int32_t jpdfium_text_shape(const uint8_t* font_data, int64_t font_len, const cha
         hb_glyph_position_t* pos = hb_buffer_get_glyph_positions(buf, &count);
 
         std::string out = "[";
-        char entry[128];
+        char entry[160];
         for (unsigned int i = 0; i < count; ++i) {
             if (i) out += ',';
             std::snprintf(entry, sizeof(entry),
-                          "{\"g\":%u,\"ax\":%d,\"ay\":%d,\"dx\":%d,\"dy\":%d,\"cluster\":%u}",
+                          "{\"g\":%u,\"ax\":%d,\"ay\":%d,\"dx\":%d,\"dy\":%d,\"cluster\":%u,"
+                          "\"f\":%u}",
                           infos[i].codepoint, pos[i].x_advance, pos[i].y_advance, pos[i].x_offset,
-                          pos[i].y_offset, infos[i].cluster);
+                          pos[i].y_offset, infos[i].cluster,
+                          hb_glyph_info_get_glyph_flags(&infos[i]));
             out += entry;
         }
         out += ']';
         hb_buffer_destroy(buf);
         hb_font_destroy(font);
         *json = strdup(out.c_str());
+        return JPDFIUM_OK;
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
+    }
+}
+
+// Empirically verifies shaping safety at a text edit boundary using the same
+// re-shape-and-compare approach as `hb-shape --verify`: the full run is shaped
+// once, the edited pieces are re-shaped under the full run's segment
+// properties, and the glyph sequences must agree in glyph id, cluster,
+// advance and offset. This is the authoritative check behind HarfBuzz's
+// conservative UNSAFE_TO_BREAK / UNSAFE_TO_CONCAT glyph flags, which are also
+// reported for diagnostics.
+//
+//   mode 0: is splitting the text at byte offset `a` shape-safe?
+//   mode 1: is removing the span [a, b) shape-safe for the surviving glyphs?
+int32_t jpdfium_shape_verify(const uint8_t* font_data, int64_t font_len, const char* utf8_text,
+                             int32_t mode, int32_t a, int32_t b, char** json) {
+    try {
+        if (!font_data || font_len <= 0 || !utf8_text || !json) return JPDFIUM_ERR_INVALID;
+        if (mode != 0 && mode != 1) return JPDFIUM_ERR_INVALID;
+        int n = static_cast<int>(std::strlen(utf8_text));
+        if (n <= 0) return JPDFIUM_ERR_INVALID;
+        if (mode == 0) {
+            if (a < 0 || a > n) return JPDFIUM_ERR_INVALID;
+        } else if (a < 0 || b <= a || b > n) {
+            return JPDFIUM_ERR_INVALID;
+        }
+
+        hb_blob_t* blob = hb_blob_create(reinterpret_cast<const char*>(font_data),
+                                         static_cast<unsigned int>(font_len),
+                                         HB_MEMORY_MODE_READONLY, nullptr, nullptr);
+        hb_face_t* face = hb_face_create(blob, 0);
+        hb_blob_destroy(blob);
+        if (hb_face_get_glyph_count(face) <= 1) {
+            hb_face_destroy(face);
+            return JPDFIUM_ERR_INVALID;
+        }
+        hb_font_t* font = hb_font_create(face);
+        hb_face_destroy(face);
+        hb_font_set_scale(font, 64, 64);
+
+        // Full reference run: glyph sequence plus HarfBuzz safety flags.
+        hb_buffer_t* fullBuf = hb_buffer_create();
+        hb_buffer_add_utf8(fullBuf, utf8_text, n, 0, n);
+        hb_buffer_guess_segment_properties(fullBuf);
+#if JPDFIUM_HB_HAS_UNSAFE_TO_CONCAT
+        hb_buffer_set_flags(fullBuf, HB_BUFFER_FLAG_PRODUCE_UNSAFE_TO_CONCAT);
+#endif
+        hb_shape(font, fullBuf, nullptr, 0);
+        hb_segment_properties_t props;
+        hb_buffer_get_segment_properties(fullBuf, &props);
+        unsigned int fullCount = 0;
+        hb_glyph_info_t* fullInfos = hb_buffer_get_glyph_infos(fullBuf, &fullCount);
+        hb_glyph_position_t* fullPos = hb_buffer_get_glyph_positions(fullBuf, &fullCount);
+        std::vector<ShapeEntry> full;
+        std::vector<unsigned int> fullFlags;
+        std::set<unsigned int> clusterStarts;
+        unsigned int unsafeBreak = 0;
+        unsigned int unsafeConcat = 0;
+        for (unsigned int i = 0; i < fullCount; i++) {
+            unsigned int flags = hb_glyph_info_get_glyph_flags(&fullInfos[i]);
+            fullFlags.push_back(flags);
+            if (flags & HB_GLYPH_FLAG_UNSAFE_TO_BREAK) unsafeBreak++;
+#if JPDFIUM_HB_HAS_UNSAFE_TO_CONCAT
+            if (flags & HB_GLYPH_FLAG_UNSAFE_TO_CONCAT) unsafeConcat++;
+#endif
+            clusterStarts.insert(fullInfos[i].cluster);
+            full.push_back(ShapeEntry{fullInfos[i].codepoint, fullInfos[i].cluster,
+                                      fullPos[i].x_advance, fullPos[i].y_advance,
+                                      fullPos[i].x_offset, fullPos[i].y_offset});
+        }
+        hb_buffer_destroy(fullBuf);
+
+        bool safe = false;
+        std::string reason = "unknown";
+        int diff = -1;
+        std::vector<ShapeEntry> part;
+        if (mode == 0) {
+            if (a == 0 || a == n) {
+                safe = true;
+                reason = "empty side";
+            } else if (clusterStarts.find(static_cast<unsigned int>(a)) == clusterStarts.end()) {
+                reason = "split inside cluster";
+            } else {
+                if (!shapeSlice(font, utf8_text, n, 0, a, &props, &part)) {
+                    hb_font_destroy(font);
+                    return JPDFIUM_ERR_NATIVE;
+                }
+                std::vector<ShapeEntry> tail;
+                if (!shapeSlice(font, utf8_text, n, static_cast<unsigned int>(a), n - a, &props,
+                                &tail)) {
+                    hb_font_destroy(font);
+                    return JPDFIUM_ERR_NATIVE;
+                }
+                part.insert(part.end(), tail.begin(), tail.end());
+                if (part.size() != full.size()) {
+                    reason = "glyph count differs after split";
+                    for (size_t i = 0; i < part.size() && i < full.size(); i++) {
+                        if (!sameShaping(part[i], full[i])) {
+                            diff = static_cast<int>(i);
+                            break;
+                        }
+                    }
+                } else {
+                    for (size_t i = 0; i < full.size(); i++) {
+                        if (!sameShaping(part[i], full[i])) {
+                            diff = static_cast<int>(i);
+                            break;
+                        }
+                    }
+                    if (diff < 0) {
+                        safe = true;
+                        reason = "identical";
+                    } else {
+                        reason = "glyph mismatch after split";
+                    }
+                }
+            }
+        } else {
+            if (a == 0 && b == n) {
+                safe = true;
+                reason = "nothing remains";
+            } else {
+                // Span boundaries may sit at any cluster start or at the text edges.
+                bool aIsBoundary = a == 0 || clusterStarts.find(static_cast<unsigned int>(a)) !=
+                                                 clusterStarts.end();
+                bool bIsBoundary = b == n || clusterStarts.find(static_cast<unsigned int>(b)) !=
+                                                 clusterStarts.end();
+                if (!aIsBoundary || !bIsBoundary) {
+                    reason = "span boundary inside cluster";
+                } else {
+                    // Expected survivors: before-part unchanged, after-part
+                    // shifted by the removed byte count.
+                    std::vector<ShapeEntry> expected;
+                    for (const ShapeEntry& e : full) {
+                        if (e.cluster < static_cast<unsigned int>(a)) {
+                            expected.push_back(e);
+                        } else if (e.cluster >= static_cast<unsigned int>(b)) {
+                            ShapeEntry shifted = e;
+                            shifted.cluster -= static_cast<unsigned int>(b - a);
+                            expected.push_back(shifted);
+                        }
+                    }
+                    std::string remaining(utf8_text, utf8_text + a);
+                    remaining.append(utf8_text + b, utf8_text + n);
+                    if (!shapeSlice(font, remaining.c_str(), static_cast<int>(remaining.size()), 0,
+                                    static_cast<int>(remaining.size()), &props, &part)) {
+                        hb_font_destroy(font);
+                        return JPDFIUM_ERR_NATIVE;
+                    }
+                    if (part.size() != expected.size()) {
+                        reason = "glyph count differs after removal";
+                        for (size_t i = 0; i < part.size() && i < expected.size(); i++) {
+                            if (!sameShaping(part[i], expected[i])) {
+                                diff = static_cast<int>(i);
+                                break;
+                            }
+                        }
+                    } else {
+                        for (size_t i = 0; i < expected.size(); i++) {
+                            if (!sameShaping(part[i], expected[i])) {
+                                diff = static_cast<int>(i);
+                                break;
+                            }
+                        }
+                        if (diff < 0) {
+                            safe = true;
+                            reason = "identical";
+                        } else {
+                            reason = "glyph mismatch after removal";
+                        }
+                    }
+                }
+            }
+        }
+
+        // HarfBuzz's own prediction at the edit boundary (diagnostic only:
+        // the flags are conservative, the re-shape comparison above decides).
+        bool hbPredicted = false;
+        if (mode == 0) {
+            for (size_t i = 0; i < full.size(); i++) {
+                if (full[i].cluster == static_cast<unsigned int>(a) &&
+                    (fullFlags[i] & HB_GLYPH_FLAG_UNSAFE_TO_BREAK)) {
+                    hbPredicted = true;
+                    break;
+                }
+            }
+        } else {
+            for (size_t i = 0; i < full.size(); i++) {
+                unsigned int cluster = full[i].cluster;
+                if ((cluster == static_cast<unsigned int>(a) ||
+                     cluster == static_cast<unsigned int>(b)) &&
+                    (fullFlags[i] & HB_GLYPH_FLAG_UNSAFE_TO_CONCAT)) {
+                    hbPredicted = true;
+                    break;
+                }
+            }
+        }
+
+        char verdict[512];
+        std::snprintf(verdict, sizeof(verdict),
+                      "{\"safe\":%s,\"mode\":%d,\"reason\":\"%s\",\"diff\":%d,"
+                      "\"full_glyphs\":%zu,\"part_glyphs\":%zu,\"hb_predicted\":%s,"
+                      "\"unsafe_break_glyphs\":%u,\"unsafe_concat_glyphs\":%u}",
+                      safe ? "true" : "false", mode, reason.c_str(), diff, full.size(), part.size(),
+                      hbPredicted ? "true" : "false", unsafeBreak, unsafeConcat);
+        hb_font_destroy(font);
+        *json = strdup(verdict);
         return JPDFIUM_OK;
     } catch (...) {
         return JPDFIUM_ERR_NATIVE;
