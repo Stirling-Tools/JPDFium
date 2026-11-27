@@ -33,6 +33,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -72,13 +73,24 @@ class PdfFontEmbedderTest {
     void fileBackedEmbeddingCopiesTheInputWhenNoFontMatches(@TempDir Path temp) throws Exception {
         assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font embedding unavailable");
         Path input = helveticaPage(temp.resolve("input.pdf"));
+        // No bundled or on-disk substitute can resolve this family, so the
+        // copy-through premise of the test holds on every embedding path.
+        try (PDDocument doc = Loader.loadPDF(Files.readAllBytes(input))) {
+            COSDictionary fonts = (COSDictionary) doc.getPage(0).getResources()
+                    .getCOSObject().getDictionaryObject(COSName.FONT);
+            for (COSName key : fonts.keySet()) {
+                COSDictionary font = (COSDictionary) fonts.getDictionaryObject(key);
+                font.setItem(COSName.BASE_FONT, COSName.getPDFName("ACME-TestFace"));
+            }
+            doc.save(input.toFile());
+        }
         Path output = temp.resolve("output.pdf");
         Path empty = Files.createDirectory(temp.resolve("no-fonts"));
 
         PdfFontEmbedder.FileResult result = PdfFontEmbedder.embedMissingTo(input, output, empty);
 
         assertTrue(result.embedded().isEmpty());
-        assertEquals(List.of("Helvetica"), result.unresolved());
+        assertEquals(List.of("ACME-TestFace"), result.unresolved());
         assertArrayEquals(Files.readAllBytes(input), Files.readAllBytes(output));
     }
 
@@ -113,6 +125,25 @@ class PdfFontEmbedderTest {
             PDResources resources = doc.getPage(0).getResources();
             return resources.getFont(resources.getFontNames().iterator().next()).isEmbedded();
         }
+    }
+
+    @Test
+    void exactFaceNamesSurviveSuffixTrimming() {
+        assertEquals(PdfFontEmbedder.key("X-Regular"), PdfFontEmbedder.key("X-Regular-Book"));
+        assertNotEquals(
+                PdfFontEmbedder.exactKey("X-Regular"),
+                PdfFontEmbedder.exactKey("X-Regular-Book"));
+    }
+
+    @Test
+    void arialUnicodeResolvesToCjkCapableBundledFace() {
+        PdfFontEmbedder.FontStatus status = PdfFontEmbedder.diagnose("ArialUnicodeMS");
+        assertTrue(status.resolved(), status.reason());
+        assertFalse(status.source().contains("LiberationSans"),
+                "ArialUnicodeMS must not resolve to a Latin-only substitute: " + status);
+        assertTrue(status.source().contains("NotoSansSC")
+                        || status.source().contains("Arial Unicode"),
+                "ArialUnicodeMS needs a CJK-capable face: " + status);
     }
 
     @Test
