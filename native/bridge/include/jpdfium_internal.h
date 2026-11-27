@@ -166,6 +166,7 @@ struct DocCore {
     std::string sanitizeReport{};
     std::vector<FPDF_FONT> loadedFonts{};
     std::vector<ErasedGrayImage> erasedGrayImages{};
+    std::map<unsigned int, std::set<int>> redactedMcids{};
 
     // Filesystem path this document was opened from, or empty for in-memory
     // documents. Retained only so save can refuse to write over its own input:
@@ -477,6 +478,8 @@ int sanitizeRedactedPdf(const uint8_t* input, size_t inputLen, const DocCore& co
 // replaced |bytes|; false leaves them as PDFium wrote them (nothing matched,
 // qpdf unavailable, or the pass failed), which is still a complete redaction.
 bool compactErasedGrayImages(const DocCore& core, std::vector<uint8_t>& bytes);
+
+bool dropStructReplacementText(const DocCore& core, std::vector<uint8_t>& bytes);
 
 // File-backed form of the same stage: reads |inputPath| and, when an image is
 // rewritten, writes the complete PDF to |output|. The caller owns |output| and

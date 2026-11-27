@@ -17,6 +17,7 @@
 #include <qpdf/BufferInputSource.hh>
 #include <qpdf/QPDF.hh>
 #include <qpdf/QPDFExc.hh>
+#include <qpdf/QPDFNumberTreeObjectHelper.hh>
 #include <qpdf/QPDFObjectHandle.hh>
 #include <qpdf/QPDFTokenizer.hh>
 #include <qpdf/QPDFWriter.hh>
@@ -759,7 +760,61 @@ int sanitizeRedactedPdf(const uint8_t* input, size_t inputLen, const DocCore& co
     }
 }
 
+namespace {
+
+void dropReplacementTextFromBranch(QPDFObjectHandle element, std::set<QPDFObjGen>& visited) {
+    for (int depth = 0; depth < 512 && element.isDictionary(); ++depth) {
+        if (element.isIndirect() && !visited.insert(element.getObjGen()).second) return;
+        if (!element.hasKey("/S")) return;
+        for (const char* key : {"/ActualText", "/Alt", "/E"}) element.removeKey(key);
+        element = element.getKey("/P");
+    }
+}
+
+}  // namespace
+
+bool dropStructReplacementText(const DocCore& core, std::vector<uint8_t>& bytes) {
+    if (core.redactedMcids.empty()) return true;
+    try {
+        QPDF q;
+        q.processMemoryFile("redacted-structure.pdf", reinterpret_cast<const char*>(bytes.data()),
+                            bytes.size());
+        QPDFObjectHandle treeRoot = q.getRoot().getKey("/StructTreeRoot");
+        if (!treeRoot.isDictionary() || !treeRoot.getKey("/ParentTree").isDictionary()) return true;
+        QPDFNumberTreeObjectHelper parentTree(treeRoot.getKey("/ParentTree"), q);
+        std::set<QPDFObjGen> visited;
+        for (QPDFObjectHandle page : q.getAllPages()) {
+            auto hit = core.redactedMcids.find(static_cast<unsigned int>(page.getObjectID()));
+            if (hit == core.redactedMcids.end()) continue;
+            QPDFObjectHandle key = page.getKey("/StructParents");
+            if (!key.isInteger()) continue;
+            QPDFObjectHandle owners;
+            if (!parentTree.findObject(key.getIntValue(), owners) || !owners.isArray()) continue;
+            for (int mcid : hit->second) {
+                if (mcid < owners.getArrayNItems())
+                    dropReplacementTextFromBranch(owners.getArrayItem(mcid), visited);
+            }
+        }
+        QPDFWriter writer(q);
+        writer.setOutputMemory();
+        {
+            jpdfium_qpdf_internal::WriterLock lock{-1};
+            writer.write();
+        }
+        std::shared_ptr<Buffer> out = writer.getBufferSharedPointer();
+        if (!out || out->getSize() == 0) return false;
+        bytes.assign(out->getBuffer(), out->getBuffer() + out->getSize());
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
 #else  // !JPDFIUM_HAS_QPDF
+
+bool dropStructReplacementText(const DocCore& core, std::vector<uint8_t>&) {
+    return core.redactedMcids.empty();
+}
 
 int sanitizeRedactedPdf(const uint8_t*, size_t, const DocCore&, std::vector<uint8_t>&,
                         std::string& reportJson) {

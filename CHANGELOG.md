@@ -146,8 +146,13 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Fixed
 
-- Redaction cover boxes are written inside `/Artifact` marked content, so
-  redacting a tagged PDF no longer leaves untagged content that fails PDF/UA.
+- Redaction cover boxes are written inside `/Artifact` marked content, so they
+  no longer add untagged content to a tagged PDF.
+- Text and paths that object fission rebuilds around a redaction keep the
+  marked content of the object they came from, instead of becoming untagged.
+- Redaction drops `/ActualText`, `/Alt` and `/E` from the marked content and
+  structure elements of content it removes or cuts, so a region redaction no
+  longer leaves the removed text readable there.
 
 - The bundled `JPDFiumCompactCmyk.icc` fallback is now generated only from the
   CC0 `CGATS001Compat-v2-micro.icc` measurements. Its B2A table inverts the same

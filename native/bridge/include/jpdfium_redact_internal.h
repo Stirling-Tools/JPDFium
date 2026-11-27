@@ -167,7 +167,7 @@ const char* getStandard14FontName(const char* baseName);
 bool isStandard14Font(FPDF_FONT font);
 int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE textPage,
                             const std::vector<TextMatch>& matches, uint32_t argb,
-                            const std::shared_ptr<DocCore>& core,
+                            const std::shared_ptr<DocCore>& core, int32_t pageIndex,
                             std::vector<FPDF_PAGEOBJECT>* paintedCovers = nullptr,
                             const FS_RECTF* cropRect = nullptr, bool skipTextObjects = false,
                             bool* refusedUnmodified = nullptr);

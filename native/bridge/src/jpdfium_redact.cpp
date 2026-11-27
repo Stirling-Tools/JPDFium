@@ -150,7 +150,9 @@ static void markRedactionIncomplete(PageWrapper* pw, const std::vector<TextMatch
     markRedactionIncomplete(pw, areas);
 }
 
-void markRedactionCover(FPDF_PAGEOBJECT cover) { FPDFPageObj_AddMark(cover, "Artifact"); }
+void markRedactionCover(FPDF_PAGEOBJECT cover) {
+    FPDFPageObj_AddMark(cover, "Artifact");
+}
 
 // Paints the cover over a redacted area in `argb` (nothing when fully
 // transparent): over each quad where the area has them, so a cover on rotated
@@ -375,8 +377,9 @@ int32_t jpdfium_redact_region(int64_t page, float x, float y, float w, float h, 
 
         std::vector<FPDF_PAGEOBJECT> paintedCovers;
         bool refusedUnmodified = false;
-        int32_t rc = objectFissionRedact(pw->doc, pw->page, tp, matches, argb, pw->core,
-                                         &paintedCovers, nullptr, false, &refusedUnmodified);
+        int32_t rc =
+            objectFissionRedact(pw->doc, pw->page, tp, matches, argb, pw->core, pw->pageIndex,
+                                &paintedCovers, nullptr, false, &refusedUnmodified);
         FPDFText_ClosePage(tp);
         if (rc != JPDFIUM_OK) {
             // objectFissionRedact mutates the page before it audits, so a
@@ -578,7 +581,8 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
             }
         } else {
             // Fallback: Object Fission engine if EPDFPage_ApplyRedactions is unavailable
-            int32_t rc = objectFissionRedact(pw->doc, pw->page, tp, matches, argb, pw->core);
+            int32_t rc =
+                objectFissionRedact(pw->doc, pw->page, tp, matches, argb, pw->core, pw->pageIndex);
             FPDFText_ClosePage(tp);
             tp = nullptr;
             if (rc != JPDFIUM_OK) {
@@ -950,7 +954,8 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
                 }
             }
         } else {
-            int32_t rc = objectFissionRedact(pw->doc, pw->page, tp, matches, argb, pw->core);
+            int32_t rc =
+                objectFissionRedact(pw->doc, pw->page, tp, matches, argb, pw->core, pw->pageIndex);
             FPDFText_ClosePage(tp);
             tp = nullptr;
             if (rc != JPDFIUM_OK) {
@@ -1376,8 +1381,8 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
         }
 
         std::vector<FPDF_PAGEOBJECT> paintedCovers;
-        int32_t rc =
-            objectFissionRedact(pw->doc, pw->page, tp, matches, argb, pw->core, &paintedCovers);
+        int32_t rc = objectFissionRedact(pw->doc, pw->page, tp, matches, argb, pw->core,
+                                         pw->pageIndex, &paintedCovers);
         FPDFText_ClosePage(tp);
 
         if (rc != JPDFIUM_OK) {

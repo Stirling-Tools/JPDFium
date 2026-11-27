@@ -504,18 +504,20 @@ int32_t applySanitizeStage(DocWrapper* w, std::vector<uint8_t>& bytes) {
 }
 
 // Every post-serialization stage, in order: erased gray images back to
-// /DeviceGray (best effort: PDFium's bytes are already complete), then the
-// opt-in sanitize pass. Only the buffered save path uses this; a gray-only
-// file save streams through the file-backed compaction instead.
+// /DeviceGray (best effort: PDFium's bytes are already complete), the
+// structure-tree text of redacted content (mandatory), then the opt-in
+// sanitize pass. Only the buffered save path uses this; a gray-only file save
+// streams through the file-backed compaction instead.
 int32_t applySaveStages(DocWrapper* w, std::vector<uint8_t>& bytes) {
     compactErasedGrayImages(*w->core, bytes);
+    if (!dropStructReplacementText(*w->core, bytes)) return JPDFIUM_ERR_REDACT_UNVERIFIABLE;
     return applySanitizeStage(w, bytes);
 }
 
-// True when a save needs the whole serialization for the in-memory sanitize
-// stage. Gray compaction is not a reason: it has a file-to-file path.
+// True when a save needs the whole serialization for an in-memory stage.
+// Gray compaction is not a reason: it has a file-to-file path.
 bool needsBufferedSaveStages(const DocCore& core) {
-    return core.contentRedacted && core.sanitizeOnSave;
+    return (core.contentRedacted && core.sanitizeOnSave) || !core.redactedMcids.empty();
 }
 
 }  // namespace
