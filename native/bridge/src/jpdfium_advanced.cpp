@@ -1098,6 +1098,48 @@ static std::string font_name_key(std::string name) {
     return key;
 }
 
+static bool font_name_is_subset_tagged(std::string name) {
+    if (!name.empty() && name.front() == '/') name.erase(name.begin());
+    return name.size() > 7 && name[6] == '+' &&
+           std::all_of(name.begin(), name.begin() + 6,
+                       [](unsigned char c) { return c >= 'A' && c <= 'Z'; });
+}
+
+static std::string make_font_subset_tag(std::string const& name, std::set<FT_UInt> const& glyphs) {
+    size_t hash = std::hash<std::string>{}(name);
+    for (FT_UInt g : glyphs) hash = hash * 31 + g;
+    std::string tag;
+    for (int i = 0; i < 6; ++i, hash /= 26) tag += static_cast<char>('A' + hash % 26);
+    return tag;
+}
+
+static QPDFObjectHandle embedded_font_program(QPDFObjectHandle const& descriptor) {
+    for (char const* key : {"/FontFile2", "/FontFile3", "/FontFile"}) {
+        QPDFObjectHandle candidate = descriptor.getKey(key);
+        if (candidate.isStream()) return candidate;
+    }
+    return QPDFObjectHandle();
+}
+
+static bool font_forbids_subsetting(FT_Face face) {
+    FT_ULong length = 0;
+    if (FT_Load_Sfnt_Table(face, FT_MAKE_TAG('O', 'S', '/', '2'), 0, nullptr, &length) ||
+        length < 10)
+        return false;
+    std::vector<uint8_t> os2(length);
+    FT_ULong loaded = length;
+    if (FT_Load_Sfnt_Table(face, FT_MAKE_TAG('O', 'S', '/', '2'), 0, os2.data(), &loaded) ||
+        loaded < 10)
+        return false;
+    const uint16_t fs_type = static_cast<uint16_t>((os2[8] << 8) | os2[9]);
+    return (fs_type & 0x0100) != 0;
+}
+
+static bool font_has_sfnt_table(FT_Face face, FT_ULong tag) {
+    FT_ULong length = 0;
+    return FT_Load_Sfnt_Table(face, tag, 0, nullptr, &length) == 0 && length > 0;
+}
+
 // A TrueType/OpenType collection exposes several faces behind one stream. Pick
 // the face whose PostScript or family name matches the PDF font name; callers
 // keep the returned index for hb_face_create.
@@ -1127,6 +1169,21 @@ static FT_Long select_collection_face(FT_Library lib, const uint8_t* data, size_
         if (matched) return i;
     }
     return 0;
+}
+
+static FT_Face load_font_face(FT_Library lib, std::string const& bytes, FT_Long preferred_index) {
+    if (bytes.empty()) return nullptr;
+    FT_Face face = nullptr;
+    if (FT_New_Memory_Face(lib, reinterpret_cast<const FT_Byte*>(bytes.data()),
+                           static_cast<FT_Long>(bytes.size()), preferred_index, &face) == 0 &&
+        face)
+        return face;
+    if (preferred_index != 0 &&
+        FT_New_Memory_Face(lib, reinterpret_cast<const FT_Byte*>(bytes.data()),
+                           static_cast<FT_Long>(bytes.size()), 0, &face) == 0 &&
+        face)
+        return face;
+    return nullptr;
 }
 
 // Minimal content-stream scanner: track the selected font across Tf/q/Q and
@@ -1685,6 +1742,58 @@ static FnCidScan fn_used_cids_for_font(QPDF& pdf, QPDFObjectHandle const& font, 
     return result;
 }
 
+static std::string fn_subset_sfnt(FT_Library lib, const uint8_t* data, size_t size,
+                                  FT_Long face_index, std::set<FT_UInt> const& glyphs,
+                                  FT_Face face) {
+    (void)lib;
+    if (!data || size == 0 || size > std::numeric_limits<unsigned int>::max()) return {};
+    hb_blob_t* blob =
+        hb_blob_create(reinterpret_cast<const char*>(data), static_cast<unsigned int>(size),
+                       HB_MEMORY_MODE_READONLY, nullptr, nullptr);
+    hb_face_t* hb_face = hb_face_create(blob, static_cast<unsigned int>(face_index));
+    hb_blob_destroy(blob);
+    std::string out;
+    if (hb_subset_input_t* input = hb_subset_input_create_or_fail()) {
+        for (FT_UInt g : glyphs) hb_set_add(hb_subset_input_glyph_set(input), g);
+        FT_UInt gid = 0;
+        if (!FT_Select_Charmap(face, FT_ENCODING_UNICODE)) {
+            for (FT_ULong u = FT_Get_First_Char(face, &gid); gid;
+                 u = FT_Get_Next_Char(face, u, &gid))
+                if (glyphs.contains(gid)) hb_set_add(hb_subset_input_unicode_set(input), u);
+        }
+        hb_subset_input_set_flags(input, HB_SUBSET_FLAGS_RETAIN_GIDS | HB_SUBSET_FLAGS_GLYPH_NAMES |
+                                             HB_SUBSET_FLAGS_NOTDEF_OUTLINE);
+        if (hb_face_t* subset = hb_subset_or_fail(hb_face, input)) {
+            hb_blob_t* result = hb_face_reference_blob(subset);
+            unsigned int length = 0;
+            const char* bytes = hb_blob_get_data(result, &length);
+            if (bytes) out.assign(bytes, length);
+            hb_blob_destroy(result);
+            hb_face_destroy(subset);
+        }
+        hb_subset_input_destroy(input);
+    }
+    hb_face_destroy(hb_face);
+    return out;
+}
+
+static bool fn_subset_keeps_advances(FT_Library lib, std::string const& subset, FT_Long face_index,
+                                     FT_Face original, std::set<FT_UInt> const& glyphs) {
+    FT_Face face = load_font_face(lib, subset, face_index);
+    if (!face) return false;
+    bool same = face->num_glyphs > 0;
+    for (FT_UInt gid : glyphs) {
+        if (!same) break;
+        FT_Fixed before = 0;
+        FT_Fixed after = 0;
+        if (FT_Get_Advance(original, gid, FT_LOAD_NO_SCALE, &before) ||
+            FT_Get_Advance(face, gid, FT_LOAD_NO_SCALE, &after) || before != after)
+            same = false;
+    }
+    FT_Done_Face(face);
+    return same;
+}
+
 static std::string build_cid_set_bits(std::set<uint32_t> const& cids) {
     uint32_t max_cid = 0;
     for (uint32_t c : cids)
@@ -1696,6 +1805,11 @@ static std::string build_cid_set_bits(std::set<uint32_t> const& cids) {
     return bits;
 }
 
+struct FontUsageCounts {
+    std::map<QPDFObjGen, int> descriptors;
+    std::map<QPDFObjGen, int> streams;
+};
+
 struct FontNormalizeState {
     int32_t fonts_processed = 0;
     int32_t tuc_fixed = 0;
@@ -1704,6 +1818,21 @@ struct FontNormalizeState {
     int32_t resubset = 0;
     bool changed = false;
 };
+
+static void count_font_usage(QPDFObjectHandle const& font, std::set<QPDFObjGen>& counted,
+                             FontUsageCounts& usage) {
+    if (font.isIndirect() && !counted.insert(font.getObjGen()).second) return;
+    QPDFObjectHandle target = font;
+    QPDFObjectHandle descendants = font.getKey("/DescendantFonts");
+    if (descendants.isArray() && descendants.getArrayNItems() > 0 &&
+        descendants.getArrayItem(0).isDictionary())
+        target = descendants.getArrayItem(0);
+    QPDFObjectHandle descriptor = target.getKey("/FontDescriptor");
+    if (!descriptor.isDictionary()) return;
+    if (descriptor.isIndirect()) ++usage.descriptors[descriptor.getObjGen()];
+    QPDFObjectHandle program = embedded_font_program(descriptor);
+    if (program.isIndirect()) ++usage.streams[program.getObjGen()];
+}
 
 // Synthesize a missing or boilerplate-only /ToUnicode CMap from the resolved
 // glyph-to-Unicode mapping when the mapping is unambiguous.
@@ -1962,6 +2091,165 @@ static void repair_cid_font_widths(QPDFObjectHandle& font, QPDFObjectHandle& tar
 
 // Convert a CFF-in-SFNT (OTTO) program into a bare CFF stream (/Type1C or /CIDFontType0C)
 // when attached to a /Type1, /MMType1, or /CIDFontType0 dictionary.
+static void convert_cff_in_sfnt(QPDF& pdf, QPDFObjectHandle& target, QPDFObjectHandle& descriptor,
+                                std::unique_ptr<FT_FaceRec, decltype(&FT_Done_Face)>& face,
+                                bool cid, std::string const& subtype_name,
+                                FontNormalizeState& state) {
+    if (!FT_IS_SFNT(face.get()) ||
+        !font_has_sfnt_table(face.get(), FT_MAKE_TAG('C', 'F', 'F', ' ')) ||
+        font_has_sfnt_table(face.get(), FT_MAKE_TAG('g', 'l', 'y', 'f')))
+        return;
+    const bool simple_type1 = !cid && (subtype_name == "/Type1" || subtype_name == "/MMType1");
+    const bool cid_type0 = cid && target.getKey("/Subtype").isNameAndEquals("/CIDFontType0");
+    if (!simple_type1 && !cid_type0) return;
+
+    FT_ULong table_length = 0;
+    if (FT_Load_Sfnt_Table(face.get(), FT_MAKE_TAG('C', 'F', 'F', ' '), 0, nullptr,
+                           &table_length) != 0 ||
+        table_length == 0)
+        return;
+    std::string cff(static_cast<size_t>(table_length), '\0');
+    FT_ULong loaded = table_length;
+    if (FT_Load_Sfnt_Table(face.get(), FT_MAKE_TAG('C', 'F', 'F', ' '), 0,
+                           reinterpret_cast<FT_Byte*>(cff.data()), &loaded) != 0 ||
+        loaded != table_length)
+        return;
+
+    FT_Face cff_face = nullptr;
+    bool valid = FT_New_Memory_Face(ft_lib, reinterpret_cast<const FT_Byte*>(cff.data()),
+                                    static_cast<FT_Long>(cff.size()), 0, &cff_face) == 0 &&
+                 cff_face;
+    if (valid && !cid) valid = FT_HAS_GLYPH_NAMES(cff_face) != 0;
+    if (cff_face) FT_Done_Face(cff_face);
+    if (!valid) return;
+
+    for (char const* key : {"/FontFile", "/FontFile2", "/FontFile3"}) descriptor.removeKey(key);
+    QPDFObjectHandle cff_stream = QPDFObjectHandle::newStream(&pdf, cff);
+    cff_stream.getDict().replaceKey("/Subtype",
+                                    QPDFObjectHandle::newName(cid ? "/CIDFontType0C" : "/Type1C"));
+    descriptor.replaceKey("/FontFile3", cff_stream);
+    if (FT_Face reloaded = load_font_face(ft_lib, cff, 0)) face.reset(reloaded);
+    ++state.type1_converted;
+    state.changed = true;
+}
+
+// Re-subset an embedded SFNT program or multi-face collection to the glyphs drawn
+// in the document when all referencing content streams scan cleanly.
+static bool resubset_embedded_sfnt(QPDF& pdf, QPDFObjectHandle& font, QPDFObjectHandle& target,
+                                   QPDFObjectHandle& descriptor, QPDFObjectHandle const& stream,
+                                   std::shared_ptr<Buffer> const& data, FT_Long face_index,
+                                   std::unique_ptr<FT_FaceRec, decltype(&FT_Done_Face)>& face,
+                                   bool cid, QPDFObjectHandle& cid_to_gid, bool cid_identity,
+                                   std::vector<SimpleGlyph> const& simple_glyphs,
+                                   FontUsageCounts const& usage, std::set<uint32_t>& active_cids,
+                                   bool& have_active_cids, FontNormalizeState& state) {
+    if (face->num_glyphs <= 1 || !FT_IS_SFNT(face.get()) ||
+        font_has_sfnt_table(face.get(), FT_MAKE_TAG('C', 'F', 'F', '2')) ||
+        font_forbids_subsetting(face.get()))
+        return false;
+
+    QPDFObjectHandle base_font = target.getKey("/BaseFont");
+    if (!base_font.isName()) base_font = font.getKey("/BaseFont");
+    std::string base_name = base_font.isName() ? base_font.getName() : std::string();
+    if (!base_name.empty() && base_name.front() == '/') base_name.erase(base_name.begin());
+
+    QPDFObjectHandle desc_name = descriptor.getKey("/FontName");
+    std::string descriptor_name = desc_name.isName() ? desc_name.getName() : std::string();
+    if (!descriptor_name.empty() && descriptor_name.front() == '/')
+        descriptor_name.erase(descriptor_name.begin());
+
+    const bool is_ttc = data->getSize() >= 4 && std::memcmp(data->getBuffer(), "ttcf", 4) == 0;
+    const bool tagged =
+        font_name_is_subset_tagged(base_name) || font_name_is_subset_tagged(descriptor_name);
+    if (font_name_is_subset_tagged(base_name)) base_name.erase(0, 7);
+    const bool shared =
+        (descriptor.isIndirect() && usage.descriptors.contains(descriptor.getObjGen()) &&
+         usage.descriptors.at(descriptor.getObjGen()) > 1) ||
+        (stream.isIndirect() && usage.streams.contains(stream.getObjGen()) &&
+         usage.streams.at(stream.getObjGen()) > 1);
+    if ((!is_ttc && tagged) || shared || base_name.empty()) return false;
+
+    std::set<FT_UInt> target_glyphs{0};
+    std::set<uint32_t> used_active{0};
+    if (cid) {
+        FnCidScan scan = fn_used_cids_for_font(pdf, font, true);
+        if (!scan.complete || scan.cids.empty()) return false;
+        std::shared_ptr<Buffer> cid_map;
+        if (!cid_identity) {
+            if (!cid_to_gid.isStream()) return false;
+            try {
+                cid_map = cid_to_gid.getStreamData(qpdf_dl_generalized);
+            } catch (...) {
+                return false;
+            }
+            if (!cid_map) return false;
+        }
+        const auto* map_bytes =
+            cid_map ? static_cast<const uint8_t*>(cid_map->getBuffer()) : nullptr;
+        for (uint32_t c : scan.cids) {
+            uint32_t gid = c;
+            if (!cid_identity) {
+                if (!map_bytes || cid_map->getSize() < 2 * (static_cast<size_t>(c) + 1))
+                    return false;
+                gid = (static_cast<uint32_t>(map_bytes[2 * c]) << 8) | map_bytes[2 * c + 1];
+            }
+            if (gid >= static_cast<uint32_t>(face->num_glyphs)) return false;
+            target_glyphs.insert(static_cast<FT_UInt>(gid));
+            used_active.insert(c);
+        }
+    } else {
+        FnCidScan scan = fn_used_cids_for_font(pdf, font, false);
+        if (!scan.complete || scan.cids.empty()) return false;
+        for (uint32_t code : scan.cids) {
+            if (code < simple_glyphs.size()) target_glyphs.insert(simple_glyphs[code].gid);
+            if (code < 256) {
+                for (BaseEncoding encoding :
+                     {BaseEncoding::Standard, BaseEncoding::WinAnsi, BaseEncoding::MacRoman}) {
+                    FT_UInt glyph = FT_Get_Char_Index(
+                        face.get(), baseEncodingUnicode(encoding, static_cast<int>(code)));
+                    if (glyph) target_glyphs.insert(glyph);
+                }
+            }
+        }
+    }
+
+    if (target_glyphs.size() <= 1 || target_glyphs.size() >= static_cast<size_t>(face->num_glyphs))
+        return false;
+
+    std::string subset = fn_subset_sfnt(ft_lib, data->getBuffer(), data->getSize(), face_index,
+                                        target_glyphs, face.get());
+    if (subset.empty() || subset.size() >= data->getSize() ||
+        !fn_subset_keeps_advances(ft_lib, subset, face_index, face.get(), target_glyphs))
+        return false;
+
+    const std::string tag = make_font_subset_tag(base_name, target_glyphs);
+    QPDFObjectHandle tagged_name = QPDFObjectHandle::newName("/" + tag + "+" + base_name);
+    font.replaceKey("/BaseFont", tagged_name);
+    target.replaceKey("/BaseFont", tagged_name);
+    descriptor.replaceKey("/FontName", tagged_name);
+
+    const bool has_glyf = font_has_sfnt_table(face.get(), FT_MAKE_TAG('g', 'l', 'y', 'f'));
+    for (char const* key : {"/FontFile", "/FontFile2", "/FontFile3"}) descriptor.removeKey(key);
+    QPDFObjectHandle replacement = QPDFObjectHandle::newStream(&pdf, subset);
+    auto replacement_dict = replacement.getDict();
+    if (has_glyf) {
+        replacement_dict.replaceKey(
+            "/Length1", QPDFObjectHandle::newInteger(static_cast<long long>(subset.size())));
+        descriptor.replaceKey("/FontFile2", replacement);
+    } else {
+        replacement_dict.replaceKey("/Subtype", QPDFObjectHandle::newName("/OpenType"));
+        descriptor.replaceKey("/FontFile3", replacement);
+    }
+    if (FT_Face reloaded = load_font_face(ft_lib, subset, face_index)) face.reset(reloaded);
+    ++state.resubset;
+    state.changed = true;
+    if (cid) {
+        active_cids = used_active;
+        have_active_cids = true;
+    }
+    return true;
+}
+
 // Repair or synthesize /CIDSet on a CIDFont descriptor so its bitset matches the drawn CIDs.
 static void repair_cidset_stream(QPDF& pdf, QPDFObjectHandle& font, QPDFObjectHandle& descriptor,
                                  bool did_resubset, bool have_active_cids,
@@ -1999,7 +2287,8 @@ static void repair_cidset_stream(QPDF& pdf, QPDFObjectHandle& font, QPDFObjectHa
 
 // Normalize a single PDF font dictionary across ToUnicode, widths, CFF packaging, and subsetting.
 static void process_font(QPDF& pdf, QPDFObjectHandle font, bool do_fix_tounicode,
-                         bool do_repair_widths, FontNormalizeState& state) {
+                         bool do_repair_widths, FontUsageCounts const& usage,
+                         FontNormalizeState& state) {
     QPDFObjectHandle subtype = font.getKey("/Subtype");
     if (!subtype.isName()) return;
     const std::string subtype_name = subtype.getName();
@@ -2154,10 +2443,19 @@ static void process_font(QPDF& pdf, QPDFObjectHandle font, bool do_fix_tounicode
         }
     }
 
-    (void)stream;
+    const bool full = do_fix_tounicode && do_repair_widths;
+    if (full) {
+        convert_cff_in_sfnt(pdf, target, descriptor, face, cid, subtype_name, state);
+    }
     std::set<uint32_t> active_cids{0};
+    bool have_active_cids = false;
+    const bool did_resubset =
+        full && resubset_embedded_sfnt(pdf, font, target, descriptor, stream, data, face_index,
+                                       face, cid, cid_to_gid, cid_identity, simple_glyphs, usage,
+                                       active_cids, have_active_cids, state);
     if (cid) {
-        repair_cidset_stream(pdf, font, descriptor, false, false, active_cids, state);
+        repair_cidset_stream(pdf, font, descriptor, did_resubset, have_active_cids, active_cids,
+                             state);
     }
 }
 
@@ -2190,6 +2488,21 @@ static int32_t font_normalize_qpdf(DocWrapper* w, int32_t page_index, bool do_fi
         std::vector<QPDFObjectHandle> pages = pdf.getAllPages();
         if (page_index >= static_cast<int>(pages.size())) return JPDFIUM_ERR_INVALID;
 
+        // Count how often each descriptor and embedded program is referenced
+        // before touching anything. A program shared by several font
+        // dictionaries is never rewritten, because the other dictionaries
+        // would keep pointing at the stale glyph set.
+        FontUsageCounts usage;
+        {
+            std::set<QPDFObjGen> counted;
+            for (auto& page : pages) {
+                std::set<QPDFObjGen> seen_resources;
+                std::set<QPDFObjGen> seen_fonts;
+                for (auto& font : collect_page_fonts(page, seen_resources, seen_fonts))
+                    count_font_usage(font, counted, usage);
+            }
+        }
+
         FontNormalizeState state;
 
         // page_index == -1 means every page in one qpdf pass. Shared resources
@@ -2202,7 +2515,7 @@ static int32_t font_normalize_qpdf(DocWrapper* w, int32_t page_index, bool do_fi
                     collect_page_fonts(page, seen_resources, seen_fonts);
                 for (auto& font : fonts) {
                     try {
-                        process_font(pdf, font, do_fix_tounicode, do_repair_widths, state);
+                        process_font(pdf, font, do_fix_tounicode, do_repair_widths, usage, state);
                     } catch (...) {
                         // One malformed font must not abort the rest of the document.
                     }
@@ -2216,7 +2529,7 @@ static int32_t font_normalize_qpdf(DocWrapper* w, int32_t page_index, bool do_fi
                                    seen_resources, seen_fonts, form_streams, form_fonts);
             for (auto& font : form_fonts) {
                 try {
-                    process_font(pdf, font, do_fix_tounicode, do_repair_widths, state);
+                    process_font(pdf, font, do_fix_tounicode, do_repair_widths, usage, state);
                 } catch (...) {
                     // One malformed font must not abort the rest of the document.
                 }
@@ -2228,7 +2541,7 @@ static int32_t font_normalize_qpdf(DocWrapper* w, int32_t page_index, bool do_fi
                 collect_page_fonts(pages[page_index], seen_resources, seen_fonts);
             for (auto& font : fonts) {
                 try {
-                    process_font(pdf, font, do_fix_tounicode, do_repair_widths, state);
+                    process_font(pdf, font, do_fix_tounicode, do_repair_widths, usage, state);
                 } catch (...) {
                     // One malformed font must not abort the rest of the page.
                 }
