@@ -41,6 +41,7 @@ import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.exception.JPDFiumException;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -772,8 +773,72 @@ class PdfXConverterTest {
                 .build();
         byte[] out = PdfXConverter.applyMetadata(withTrappedTrue, options);
         try (PDDocument doc = Loader.loadPDF(out)) {
+            // PDF/X permits both values; an existing true claim must survive.
             assertEquals("True", doc.getDocumentInformation().getTrapped());
         }
+    }
+
+    /**
+     * Hand-built PDF with an orphan signature dictionary that no AcroForm
+     * widget references, so PDFium's signature enumeration cannot see it.
+     * The raw /ByteRange scan must still refuse the conversion.
+     */
+    private static byte[] pdfWithOrphanSignatureDictionary() {
+        String[] objects = {
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>",
+            "<< /Type /Sig /ByteRange [0 100 200 50] /Contents (deadbeef) >>",
+        };
+        StringBuilder out = new StringBuilder("%PDF-1.4\n");
+        int[] offsets = new int[objects.length + 1];
+        for (int i = 0; i < objects.length; i++) {
+            offsets[i + 1] = out.length();
+            out.append(i + 1).append(" 0 obj\n").append(objects[i]).append("\nendobj\n");
+        }
+        int xrefPos = out.length();
+        out.append("xref\n0 ").append(offsets.length).append("\n0000000000 65535 f \n");
+        for (int i = 1; i < offsets.length; i++) {
+            out.append(String.format("%010d 00000 n \n", offsets[i]));
+        }
+        out.append("trailer\n<< /Size ").append(offsets.length)
+                .append(" /Root 1 0 R >>\nstartxref\n").append(xrefPos).append("\n%%EOF\n");
+        return out.toString().getBytes(StandardCharsets.US_ASCII);
+    }
+
+    @Test
+    void orphanSignatureDictionaryStillRefusesConversion() throws Exception {
+        assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
+        byte[] input = pdfWithOrphanSignatureDictionary();
+        PdfXOptions options = PdfXOptions.builder()
+                .standard(PdfXStandard.PDF_X_4)
+                .useCompactCmyk()
+                .title("Orphan Sig")
+                .build();
+        JPDFiumException refused = assertThrows(JPDFiumException.class,
+                () -> PdfXConverter.applyMetadata(input, options));
+        assertTrue(refused.getMessage().contains("signature"),
+                "refusal must name the signature: " + refused.getMessage());
+    }
+
+    @Test
+    void markerTextIsNotTreatedAsSignature() throws Exception {
+        assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
+        byte[] input = Files.readAllBytes(resource("/pdfs/general/minimal.pdf"));
+        byte[] withMarker;
+        try (PDDocument doc = Loader.loadPDF(input)) {
+            doc.getDocumentInformation().setSubject("Understanding /ByteRange");
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            doc.save(baos);
+            withMarker = baos.toByteArray();
+        }
+        PdfXOptions options = PdfXOptions.builder()
+                .standard(PdfXStandard.PDF_X_4)
+                .useCompactCmyk()
+                .title("Marker Text")
+                .build();
+        assertDoesNotThrow(() -> PdfXConverter.applyMetadata(withMarker, options),
+                "document text mentioning /ByteRange is not a signature");
     }
 
     @Test

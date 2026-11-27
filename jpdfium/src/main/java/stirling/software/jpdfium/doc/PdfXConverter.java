@@ -171,6 +171,57 @@ public final class PdfXConverter {
         return false;
     }
 
+    /** ISO 32000 signature dictionaries announce themselves with /ByteRange. */
+    private static final byte[] BYTE_RANGE = "/ByteRange".getBytes(StandardCharsets.US_ASCII);
+
+    /**
+     * Fails closed on a raw {@code /ByteRange} marker anywhere in the bytes.
+     * PDFium's signature enumeration only reports signatures it recognizes
+     * (AcroForm signature fields); a dictionary it cannot see would let the
+     * rewrite silently invalidate a real signature.
+     */
+    private static void requireNotSignedByRawScan(byte[] input) {
+        outer:
+        for (int i = 0; i + BYTE_RANGE.length <= input.length; i++) {
+            for (int j = 0; j < BYTE_RANGE.length; j++) {
+                if (input[i + j] != BYTE_RANGE[j]) continue outer;
+            }
+            if (!byteRangeArrayAt(input, i + BYTE_RANGE.length)) continue;
+            throw new JPDFiumException("PDF/X conversion rewrites the document and would invalidate"
+                    + " its digital signature; remove the signature first");
+        }
+    }
+
+    /** A signature /ByteRange is a direct array of four non-negative integers. */
+    private static boolean byteRangeArrayAt(byte[] input, int pos) {
+        pos = skipPdfSpace(input, pos);
+        if (pos >= input.length || input[pos] != '[') return false;
+        pos++;
+        for (int i = 0; i < 4; i++) {
+            pos = skipPdfSpace(input, pos);
+            if (pos >= input.length || input[pos] < '0' || input[pos] > '9') return false;
+            long value = 0;
+            while (pos < input.length && input[pos] >= '0' && input[pos] <= '9') {
+                value = value * 10 + (input[pos++] - '0');
+                if (value > Integer.MAX_VALUE) return false;
+            }
+        }
+        pos = skipPdfSpace(input, pos);
+        return pos < input.length && input[pos] == ']';
+    }
+
+    private static int skipPdfSpace(byte[] input, int pos) {
+        for (;;) {
+            while (pos < input.length
+                    && (input[pos] == ' ' || input[pos] == '\t' || input[pos] == '\r'
+                            || input[pos] == '\n' || input[pos] == '\f')) {
+                pos++;
+            }
+            if (pos >= input.length || input[pos] != '%') return pos;
+            while (pos < input.length && input[pos] != '\n' && input[pos] != '\r') pos++;
+        }
+    }
+
     private static void applyFontData(Path pdf, PdfXOptions options) throws IOException {
         byte[] withFonts = PdfFontEmbedder.embed(Files.readAllBytes(pdf), options.fontData());
         Files.write(pdf, withFonts);
@@ -258,6 +309,8 @@ public final class PdfXConverter {
     }
 
     private static void applyDocumentInfo(PdfDocument document, PdfXOptions options) {
+        // PDF/X permits both /Trapped true and false. Preserve an existing true
+        // claim and normalize only absent or unknown values.
         if (document.getTrapped() != DocBindings.PDFTRAPPED_TRUE) {
             document.setTrappedFalse();
         }
@@ -327,6 +380,7 @@ public final class PdfXConverter {
         if (input == null || input.length == 0) {
             throw new JPDFiumException("PDF/X metadata requires non-empty PDF bytes");
         }
+        requireNotSignedByRawScan(input);
         requireSupported(options);
         try (PdfDocument source = PdfDocument.open(input)) {
             prepare(source, options);

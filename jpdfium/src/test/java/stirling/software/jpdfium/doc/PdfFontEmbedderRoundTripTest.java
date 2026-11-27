@@ -114,7 +114,7 @@ class PdfFontEmbedderRoundTripTest {
                             pdf.getFileName() + " page " + i + " renders differently after re-embedding");
                 }
             }
-            for (var font : PdfFontAuditor.audit(actual).nonEmbeddedFonts()) {
+            for (var font : PdfFontAuditor.auditAll(actual).nonEmbeddedFonts()) {
                 assertTrue(!programs.containsKey(font.baseName()), font.baseName() + " was not re-embedded");
             }
         }
@@ -140,7 +140,7 @@ class PdfFontEmbedderRoundTripTest {
         boolean cidTextMapped = type0FontsWithToUnicode(result.pdf()) > type0FontsWithToUnicode(input);
         try (PdfDocument before = PdfDocument.open(input); PdfDocument after = PdfDocument.open(result.pdf())) {
             assertEquals(before.pageCount(), after.pageCount());
-            assertEquals(result.unresolved(), PdfFontAuditor.audit(after).nonEmbeddedFonts().stream()
+            assertEquals(result.unresolved(), PdfFontAuditor.auditAll(after).nonEmbeddedFonts().stream()
                     .map(PdfFontAuditor.FontInfo::baseName).distinct().toList());
             long changed = 0, total = 0;
             for (int i = 0; i < Math.min(before.pageCount(), 8); i++) {
