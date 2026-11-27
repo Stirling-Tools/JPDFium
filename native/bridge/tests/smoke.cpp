@@ -8,6 +8,7 @@
 
 #include "jpdfium.h"
 #include "jpdfium_font_encoding.h"
+#include "jpdfium_rust.h"
 
 namespace {
 
@@ -410,6 +411,149 @@ static void runFontEncodingChecks() {
     CHECK(baseEncodingUnicode(BaseEncoding::MacRoman, 1000) == kUnmapped, "code 1000");
 }
 
+void runRepairEdgeChecks() {
+    // 1. Broken /Pages tree (/Kids [] /Count 0) must be rebuilt from orphan /Page leaves.
+    {
+        std::string broken = "%PDF-1.4\n";
+        size_t o1 = broken.size();
+        broken += "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n";
+        size_t o2 = broken.size();
+        broken += "2 0 obj\n<< /Type /Pages /Kids [] /Count 0 /MediaBox [0 0 200 200] >>\nendobj\n";
+        size_t o3 = broken.size();
+        broken += "3 0 obj\n<< /Type /Page /Parent 2 0 R /Resources << >> >>\nendobj\n";
+        size_t o4 = broken.size();
+        broken += "4 0 obj\n<< /Type /Page /Parent 2 0 R /Resources << >> >>\nendobj\n";
+        size_t xOff = broken.size();
+        char xb[320];
+        std::snprintf(xb, sizeof(xb),
+                      "xref\n0 5\n0000000000 65535 f \n%010zu 00000 n \n%010zu 00000 n \n"
+                      "%010zu 00000 n \n%010zu 00000 n \ntrailer\n<< /Root 1 0 R /Size 5 >>\n"
+                      "startxref\n%zu\n%%%%EOF\n",
+                      o1, o2, o3, o4, xOff);
+        broken += xb;
+
+        uint8_t* repaired = nullptr;
+        int64_t repairedLen = 0;
+        int32_t rc = jpdfium_repair_pdf(
+            reinterpret_cast<const uint8_t*>(broken.data()), static_cast<int64_t>(broken.size()),
+            &repaired, &repairedLen, JPDFIUM_REPAIR_NORMALIZE_XREF | JPDFIUM_REPAIR_FIX_STARTXREF);
+        CHECK(rc >= 0 && repaired != nullptr && repairedLen > 0,
+              "repair broken /Pages tree returns output");
+        if (repaired != nullptr && repairedLen > 0) {
+            int64_t doc = 0;
+            CHECK(jpdfium_doc_open_bytes(repaired, repairedLen, &doc) == JPDFIUM_OK,
+                  "repaired broken /Pages opens");
+            if (doc != 0) {
+                int32_t pages = 0;
+                CHECK(jpdfium_doc_page_count(doc, &pages) == JPDFIUM_OK && pages == 2,
+                      "repaired broken /Pages has 2 pages");
+                jpdfium_doc_close(doc);
+            }
+            jpdfium_free_buffer(repaired);
+        }
+    }
+
+    // 2. Truncated incremental update with >4 KiB tail and no trailing %%EOF must still recover.
+    {
+        std::string pdf;
+        pdf += "%PDF-1.4\n";
+        size_t off1 = pdf.size();
+        pdf += "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n";
+        size_t off2 = pdf.size();
+        pdf += "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n";
+        size_t off3 = pdf.size();
+        pdf += "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>\nendobj\n";
+        size_t xrefOff = pdf.size();
+        char xrefBuf[256];
+        std::snprintf(xrefBuf, sizeof(xrefBuf),
+                      "xref\n0 4\n0000000000 65535 f \n%010zu 00000 n \n%010zu 00000 n \n"
+                      "%010zu 00000 n \ntrailer\n<< /Root 1 0 R /Size 4 >>\nstartxref\n%zu\n"
+                      "%%%%EOF\n",
+                      off1, off2, off3, xrefOff);
+        pdf += xrefBuf;
+        // Append > 4 KiB unclosed incremental object tail without endstream/endobj/%%EOF.
+        pdf += "\n4 0 obj\n<< /Length 5000 >>\nstream\n";
+        pdf.append(4800, 'A');
+
+        uint8_t* repaired = nullptr;
+        int64_t repairedLen = 0;
+        int32_t rc = jpdfium_repair_pdf(
+            reinterpret_cast<const uint8_t*>(pdf.data()), static_cast<int64_t>(pdf.size()),
+            &repaired, &repairedLen, JPDFIUM_REPAIR_NORMALIZE_XREF | JPDFIUM_REPAIR_FIX_STARTXREF);
+        CHECK(rc >= 0 && repaired != nullptr && repairedLen > 0,
+              "repair truncated >4KiB incremental update returns output");
+        if (repaired != nullptr && repairedLen > 0) {
+            int64_t doc = 0;
+            CHECK(jpdfium_doc_open_bytes(repaired, repairedLen, &doc) == JPDFIUM_OK,
+                  "repaired >4KiB truncated incremental update opens");
+            if (doc != 0) {
+                int32_t pages = 0;
+                CHECK(jpdfium_doc_page_count(doc, &pages) == JPDFIUM_OK && pages == 1,
+                      "repaired >4KiB truncated incremental update preserves page count");
+                jpdfium_doc_close(doc);
+            }
+            jpdfium_free_buffer(repaired);
+        }
+    }
+
+    // 3. Every native rewrite route must refuse a signed document instead of
+    // silently invalidating its /ByteRange digest.
+    {
+        std::string pdf = "%PDF-1.4\n";
+        size_t o1 = pdf.size();
+        pdf += "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n";
+        size_t o2 = pdf.size();
+        pdf += "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n";
+        size_t o3 = pdf.size();
+        pdf += "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>\nendobj\n";
+        size_t o4 = pdf.size();
+        pdf +=
+            "4 0 obj\n<< /Type /Sig /Filter /Adobe.PPKLite /ByteRange [0 100 100 100] "
+            "/Contents <00> >>\nendobj\n";
+        size_t xOff = pdf.size();
+        char xb[320];
+        std::snprintf(xb, sizeof(xb),
+                      "xref\n0 5\n0000000000 65535 f \n%010zu 00000 n \n%010zu 00000 n \n"
+                      "%010zu 00000 n \n%010zu 00000 n \ntrailer\n<< /Root 1 0 R /Size 5 >>\n"
+                      "startxref\n%zu\n%%%%EOF\n",
+                      o1, o2, o3, o4, xOff);
+        pdf += xb;
+
+        uint8_t* out = nullptr;
+        int64_t outLen = 0;
+        int32_t rc = jpdfium_repair_pdf(reinterpret_cast<const uint8_t*>(pdf.data()),
+                                        static_cast<int64_t>(pdf.size()), &out, &outLen,
+                                        0x7 /* all repair flags */);
+        CHECK(rc == JPDFIUM_REPAIR_FAILED && out == nullptr,
+              "repair refuses a signed document instead of rewriting it");
+
+        out = nullptr;
+        outLen = 0;
+        int32_t oc = jpdfium_qpdf_optimize_ex(reinterpret_cast<const uint8_t*>(pdf.data()),
+                                              static_cast<int64_t>(pdf.size()), &out, &outLen, 0,
+                                              -1, -1, -1, -1, -1);
+        CHECK(oc == -1 && out == nullptr, "qpdf optimize refuses a signed document");
+
+        out = nullptr;
+        outLen = 0;
+        int32_t pages = 0;
+        int32_t pc =
+            jpdfium_pdfio_try_repair(reinterpret_cast<const uint8_t*>(pdf.data()),
+                                     static_cast<int64_t>(pdf.size()), &out, &outLen, &pages);
+        CHECK((pc == JPDFIUM_REPAIR_FAILED || pc == JPDFIUM_ERR_NATIVE) && out == nullptr,
+              "pdfio repair refuses a signed document");
+
+        if (jpdfium_has_rust() == 1) {
+            out = nullptr;
+            outLen = 0;
+            int32_t rr = jpdfium_rust_repair_lopdf(reinterpret_cast<const uint8_t*>(pdf.data()),
+                                                   static_cast<int64_t>(pdf.size()), &out, &outLen);
+            CHECK(rr == JPDFIUM_REPAIR_FAILED && out == nullptr,
+                  "rust lopdf repair refuses a signed document");
+        }
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -422,6 +566,7 @@ int main() {
     if (isRealBridge()) {
         std::puts("native_smoke: real bridge detected, running boundary checks too");
         runBoundaryChecks();
+        runRepairEdgeChecks();
     } else {
         std::puts("native_smoke: stub bridge detected");
     }

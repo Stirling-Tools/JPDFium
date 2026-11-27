@@ -769,6 +769,15 @@ QpdfResult optimize(std::span<const uint8_t> input, OptimizeOptions const& optio
         auto qpdf = QPDF::create();
         qpdf->processMemoryFile("jpdfium-input", reinterpret_cast<const char*>(input.data()),
                                 input.size());
+        // Rewriting a signed document always breaks its /ByteRange digest. The
+        // Java compressor passes signed documents through untouched; refuse them
+        // here so direct native callers cannot silently invalidate signatures.
+        // Unlike the fonts entries there is no stripSignatures opt-in: callers
+        // who really want this can drop the signature objects themselves first.
+        if (jpdfium::qpdf_detail::pdfHasDigitalSignature(*qpdf)) {
+            return {nullptr,
+                    "signed document cannot be optimized without invalidating its signature"};
+        }
         int32_t jbig2Replaced = applyDocumentOptions(*qpdf, options);
 
         QPDFWriter w{*qpdf};
@@ -840,6 +849,13 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_optimize_ex_file(const char* in_path, const 
 
         auto qpdf = QPDF::create();
         qpdf->processFile(in_path);
+        // Same signed-document refusal as the memory route; the file route
+        // rewrites the whole document through writeToFile.
+        if (jpdfium::qpdf_detail::pdfHasDigitalSignature(*qpdf)) {
+            std::fprintf(stderr,
+                         "jpdfium qpdf optimize file: signed document cannot be optimized\n");
+            return -1;
+        }
         return writeToFile(qpdf, out_path, options);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "jpdfium qpdf optimize file: %s\n", e.what());
