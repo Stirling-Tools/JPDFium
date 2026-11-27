@@ -752,6 +752,43 @@ class PdfRepairTest {
     }
 
     @Test
+    void sanitizeOptionRemovesCatalogJavaScript() throws Exception {
+        Assumptions.assumeTrue(NativeRuntime.isFull(), "Requires full native repair bridge");
+        Assumptions.assumeTrue(PdfSanitizer.isSupported(), "qpdf sanitize stage unavailable");
+        byte[] input;
+        try (PDDocument doc = new PDDocument();
+                java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream()) {
+            doc.addPage(new org.apache.pdfbox.pdmodel.PDPage());
+            org.apache.pdfbox.cos.COSDictionary action =
+                    new org.apache.pdfbox.cos.COSDictionary();
+            action.setItem(org.apache.pdfbox.cos.COSName.S,
+                    org.apache.pdfbox.cos.COSName.getPDFName("JavaScript"));
+            action.setString(org.apache.pdfbox.cos.COSName.JS, "app.alert('repair')");
+            doc.getDocumentCatalog().getCOSObject()
+                    .setItem(org.apache.pdfbox.cos.COSName.OPEN_ACTION, action);
+            doc.save(out);
+            input = out.toByteArray();
+        }
+
+        RepairResult result = PdfRepair.builder()
+                .input(input)
+                .sanitize(true)
+                .writeDiagnostics(false)
+                .build()
+                .execute();
+        assertTrue(result.isUsable(), "repair failed: " + result.status());
+        assertNotNull(result.repairedPdf());
+        String output = new String(result.repairedPdf(), StandardCharsets.ISO_8859_1);
+        assertFalse(output.contains("/JavaScript"),
+                "sanitize(true) must remove catalog JavaScript actions");
+        assertFalse(output.contains("app.alert"),
+                "sanitize(true) must not retain the JavaScript payload");
+        try (PDDocument reopened = Loader.loadPDF(result.repairedPdf())) {
+            assertEquals(1, reopened.getNumberOfPages(), "sanitization must keep the page");
+        }
+    }
+
+    @Test
     void unsignedByteRangeTextDoesNotSuppressRepair() throws Exception {
         byte[] marker =
                 "\n% Subject: this document mentions /ByteRange without a signature array\n"

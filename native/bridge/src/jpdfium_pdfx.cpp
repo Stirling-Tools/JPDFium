@@ -15,6 +15,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "jpdfium.h"
@@ -266,8 +267,11 @@ class Converter {
     ColourSpaceInfo ClassifySpecial(const std::string& family, QPDFObjectHandle const& cs,
                                     int depth);
     ColourSpaceInfo ClassifyPattern(QPDFObjectHandle const& cs, int depth);
+    // Returns false when the function cannot be converted. A non-null
+    // replacement is returned when the colour change needs a new function
+    // object (for example a Type 2 function rewritten as a sampled LUT).
     bool ConvertFunction(QPDFObjectHandle const& fn, int inputs, Kind kind,
-                         const ColourSpaceInfo& base, int depth = 0);
+                         const ColourSpaceInfo& base, int depth, QPDFObjectHandle* replacement);
     bool ConvertSampled(QPDFObjectHandle fn, Kind kind, const ColourSpaceInfo& base);
     bool ConvertPostScript(QPDFObjectHandle fn, Kind kind);
     std::vector<double> ConvertComponents(const ColourSpaceInfo& cs, const std::vector<double>& in,
@@ -310,6 +314,7 @@ class Converter {
     std::set<QPDFObjGen> done_images_;
     std::set<QPDFObjGen> done_shadings_;
     std::set<QPDFObjGen> done_functions_;
+    std::map<QPDFObjGen, QPDFObjectHandle> function_replacements_;
     std::set<QPDFObjGen> done_resources_;
     std::vector<QPDFObjectHandle> done_direct_resources_;
     std::map<QPDFObjGen, std::map<std::string, ColourSpaceInfo>> spaces_memo_;
@@ -513,9 +518,14 @@ ColourSpaceInfo Converter::ClassifySpecial(const std::string& family, QPDFObject
     if (family == "/DeviceN" && cs.getArrayItem(1).isArray()) {
         inputs = cs.getArrayItem(1).getArrayNItems();
     }
+    QPDFObjectHandle converted_tint;
     if (alt.kind != Kind::AsGray && alt.kind != Kind::AsCmyk &&
-        !ConvertFunction(cs.getArrayItem(3), inputs, alt.kind, alt)) {
+        !ConvertFunction(cs.getArrayItem(3), inputs, alt.kind, alt, 0, &converted_tint)) {
         return info;
+    }
+    if (converted_tint.isInitialized() && !converted_tint.isNull()) {
+        QPDFObjectHandle target = cs;
+        target.setArrayItem(3, converted_tint);
     }
     QPDFObjectHandle out = QPDFObjectHandle::newArray();
     for (int i = 0; i < cs.getArrayNItems(); ++i) {
@@ -675,11 +685,20 @@ bool Converter::ConvertPostScript(QPDFObjectHandle fn, Kind kind) {
 }
 
 bool Converter::ConvertFunction(QPDFObjectHandle const& fn, int inputs, Kind kind,
-                                const ColourSpaceInfo& base, int depth) {
+                                const ColourSpaceInfo& base, int depth,
+                                QPDFObjectHandle* replacement) {
+    if (replacement) *replacement = QPDFObjectHandle::newNull();
     if (depth > 8) return false;
     if (fn.isArray()) return false;
     if (!fn.isDictionary() && !fn.isStream()) return false;
-    if (fn.isIndirect() && done_functions_.count(fn.getObjGen())) return true;
+    if (fn.isIndirect()) {
+        auto memo = function_replacements_.find(fn.getObjGen());
+        if (memo != function_replacements_.end()) {
+            if (replacement) *replacement = memo->second;
+            return true;
+        }
+        if (done_functions_.count(fn.getObjGen())) return true;
+    }
     QPDFObjectHandle dict = fn.isStream() ? fn.getDict() : fn;
     QPDFObjectHandle type = dict.getKey("/FunctionType");
     if (!type.isInteger()) return false;
@@ -689,14 +708,15 @@ bool Converter::ConvertFunction(QPDFObjectHandle const& fn, int inputs, Kind kin
             ok = fn.isStream() && ConvertSampled(fn, kind, base);
             break;
         case 2: {
+            // A Type 2 function cannot be rewritten in place: its CMYK
+            // response needs a sampled replacement object.
+            if (inputs != 1 || !replacement) break;
             QPDFObjectHandle c0 = dict.getKey("/C0");
             QPDFObjectHandle c1 = dict.getKey("/C1");
             if (!c0.isArray() || !c1.isArray() || c0.getArrayNItems() != 3 ||
                 c1.getArrayNItems() != 3) {
                 break;
             }
-            ColourSpaceInfo cs = base;
-            cs.kind = kind;
             bool validEndpoints = true;
             for (QPDFObjectHandle* endpoint : {&c0, &c1}) {
                 for (int i = 0; i < 3; ++i) {
@@ -708,17 +728,106 @@ bool Converter::ConvertFunction(QPDFObjectHandle const& fn, int inputs, Kind kin
                 if (!validEndpoints) break;
             }
             if (!validEndpoints) break;
-            for (QPDFObjectHandle* endpoint : {&c0, &c1}) {
-                std::vector<double> in;
-                in.reserve(3);
-                for (int i = 0; i < 3; ++i)
-                    in.push_back(endpoint->getArrayItem(i).getNumericValue());
-                std::vector<double> cmyk = ConvertComponents(cs, in, false);
-                QPDFObjectHandle arr = QPDFObjectHandle::newArray();
-                for (double v : cmyk) arr.appendItem(QPDFObjectHandle::newReal(v, 4));
-                dict.replaceKey(endpoint == &c0 ? "/C0" : "/C1", arr);
+            double d0 = 0.0;
+            double d1 = 1.0;
+            QPDFObjectHandle domain = dict.getKey("/Domain");
+            if (domain.isArray()) {
+                if (domain.getArrayNItems() != 2 || !domain.getArrayItem(0).isNumber() ||
+                    !domain.getArrayItem(1).isNumber()) {
+                    break;
+                }
+                d0 = domain.getArrayItem(0).getNumericValue();
+                d1 = domain.getArrayItem(1).getNumericValue();
             }
-            if (dict.hasKey("/Range")) dict.removeKey("/Range");
+            if (!std::isfinite(d0) || !std::isfinite(d1) || d1 <= d0) break;
+            double exponent = 1.0;
+            QPDFObjectHandle n_obj = dict.getKey("/N");
+            if (n_obj.isNumber()) exponent = n_obj.getNumericValue();
+            if (!std::isfinite(exponent) || exponent <= 0.0) break;
+            // ISO 32000-1 Table 40: /Range is optional, but when present the
+            // sampled values must be clipped to it before colour conversion.
+            double clip_low[3];
+            double clip_high[3];
+            bool clip = false;
+            QPDFObjectHandle range = dict.getKey("/Range");
+            if (range.isArray()) {
+                if (range.getArrayNItems() != 6) break;
+                clip = true;
+                for (int c = 0; c < 3; ++c) {
+                    QPDFObjectHandle low = range.getArrayItem(2 * c);
+                    QPDFObjectHandle high = range.getArrayItem(2 * c + 1);
+                    if (!low.isNumber() || !high.isNumber()) {
+                        clip = false;
+                        break;
+                    }
+                    clip_low[c] = low.getNumericValue();
+                    clip_high[c] = high.getNumericValue();
+                    if (!std::isfinite(clip_low[c]) || !std::isfinite(clip_high[c]) ||
+                        clip_low[c] > clip_high[c]) {
+                        clip = false;
+                        break;
+                    }
+                }
+                if (!clip) break;
+            }
+            // ISO 32000-1 7.10.4: a Type 2 function interpolates
+            // C0 + x^N (C1 - C0). Converting only C0 and C1 preserves the
+            // endpoints but skews every intermediate colour because the
+            // RGB-to-CMYK transform is not linear. Sample the original
+            // function densely and convert each sample, so the rendered
+            // gradient keeps its original colour at every position. An odd
+            // sample count keeps the domain midpoint on an exact sample.
+            constexpr int kSamples = 257;
+            constexpr int kOutputs = 4;
+            ColourSpaceInfo cs = base;
+            cs.kind = kind;
+            double from[3];
+            double to[3];
+            for (int c = 0; c < 3; ++c) {
+                from[c] = c0.getArrayItem(c).getNumericValue();
+                to[c] = c1.getArrayItem(c).getNumericValue();
+            }
+            std::string samples_data;
+            samples_data.reserve(static_cast<size_t>(kSamples) * kOutputs * 2U);
+            bool finite_samples = true;
+            std::vector<double> in(3);
+            for (int i = 0; i < kSamples && finite_samples; ++i) {
+                const double x = d0 + (d1 - d0) * static_cast<double>(i) / (kSamples - 1);
+                const double t = std::pow(x, exponent);
+                for (int c = 0; c < 3; ++c) {
+                    in[c] = from[c] + t * (to[c] - from[c]);
+                    if (clip) in[c] = std::clamp(in[c], clip_low[c], clip_high[c]);
+                }
+                for (double v : ConvertComponents(cs, in, false)) {
+                    if (!std::isfinite(v)) {
+                        finite_samples = false;
+                        break;
+                    }
+                    const auto quantised = static_cast<uint16_t>(std::lround(Clamp01(v) * 65535.0));
+                    samples_data.push_back(static_cast<char>(quantised >> 8));
+                    samples_data.push_back(static_cast<char>(quantised & 0xFF));
+                }
+            }
+            if (!finite_samples) break;
+            QPDFObjectHandle sampled = QPDFObjectHandle::newStream(&pdf_, samples_data);
+            QPDFObjectHandle sd = sampled.getDict();
+            QPDFObjectHandle sampled_domain = QPDFObjectHandle::newArray();
+            sampled_domain.appendItem(QPDFObjectHandle::newReal(d0, 6));
+            sampled_domain.appendItem(QPDFObjectHandle::newReal(d1, 6));
+            QPDFObjectHandle sampled_size = QPDFObjectHandle::newArray();
+            sampled_size.appendItem(QPDFObjectHandle::newInteger(kSamples));
+            QPDFObjectHandle unit = QPDFObjectHandle::newArray();
+            for (int i = 0; i < kOutputs; ++i) {
+                unit.appendItem(QPDFObjectHandle::newInteger(0));
+                unit.appendItem(QPDFObjectHandle::newInteger(1));
+            }
+            sd.replaceKey("/FunctionType", QPDFObjectHandle::newInteger(0));
+            sd.replaceKey("/Domain", sampled_domain);
+            sd.replaceKey("/Size", sampled_size);
+            sd.replaceKey("/BitsPerSample", QPDFObjectHandle::newInteger(16));
+            sd.replaceKey("/Order", QPDFObjectHandle::newInteger(1));
+            sd.replaceKey("/Range", unit);
+            if (replacement) *replacement = std::move(sampled);
             ok = true;
             break;
         }
@@ -727,7 +836,13 @@ bool Converter::ConvertFunction(QPDFObjectHandle const& fn, int inputs, Kind kin
             if (!fns.isArray()) break;
             ok = true;
             for (int i = 0; i < fns.getArrayNItems() && ok; ++i) {
-                ok = ConvertFunction(fns.getArrayItem(i), inputs, kind, base, depth + 1);
+                // ISO 32000-1 Table 41: each stitching subfunction takes a
+                // single input value.
+                QPDFObjectHandle child;
+                ok = ConvertFunction(fns.getArrayItem(i), 1, kind, base, depth + 1, &child);
+                if (ok && child.isInitialized() && !child.isNull()) {
+                    fns.setArrayItem(i, child);
+                }
             }
             if (ok && dict.hasKey("/Range")) dict.removeKey("/Range");
             break;
@@ -738,8 +853,12 @@ bool Converter::ConvertFunction(QPDFObjectHandle const& fn, int inputs, Kind kin
         default:
             break;
     }
-    (void)inputs;
-    if (ok && fn.isIndirect()) done_functions_.insert(fn.getObjGen());
+    if (ok && fn.isIndirect()) {
+        done_functions_.insert(fn.getObjGen());
+        if (replacement && replacement->isInitialized() && !replacement->isNull()) {
+            function_replacements_[fn.getObjGen()] = *replacement;
+        }
+    }
     return ok;
 }
 
@@ -1149,7 +1268,11 @@ void Converter::ConvertShading(QPDFObjectHandle const& shading) {
     }
     QPDFObjectHandle fn = dict.getKey("/Function");
     const int inputs = shading_type == 1 ? 2 : 1;
-    if (fn.isNull() || !ConvertFunction(fn, inputs, cs.kind, cs)) return;
+    QPDFObjectHandle converted_fn;
+    if (fn.isNull() || !ConvertFunction(fn, inputs, cs.kind, cs, 0, &converted_fn)) return;
+    if (converted_fn.isInitialized() && !converted_fn.isNull()) {
+        dict.replaceKey("/Function", converted_fn);
+    }
     QPDFObjectHandle bg = dict.getKey("/Background");
     if (bg.isArray() && bg.getArrayNItems() == 3) {
         bool valid_bg = true;

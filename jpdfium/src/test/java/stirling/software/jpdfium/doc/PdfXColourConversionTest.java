@@ -397,7 +397,10 @@ class PdfXColourConversionTest {
             COSArray sep = (COSArray) spaces.getDictionaryObject(COSName.getPDFName("Sep"));
             assertEquals(COSName.getPDFName("Spot1"), sep.getObject(1));
             assertEquals(COSName.DEVICECMYK, sep.getObject(2));
-            assertEquals(4, ((COSArray) ((COSDictionary) sep.getObject(3)).getDictionaryObject(COSName.C1)).size());
+            COSDictionary sepTint = (COSDictionary) sep.getObject(3);
+            assertEquals(0, sepTint.getInt(COSName.FUNCTION_TYPE),
+                    "the RGB tint transform must become a converted sampled function");
+            assertEquals(8, sepTint.getCOSArray(COSName.RANGE).size());
             COSArray dn = (COSArray) spaces.getDictionaryObject(COSName.getPDFName("DN"));
             assertEquals(2, ((COSArray) dn.getObject(1)).size());
             assertEquals(COSName.DEVICECMYK, dn.getObject(2));

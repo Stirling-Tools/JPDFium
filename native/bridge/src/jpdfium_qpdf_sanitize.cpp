@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <set>
 #include <span>
 #include <string>
 #include <vector>
@@ -49,6 +50,43 @@ struct QpdfResult {
     }
 };
 
+// Walk the raw /Pages tree instead of QPDFPageDocumentHelper. The helper
+// pushes inherited attributes into page dictionaries while enumerating, which
+// can make a salvaged, malformed tree unreadable to consumers even though the
+// bytes were valid before the pass. This walker only removes /AA keys.
+static void scrubPageJavaScript(QPDF& qpdf) {
+    QPDFObjectHandle root = qpdf.getRoot();
+    if (!root.isDictionary() || !root.hasKey("/Pages")) return;
+    QPDFObjectHandle pages = root.getKey("/Pages");
+    if (!pages.isDictionary()) return;
+    std::vector<QPDFObjectHandle> stack{pages};
+    std::set<QPDFObjGen> seen;
+    constexpr size_t kMaxNodes = size_t{1} << 20;
+    size_t nodes = 0;
+    while (!stack.empty() && nodes < kMaxNodes) {
+        QPDFObjectHandle node = stack.back();
+        stack.pop_back();
+        ++nodes;
+        if (!node.isDictionary()) continue;
+        if (node.isIndirect() && !seen.insert(node.getObjGen()).second) continue;
+        node.removeKey("/AA");
+        QPDFObjectHandle annotations = node.getKey("/Annots");
+        if (annotations.isArray()) {
+            for (int i = 0; i < annotations.getArrayNItems(); ++i) {
+                QPDFObjectHandle annotation = annotations.getArrayItem(i);
+                if (annotation.isDictionary()) annotation.removeKey("/AA");
+            }
+        }
+        QPDFObjectHandle kids = node.getKey("/Kids");
+        if (kids.isArray()) {
+            for (int i = 0; i < kids.getArrayNItems(); ++i) {
+                QPDFObjectHandle kid = kids.getArrayItem(i);
+                if (kid.isDictionary()) stack.push_back(kid);
+            }
+        }
+    }
+}
+
 // Single copy of the sanitize mutations so memory and file paths cannot
 // drift (a scrub rule added to only one path would leave JS/metadata in the
 // other path's output).
@@ -67,13 +105,7 @@ static void applySanitize(QPDF& qpdf, int32_t flags) {
                 names.removeKey("/JavaScript");
             }
         }
-        QPDFPageDocumentHelper pdh(qpdf);
-        for (auto& page : pdh.getAllPages()) {
-            page.getObjectHandle().removeKey("/AA");
-            for (auto& ann : page.getAnnotations()) {
-                ann.getObjectHandle().removeKey("/AA");
-            }
-        }
+        scrubPageJavaScript(qpdf);
     }
 
     // Tagged-PDF structure tree

@@ -60,6 +60,36 @@ ASAN_OPTIONS=detect_container_overflow=0 ctest --test-dir native/build-asan
   regression checks both `/ColorSpace` and `/Components`. Unresolved CodeRabbit
   feedback was audited across 48 PRs (129 open threads); fixes were limited to
   confirmed current-tip defects.
+- **Type 2 colour functions.** Rewriting only `/C0` and `/C1` preserved the
+  gradient endpoints but shifted every intermediate colour because the
+  RGB-to-CMYK LUT is nonlinear. Type 2 functions are now sampled at 257 points
+  across `/Domain` (16-bit, four outputs) and each sample is converted; an odd
+  count keeps the midpoint exact. Outputs are clipped to the optional `/Range`
+  before colour conversion (ISO 32000-1 Table 40), stitching subfunctions
+  correctly receive one input (Table 41), and converted functions are memoized
+  so shared indirect functions cannot remain unconverted. Regressions:
+  `PdfXConverterTest.type2ShadingFunctionPreservesConvertedMidpoint` checks
+  x=0.25 and x=0.5 against the same ICC profile used by the converter, and
+  `type2FunctionRangeClipsBeforeLabConversion` proves a Lab `a=80` input is
+  clipped to `/Range` `[-20 20]` before conversion (verified to fail with
+  clipping disabled).
+- **ToUnicode codespaces.** Rebuilt CMaps now declare one codespace range for
+  every retained source width and emit each code at its full width. A
+  resource-limited parse clears its partial entries and leaves the original
+  `/ToUnicode` untouched instead of publishing a CMap that omits valid
+  mappings. Regressions: `ToUnicodeSanitizerTest` covers mixed one/two-byte
+  mappings and a range that exceeds the destination-byte ceiling.
+- **Repair sanitization contract.** `PdfRepair` now reports a signature
+  conflict when `sanitize(true)` is requested for a clean signed document
+  instead of returning the original bytes as `CLEAN`. JavaScript and embedded
+  files are always scrubbed by the qpdf structural pass; PDFium-level font,
+  comment, metadata, and hidden-text hardening remains best effort on salvage
+  repairs whose page tree PDFium cannot enumerate. The qpdf JavaScript scrub
+  walks the raw `/Pages` tree rather than `QPDFPageDocumentHelper`, which
+  previously made salvaged page trees unreadable. Regressions:
+  `PdfRepairTest.sanitizeOptionRemovesCatalogJavaScript`,
+  `PdfRepairFileBackedTest.sanitizeRequestOnCleanSignedDocumentReturnsConflict`,
+  and the existing truncated-page-dictionary repair test.
 
 ## CodeRabbit review batch
 
@@ -99,7 +129,7 @@ There are **zero** `clang-analyzer-*`, `bugprone-exception-escape`,
 
 ## Verification
 
-- Integration suite: `4901` tests, `0` failures, `0` errors, `315` skipped.
+- Integration suite: `4907` tests, `0` failures, `0` errors, `315` skipped.
 - Release ctest: `6/6` passed.
 - ASan+UBSan ctest: `6/6` passed with
   `ASAN_OPTIONS=detect_container_overflow=0`. Default ASan still reports the

@@ -6,6 +6,7 @@ import org.apache.pdfbox.cos.COSDictionary;
 import org.apache.pdfbox.cos.COSFloat;
 import org.apache.pdfbox.cos.COSInteger;
 import org.apache.pdfbox.cos.COSName;
+import org.apache.pdfbox.cos.COSNumber;
 import org.apache.pdfbox.cos.COSObject;
 import org.apache.pdfbox.cos.COSStream;
 import org.apache.pdfbox.cos.COSString;
@@ -1304,6 +1305,132 @@ class PdfXConverterTest {
     }
 
     @Test
+    void type2ShadingFunctionPreservesConvertedMidpoint() throws Exception {
+        assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
+        byte[] input;
+        try (PDDocument doc = new PDDocument();
+                ByteArrayOutputStream bytes = new ByteArrayOutputStream()) {
+            PDPage page = new PDPage();
+            doc.addPage(page);
+
+            COSDictionary shFn = new COSDictionary();
+            shFn.setInt(COSName.FUNCTION_TYPE, 2);
+            shFn.setItem(COSName.DOMAIN, cosFloats(0f, 1f));
+            shFn.setItem(COSName.C0, cosFloats(0f, 0f, 0f));
+            shFn.setItem(COSName.C1, cosFloats(1f, 0f, 0f));
+            shFn.setInt(COSName.N, 1);
+
+            COSDictionary shading = new COSDictionary();
+            shading.setInt(COSName.SHADING_TYPE, 2);
+            shading.setItem(COSName.COLORSPACE, COSName.DEVICERGB);
+            shading.setItem(COSName.COORDS, cosFloats(0f, 0f, 100f, 0f));
+            shading.setItem(COSName.FUNCTION, shFn);
+
+            COSDictionary shadings = new COSDictionary();
+            shadings.setItem(COSName.getPDFName("Sh1"), shading);
+            PDResources resources = new PDResources();
+            resources.getCOSObject().setItem(COSName.SHADING, shadings);
+            page.setResources(resources);
+
+            COSStream content = doc.getDocument().createCOSStream();
+            try (var os = content.createOutputStream()) {
+                os.write("/Sh1 sh".getBytes(StandardCharsets.US_ASCII));
+            }
+            page.getCOSObject().setItem(COSName.CONTENTS, content);
+            doc.save(bytes);
+            input = bytes.toByteArray();
+        }
+
+        PdfXOptions options = PdfXOptions.builder()
+                .standard(PdfXStandard.PDF_X_4)
+                .useCompactCmyk()
+                .title("Type 2 midpoint")
+                .build();
+        byte[] out = PdfXConverter.applyMetadata(input, options);
+        IccCmykTransform transform = IccCmykTransform.cached(options.outputIntentProfile());
+        int[] expectedMid = new int[4];
+        int[] expectedQuarter = new int[4];
+        transform.toCmyk(128, 0, 0, expectedMid);
+        transform.toCmyk(64, 0, 0, expectedQuarter);
+
+        try (PDDocument doc = Loader.loadPDF(out)) {
+            COSDictionary shading = doc.getPage(0).getResources().getCOSObject()
+                    .getCOSDictionary(COSName.SHADING)
+                    .getCOSDictionary(COSName.getPDFName("Sh1"));
+            assertEquals(COSName.DEVICECMYK, shading.getDictionaryObject(COSName.COLORSPACE));
+            COSDictionary fn = (COSDictionary) shading.getDictionaryObject(COSName.FUNCTION);
+            assertCmykEquals(expectedQuarter, evaluateFunction(fn, 0.25), 0.25);
+            assertCmykEquals(expectedMid, evaluateFunction(fn, 0.5), 0.5);
+        }
+    }
+
+    @Test
+    void type2FunctionRangeClipsBeforeLabConversion() throws Exception {
+        assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
+        float[] white = {0.9505f, 1f, 1.089f};
+        byte[] input;
+        try (PDDocument doc = new PDDocument();
+                ByteArrayOutputStream bytes = new ByteArrayOutputStream()) {
+            PDPage page = new PDPage();
+            doc.addPage(page);
+
+            COSDictionary shFn = new COSDictionary();
+            shFn.setInt(COSName.FUNCTION_TYPE, 2);
+            shFn.setItem(COSName.DOMAIN, cosFloats(0f, 1f));
+            shFn.setItem(COSName.C0, cosFloats(50f, 0f, 0f));
+            shFn.setItem(COSName.C1, cosFloats(50f, 80f, 0f));
+            shFn.setInt(COSName.N, 1);
+            shFn.setItem(COSName.RANGE, cosFloats(0f, 100f, -20f, 20f, -20f, 20f));
+
+            COSArray lab = new COSArray();
+            lab.add(COSName.getPDFName("Lab"));
+            COSDictionary labParams = new COSDictionary();
+            labParams.setItem(COSName.getPDFName("WhitePoint"), cosFloats(white));
+            labParams.setItem(COSName.RANGE, cosFloats(-128f, 127f, -128f, 127f));
+            lab.add(labParams);
+
+            COSDictionary shading = new COSDictionary();
+            shading.setInt(COSName.SHADING_TYPE, 2);
+            shading.setItem(COSName.COLORSPACE, lab);
+            shading.setItem(COSName.COORDS, cosFloats(0f, 0f, 100f, 0f));
+            shading.setItem(COSName.FUNCTION, shFn);
+
+            COSDictionary shadings = new COSDictionary();
+            shadings.setItem(COSName.getPDFName("Sh1"), shading);
+            PDResources resources = new PDResources();
+            resources.getCOSObject().setItem(COSName.SHADING, shadings);
+            page.setResources(resources);
+
+            COSStream content = doc.getDocument().createCOSStream();
+            try (var os = content.createOutputStream()) {
+                os.write("/Sh1 sh".getBytes(StandardCharsets.US_ASCII));
+            }
+            page.getCOSObject().setItem(COSName.CONTENTS, content);
+            doc.save(bytes);
+            input = bytes.toByteArray();
+        }
+
+        PdfXOptions options = PdfXOptions.builder()
+                .standard(PdfXStandard.PDF_X_1A)
+                .useCompactCmyk()
+                .title("Type 2 range")
+                .build();
+        byte[] out = PdfXConverter.applyMetadata(input, options);
+
+        try (PDDocument doc = Loader.loadPDF(out)) {
+            COSDictionary shading = doc.getPage(0).getResources().getCOSObject()
+                    .getCOSDictionary(COSName.SHADING)
+                    .getCOSDictionary(COSName.getPDFName("Sh1"));
+            assertEquals(COSName.DEVICECMYK, shading.getDictionaryObject(COSName.COLORSPACE));
+            COSDictionary fn = (COSDictionary) shading.getDictionaryObject(COSName.FUNCTION);
+            IccCmykTransform transform =
+                    IccCmykTransform.cached(options.outputIntentProfile());
+            int[] expected = labToCmyk(50, 20, 0, white, transform);
+            assertCmykEquals(expected, evaluateFunction(fn, 1.0), 1.0);
+        }
+    }
+
+    @Test
     void shadingDefaultRgbAndDeviceNColorantsConvertToCmyk() throws Exception {
         assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
         byte[] input;
@@ -1386,11 +1513,17 @@ class PdfXConverterTest {
             input = bytes.toByteArray();
         }
 
-        byte[] out = PdfXConverter.applyMetadata(input, PdfXOptions.builder()
+        PdfXOptions options = PdfXOptions.builder()
                 .standard(PdfXStandard.PDF_X_4)
                 .useCompactCmyk()
                 .title("Shading and DeviceN")
-                .build());
+                .build();
+        byte[] out = PdfXConverter.applyMetadata(input, options);
+        IccCmykTransform transform = IccCmykTransform.cached(options.outputIntentProfile());
+        int[] expectedStart = new int[4];
+        int[] expectedEnd = new int[4];
+        transform.toCmyk(255, 0, 0, expectedStart);
+        transform.toCmyk(0, 0, 255, expectedEnd);
 
         try (PDDocument doc = Loader.loadPDF(out)) {
             COSDictionary res = doc.getPage(0).getResources().getCOSObject();
@@ -1412,8 +1545,10 @@ class PdfXConverterTest {
             assertEquals(COSName.DEVICECMYK, sh.getDictionaryObject(COSName.COLORSPACE));
             assertEquals(4, sh.getCOSArray(COSName.BACKGROUND).size());
             COSDictionary convertedFn = sh.getCOSDictionary(COSName.FUNCTION);
-            assertEquals(4, convertedFn.getCOSArray(COSName.C0).size());
-            assertEquals(4, convertedFn.getCOSArray(COSName.C1).size());
+            assertEquals(0, convertedFn.getInt(COSName.FUNCTION_TYPE),
+                    "Type 2 functions must become sampled functions");
+            assertCmykEquals(expectedStart, evaluateFunction(convertedFn, 0), 0);
+            assertCmykEquals(expectedEnd, evaluateFunction(convertedFn, 1), 1);
         }
     }
 
@@ -1819,5 +1954,82 @@ class PdfXConverterTest {
         COSArray arr = new COSArray();
         for (float v : values) arr.add(new COSFloat(v));
         return arr;
+    }
+
+    private static void assertCmykEquals(int[] expected255, double[] actual, double input) {
+        assertEquals(4, actual.length, "CMYK output count at x=" + input);
+        for (int c = 0; c < 4; c++) {
+            assertEquals(expected255[c], actual[c] * 255.0, 2.0,
+                    "CMYK channel " + c + " at x=" + input);
+        }
+    }
+
+    private static int[] labToCmyk(double l, double a, double b, float[] white,
+                                   IccCmykTransform transform) {
+        double fy = (l + 16.0) / 116.0;
+        double x = white[0] * labInverse(fy + a / 500.0);
+        double y = white[1] * labInverse(fy);
+        double z = white[2] * labInverse(fy - b / 200.0);
+        double r = srgbEncode(3.2406 * x - 1.5372 * y - 0.4986 * z);
+        double g = srgbEncode(-0.9689 * x + 1.8758 * y + 0.0415 * z);
+        double bl = srgbEncode(0.0557 * x - 0.2040 * y + 1.0570 * z);
+        int[] out = new int[4];
+        transform.toCmyk((int) Math.round(r * 255.0), (int) Math.round(g * 255.0),
+                (int) Math.round(bl * 255.0), out);
+        return out;
+    }
+
+    private static double labInverse(double t) {
+        return t > 6.0 / 29.0 ? t * t * t : 3 * 36.0 / 841.0 * (t - 4.0 / 29.0);
+    }
+
+    private static double srgbEncode(double v) {
+        double clamped = Math.max(0.0, Math.min(1.0, v));
+        return clamped <= 0.0031308
+                ? 12.92 * clamped
+                : 1.055 * Math.pow(clamped, 1.0 / 2.4) - 0.055;
+    }
+
+    /** Evaluates a type 0 or type 2 shading function at one input value. */
+    private static double[] evaluateFunction(COSDictionary fn, double x) throws IOException {
+        int type = fn.getInt(COSName.FUNCTION_TYPE, -1);
+        if (type == 2) {
+            COSArray c0 = fn.getCOSArray(COSName.C0);
+            COSArray c1 = fn.getCOSArray(COSName.C1);
+            double exponent = fn.getFloat(COSName.N, 1f);
+            double t = Math.pow(x, exponent);
+            double[] out = new double[c0.size()];
+            for (int i = 0; i < out.length; i++) {
+                double start = ((COSNumber) c0.getObject(i)).floatValue();
+                double end = ((COSNumber) c1.getObject(i)).floatValue();
+                out[i] = start + t * (end - start);
+            }
+            return out;
+        }
+        if (type != 0 || !(fn instanceof COSStream stream)) {
+            throw new IllegalArgumentException("unsupported converted function type " + type);
+        }
+        COSArray domain = fn.getCOSArray(COSName.DOMAIN);
+        double d0 = domain == null ? 0.0 : ((COSNumber) domain.getObject(0)).floatValue();
+        double d1 = domain == null ? 1.0 : ((COSNumber) domain.getObject(1)).floatValue();
+        COSArray size = fn.getCOSArray(COSName.SIZE);
+        COSArray range = fn.getCOSArray(COSName.RANGE);
+        int samples = size.getInt(0);
+        int outputs = range.size() / 2;
+        int bits = fn.getInt(COSName.BITS_PER_SAMPLE, 8);
+        int bytesPer = bits / 8;
+        int index = (int) Math.round((x - d0) / (d1 - d0) * (samples - 1));
+        try (var in = stream.createInputStream()) {
+            byte[] data = in.readAllBytes();
+            double[] out = new double[outputs];
+            for (int c = 0; c < outputs; c++) {
+                int at = (index * outputs + c) * bytesPer;
+                int raw = bits == 16
+                        ? ((data[at] & 0xFF) << 8) | (data[at + 1] & 0xFF)
+                        : data[at] & 0xFF;
+                out[c] = raw / (double) ((1 << bits) - 1);
+            }
+            return out;
+        }
     }
 }

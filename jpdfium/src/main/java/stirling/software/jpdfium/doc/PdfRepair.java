@@ -230,7 +230,19 @@ public final class PdfRepair {
     public RepairResult execute() {
         byte[] input = inputBytes;
         RepairResult signed = signedDocumentResult(input, writeDiagnostics);
-        if (signed != null) return signed;
+        if (signed != null) {
+            if (sanitize && signed.isUsable() && signed.status() == RepairResult.Status.CLEAN) {
+                // A signed document must pass through byte-for-byte to keep its
+                // digest valid, so requested sanitization cannot be performed.
+                // Report the conflict instead of returning unsanitized content
+                // with a successful status.
+                return new RepairResult(RepairResult.Status.FAILED, null,
+                        writeDiagnostics
+                                ? "{\"error\":\"sanitization cannot be applied to a signed document without invalidating its signature\"}"
+                                : null);
+            }
+            return signed;
+        }
         RepairResult locked = passwordBlockedResult(input, writeDiagnostics);
         if (locked != null) {
             byte[] decrypted = decryptWithEmptyPassword(input);
@@ -306,14 +318,37 @@ public final class PdfRepair {
         if (sanitize && coreResult.isUsable()) {
             byte[] repairedBytes = coreResult.repairedPdf();
             if (repairedBytes != null) {
+                // PDFium-level hardening (fonts, comments, hidden text,
+                // metadata) is best effort: a salvage repair can open with
+                // PDFium yet fail to enumerate individual pages. The
+                // JavaScript and embedded-file guarantees below use qpdf on
+                // the serialized bytes, so they do not depend on page access.
                 try (PdfDocument doc = PdfDocument.open(repairedBytes)) {
-                    PdfSecurity.sanitize(doc);
-                    repairedBytes = doc.saveBytes();
-                    coreResult = new RepairResult(coreResult.status(), repairedBytes,
-                            coreResult.diagnosticJson());
+                    try {
+                        PdfSecurity.sanitize(doc);
+                    } catch (Exception _) {
+                        // Keep the core repair; the structural pass below still
+                        // removes executable content.
+                    }
+                    byte[] saved = doc.saveBytes();
+                    if (saved != null && saved.length > 0) repairedBytes = saved;
                 } catch (Exception _) {
-                    // Sanitization failed on damaged structure; retain core result
+                    // Keep the core repair bytes.
                 }
+                byte[] withoutJavaScript;
+                try {
+                    withoutJavaScript = PdfSanitizer.sanitize(
+                            repairedBytes, PdfSanitizer.JAVASCRIPT | PdfSanitizer.ATTACHMENTS);
+                } catch (Exception e) {
+                    return sanitizationFailure(e, writeDiagnostics);
+                }
+                if (withoutJavaScript == null || withoutJavaScript.length == 0) {
+                    return sanitizationFailure(
+                            new IllegalStateException("qpdf sanitization unavailable"),
+                            writeDiagnostics);
+                }
+                coreResult = new RepairResult(coreResult.status(), withoutJavaScript,
+                        coreResult.diagnosticJson());
             }
         }
 
@@ -790,6 +825,38 @@ public final class PdfRepair {
             return true;
         }
         return false;
+    }
+
+    private static RepairResult sanitizationFailure(Exception e, boolean diagnostics) {
+        return new RepairResult(RepairResult.Status.FAILED, null,
+                diagnostics
+                        ? "{\"error\":\"post-repair sanitization failed: "
+                                + escapeJson(String.valueOf(e.getMessage())) + "\"}"
+                        : null);
+    }
+
+    private static String escapeJson(String value) {
+        StringBuilder escaped = new StringBuilder(value.length() + 8);
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            switch (c) {
+                case '"' -> escaped.append("\\\"");
+                case '\\' -> escaped.append("\\\\");
+                case '\b' -> escaped.append("\\b");
+                case '\f' -> escaped.append("\\f");
+                case '\n' -> escaped.append("\\n");
+                case '\r' -> escaped.append("\\r");
+                case '\t' -> escaped.append("\\t");
+                default -> {
+                    if (c < 0x20) {
+                        escaped.append(String.format("\\u%04x", (int) c));
+                    } else {
+                        escaped.append(c);
+                    }
+                }
+            }
+        }
+        return escaped.toString();
     }
 
     /**

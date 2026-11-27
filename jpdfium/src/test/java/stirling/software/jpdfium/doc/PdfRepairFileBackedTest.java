@@ -16,6 +16,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -75,6 +76,31 @@ class PdfRepairFileBackedTest {
         try (PdfDocument doc = PdfDocument.open(out)) {
             assertTrue(doc.pageCount() > 0);
         }
+    }
+
+    @Test
+    void sanitizeRequestOnCleanSignedDocumentReturnsConflict(@TempDir Path tmp) throws Exception {
+        byte[] input = Files.readAllBytes(signedFixture(tmp));
+
+        RepairResult withSanitize = PdfRepair.builder()
+                .input(input)
+                .sanitize(true)
+                .writeDiagnostics(true)
+                .build()
+                .execute();
+        assertEquals(RepairResult.Status.FAILED, withSanitize.status(),
+                "sanitizing a signed document must report the signature conflict");
+        assertNull(withSanitize.repairedPdf());
+
+        RepairResult passThrough = PdfRepair.builder()
+                .input(input)
+                .writeDiagnostics(false)
+                .build()
+                .execute();
+        assertEquals(RepairResult.Status.CLEAN, passThrough.status(),
+                "a clean signed document must still pass through when sanitization is not requested");
+        assertArrayEquals(input, passThrough.repairedPdf(),
+                "signed pass-through must remain byte-identical");
     }
 
     @Test

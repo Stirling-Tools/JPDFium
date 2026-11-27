@@ -189,6 +189,10 @@ bool parseToUnicode(const std::shared_ptr<Buffer>& buf, std::vector<CmapEntry>& 
     constexpr size_t kMaxEntries = size_t{1} << 20;
     constexpr size_t kMaxTotalDestBytes = size_t{16} * 1024U * 1024U;
     size_t totalDestBytes = 0;
+    // Set when a resource ceiling drops part of the CMap. A partial parse must
+    // never replace the original: the caller would publish a CMap that omits
+    // still-valid mappings.
+    bool exhausted = false;
 
     auto codeFromBytes = [](std::string const& bytes, uint64_t& code) -> bool {
         if (bytes.empty() || bytes.size() > 4) return false;
@@ -224,12 +228,14 @@ bool parseToUnicode(const std::shared_ptr<Buffer>& buf, std::vector<CmapEntry>& 
         for (size_t i = 0; i + 1 < pendingHex.size(); i += 2) {
             uint64_t code = 0;
             const size_t dlen = pendingHex[i + 1].size();
-            if (codeFromBytes(pendingHex[i], code) && out.size() < kMaxEntries &&
-                dlen <= kMaxTotalDestBytes - totalDestBytes) {
-                totalDestBytes += dlen;
-                out.push_back(CmapEntry{static_cast<int>(code),
-                                        static_cast<int>(pendingHex[i].size()), pendingHex[i + 1]});
+            if (!codeFromBytes(pendingHex[i], code)) continue;
+            if (out.size() >= kMaxEntries || dlen > kMaxTotalDestBytes - totalDestBytes) {
+                exhausted = true;
+                continue;
             }
+            totalDestBytes += dlen;
+            out.push_back(CmapEntry{static_cast<int>(code), static_cast<int>(pendingHex[i].size()),
+                                    pendingHex[i + 1]});
         }
         pendingHex.clear();
     };
@@ -240,19 +246,24 @@ bool parseToUnicode(const std::shared_ptr<Buffer>& buf, std::vector<CmapEntry>& 
         }
         uint64_t lo = 0;
         uint64_t hi = 0;
-        if (!codeFromBytes(pendingHex[0], lo) || !codeFromBytes(pendingHex[1], hi) || lo > hi ||
-            hi - lo + 1 > kMaxRangeSpan) {
+        if (!codeFromBytes(pendingHex[0], lo) || !codeFromBytes(pendingHex[1], hi) || lo > hi) {
+            pendingHex.clear();
+            return;
+        }
+        if (hi - lo + 1 > kMaxRangeSpan) {
+            exhausted = true;
             pendingHex.clear();
             return;
         }
         const int loBytes = static_cast<int>(pendingHex[0].size());
         if (inArray) {
             // list form: pendingHex[2..] are the per-code unicodes
-            size_t k = 2;
-            for (uint64_t code = lo;
-                 code <= hi && k < pendingHex.size() && out.size() < kMaxEntries; code++, k++) {
+            for (uint64_t code = lo, k = 2; code <= hi && k < pendingHex.size(); code++, k++) {
                 const size_t dlen = pendingHex[k].size();
-                if (dlen > kMaxTotalDestBytes - totalDestBytes) break;
+                if (out.size() >= kMaxEntries || dlen > kMaxTotalDestBytes - totalDestBytes) {
+                    exhausted = true;
+                    break;
+                }
                 totalDestBytes += dlen;
                 out.push_back(CmapEntry{static_cast<int>(code), loBytes, pendingHex[k]});
             }
@@ -263,10 +274,15 @@ bool parseToUnicode(const std::shared_ptr<Buffer>& buf, std::vector<CmapEntry>& 
             std::string ub = pendingHex[2];
             const uint64_t span = hi - lo + 1;
             if (ub.size() > 0 && span > (kMaxTotalDestBytes - totalDestBytes) / ub.size()) {
+                exhausted = true;
                 pendingHex.clear();
                 return;
             }
-            for (uint64_t code = lo; code <= hi && out.size() < kMaxEntries; code++) {
+            for (uint64_t code = lo; code <= hi; code++) {
+                if (out.size() >= kMaxEntries) {
+                    exhausted = true;
+                    break;
+                }
                 if (!validUtf16be(ub)) break;
                 totalDestBytes += ub.size();
                 out.push_back(CmapEntry{static_cast<int>(code), loBytes, ub});
@@ -343,6 +359,10 @@ bool parseToUnicode(const std::shared_ptr<Buffer>& buf, std::vector<CmapEntry>& 
     } else {
         pendingHex.clear();
     }
+    if (exhausted) {
+        out.clear();
+        return false;
+    }
     return !out.empty();
 }
 
@@ -358,19 +378,26 @@ std::string rebuildCmap(const std::vector<CmapEntry>& entries, const std::set<in
         if (entries[a].code != entries[b].code) return entries[a].code < entries[b].code;
         return a < b;
     });
-    bool twoByte = false;
-    for (size_t i : keptIdx) {
-        if (entries[i].codeBytes != 1) {
-            twoByte = true;
-            break;
-        }
-    }
+    if (keptIdx.empty()) return {};
+    // A rebuilt CMap may retain mappings of several source widths (for
+    // example one- and two-byte codes from a malformed producer). Every
+    // width must have a matching codespace range, otherwise consumers that
+    // honour codespaces reject mappings outside the declared range.
+    std::set<int> widths;
+    for (size_t i : keptIdx) widths.insert(entries[i].codeBytes);
     std::ostringstream os;
     os << "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n"
           "/CIDSystemInfo << /Registry (JPDFium) /Ordering (Redact) /Supplement 0 >> def\n"
           "/CMapName /JPDFium-Redact def\n/CMapType 2 def\n"
-          "1 begincodespacerange\n"
-       << (twoByte ? "<0000> <FFFF>\n" : "<00> <FF>\n") << "endcodespacerange\n";
+       << widths.size() << " begincodespacerange\n";
+    for (int width : widths) {
+        os << '<';
+        for (int b = 0; b < width; ++b) os << "00";
+        os << "> <";
+        for (int b = 0; b < width; ++b) os << "FF";
+        os << ">\n";
+    }
+    os << "endcodespacerange\n";
     static const char* hexd = "0123456789ABCDEF";
     // ISO 32000-1 §9.10.3 caps each beginbfchar section at 100 entries.
     for (size_t start = 0; start < keptIdx.size(); start += 100) {
@@ -379,11 +406,8 @@ std::string rebuildCmap(const std::vector<CmapEntry>& entries, const std::set<in
         for (size_t idx = start; idx < end; idx++) {
             const auto& e = entries[keptIdx[idx]];
             os << '<';
-            if (e.codeBytes == 1) {
-                os << hexd[(e.code >> 4) & 0xF] << hexd[e.code & 0xF];
-            } else {
-                os << hexd[(e.code >> 12) & 0xF] << hexd[(e.code >> 8) & 0xF]
-                   << hexd[(e.code >> 4) & 0xF] << hexd[e.code & 0xF];
+            for (int nibble = e.codeBytes * 2 - 1; nibble >= 0; --nibble) {
+                os << hexd[(e.code >> (4 * nibble)) & 0xF];
             }
             os << "> <";
             for (unsigned char c : e.utf16be) os << hexd[(c >> 4) & 0xF] << hexd[c & 0xF];
@@ -826,9 +850,10 @@ int sanitizeRedactedPdf(const uint8_t* input, size_t inputLen, const DocCore& co
             // ToUnicode filtering: only when we have positive evidence of
             // usage (an empty used set cannot prove the font is unused).
             if (font.hasKey("/ToUnicode") && !usedCodes.empty()) {
-                if (haveMapping) {
+                std::string rebuilt;
+                if (haveMapping) rebuilt = rebuildCmap(cmapEntries, usedCodes);
+                if (!rebuilt.empty()) {
                     QPDFObjectHandle tu = font.getKey("/ToUnicode");
-                    std::string rebuilt = rebuildCmap(cmapEntries, usedCodes);
                     auto newBuf = std::make_shared<Buffer>(rebuilt.size());
                     memcpy(newBuf->getBuffer(), rebuilt.data(), rebuilt.size());
                     tu.replaceStreamData(newBuf, QPDFObjectHandle::newNull(),

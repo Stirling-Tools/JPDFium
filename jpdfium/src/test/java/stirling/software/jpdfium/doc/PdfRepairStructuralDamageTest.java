@@ -606,7 +606,8 @@ class PdfRepairStructuralDamageTest {
         byte[] input = damaged.getBytes(StandardCharsets.ISO_8859_1);
         RepairResult result = PdfRepair.builder().input(input).all().build().execute();
         assertTrue(result.isUsable(),
-                "truncated page dict with junk header must repair: " + result.status());
+                "truncated page dict with junk header must repair: " + result.status()
+                        + " " + result.diagnosticJson());
         try (PdfDocument doc = PdfDocument.open(result.repairedPdf())) {
             assertTrue(doc.pageCount() >= 1, "at least one page must survive");
         }
